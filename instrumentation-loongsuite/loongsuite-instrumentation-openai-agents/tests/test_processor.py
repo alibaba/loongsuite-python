@@ -26,6 +26,7 @@ from agents.tracing.span_data import (
     GenerationSpanData,
     GuardrailSpanData,
     HandoffSpanData,
+    ResponseSpanData,
 )
 
 from opentelemetry.instrumentation.openai_agents._processor import (
@@ -380,3 +381,91 @@ class TestErrorHandling:
         processor.on_span_end(None)
         processor.on_trace_start(None)
         processor.on_trace_end(None)
+
+
+class _FakeUsage:
+    def __init__(self, input_tokens=100, output_tokens=50):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+class _FakeResponse:
+    def __init__(self, model="gpt-4o", id="resp-001", usage=None):
+        self.model = model
+        self.id = id
+        self.usage = usage or _FakeUsage()
+
+
+class TestResponseSpan:
+    def test_response_creates_chat_span(self, setup):
+        processor, exporter = setup
+        trace = FakeTrace()
+        processor.on_trace_start(trace)
+
+        data = ResponseSpanData(response=_FakeResponse())
+        span = FakeSpan(
+            span_data=data,
+            span_id="resp_span_001",
+            trace_id=trace.trace_id,
+        )
+        processor.on_span_start(span)
+        processor.on_span_end(span)
+        processor.on_trace_end(trace)
+
+        spans = exporter.get_finished_spans()
+        chat_spans = [s for s in spans if "chat" in s.name]
+        assert len(chat_spans) == 1
+        attrs = dict(chat_spans[0].attributes)
+        assert attrs["gen_ai.operation.name"] == "chat"
+        assert attrs["gen_ai.system"] == "openai"
+        assert attrs["gen_ai.request.model"] == "gpt-4o"
+
+    def test_response_extracts_usage(self, setup):
+        processor, exporter = setup
+        trace = FakeTrace()
+        processor.on_trace_start(trace)
+
+        resp = _FakeResponse(
+            model="gpt-4o-mini",
+            usage=_FakeUsage(input_tokens=200, output_tokens=80),
+        )
+        data = ResponseSpanData(response=resp)
+        span = FakeSpan(
+            span_data=data,
+            span_id="resp_span_002",
+            trace_id=trace.trace_id,
+        )
+        processor.on_span_start(span)
+        processor.on_span_end(span)
+        processor.on_trace_end(trace)
+
+        spans = exporter.get_finished_spans()
+        chat_spans = [s for s in spans if "chat" in s.name]
+        assert len(chat_spans) == 1
+        attrs = dict(chat_spans[0].attributes)
+        assert attrs["gen_ai.response.model"] == "gpt-4o-mini"
+        assert attrs["gen_ai.response.id"] == "resp-001"
+        assert attrs["gen_ai.usage.input_tokens"] == 200
+        assert attrs["gen_ai.usage.output_tokens"] == 80
+
+    def test_response_captures_input_content(self, setup):
+        processor, exporter = setup
+        trace = FakeTrace()
+        processor.on_trace_start(trace)
+
+        data = ResponseSpanData(response=_FakeResponse())
+        data.input = [{"role": "user", "content": "Hello"}]
+        span = FakeSpan(
+            span_data=data,
+            span_id="resp_span_003",
+            trace_id=trace.trace_id,
+        )
+        processor.on_span_start(span)
+        processor.on_span_end(span)
+        processor.on_trace_end(trace)
+
+        spans = exporter.get_finished_spans()
+        chat_spans = [s for s in spans if "chat" in s.name]
+        assert len(chat_spans) == 1
+        attrs = dict(chat_spans[0].attributes)
+        assert "gen_ai.input.messages" in attrs
