@@ -45,6 +45,7 @@ from opentelemetry.trace import (
 from opentelemetry.util.genai.extended_handler import (
     ExtendedTelemetryHandler,
 )
+from opentelemetry.util.genai.handler import _safe_detach
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ class OTelTracingProcessor(TracingProcessor):
         otel_span, ctx_token = entry
         otel_span.end()
         if ctx_token is not None:
-            otel_context.detach(ctx_token)
+            _safe_detach(ctx_token)
 
     # ------------------------------------------------------------------
     # Span lifecycle
@@ -157,12 +158,14 @@ class OTelTracingProcessor(TracingProcessor):
         self._apply_end_attributes(otel_span, span)
 
         if span.error:
-            otel_span.set_status(StatusCode.ERROR, span.error["message"])
-            otel_span.set_attribute("error.type", span.error["message"])
+            error_msg = span.error.get("message", "")
+            error_type = span.error.get("type", "Exception")
+            otel_span.set_status(StatusCode.ERROR, error_msg)
+            otel_span.set_attribute("error.type", error_type)
 
         otel_span.end()
         if ctx_token is not None:
-            otel_context.detach(ctx_token)
+            _safe_detach(ctx_token)
 
     # ------------------------------------------------------------------
     # Span creation per type
@@ -474,6 +477,14 @@ class OTelTracingProcessor(TracingProcessor):
 
     @_dont_throw
     def shutdown(self) -> None:
+        for otel_span, ctx_token in self._span_map.values():
+            otel_span.end()
+            if ctx_token is not None:
+                _safe_detach(ctx_token)
+        for otel_span, ctx_token in self._trace_map.values():
+            otel_span.end()
+            if ctx_token is not None:
+                _safe_detach(ctx_token)
         self._span_map.clear()
         self._trace_map.clear()
 

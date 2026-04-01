@@ -20,7 +20,7 @@ os.environ.setdefault(
     "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
 )
 os.environ.setdefault(
-    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true"
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
 )
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
@@ -60,7 +60,9 @@ def instrument_no_content(tracer_provider):
     old_val = os.environ.get(
         "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
     )
-    os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "false"
+    os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+        "NO_CONTENT"
+    )
 
     instrumentor = OpenAIAgentsInstrumentor()
     instrumentor.instrument(tracer_provider=tracer_provider)
