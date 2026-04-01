@@ -390,9 +390,9 @@ class _FakeUsage:
 
 
 class _FakeResponse:
-    def __init__(self, model="gpt-4o", id="resp-001", usage=None):
+    def __init__(self, model="gpt-4o", resp_id="resp-001", usage=None):
         self.model = model
-        self.id = id
+        self.id = resp_id
         self.usage = usage or _FakeUsage()
 
 
