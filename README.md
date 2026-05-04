@@ -32,6 +32,7 @@ Source tree: [`instrumentation-loongsuite/`](instrumentation-loongsuite).
 |--------|------|---------|
 | [AgentScope](https://github.com/agentscope-ai/agentscope) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agentscope/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-agentscope/) |
 | [Agno](https://github.com/agno-agi/agno) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agno/README.md) | in dev |
+| [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-anthropic/README.rst) | in dev |
 | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-claude-agent-sdk/) |
 | [QwenPaw](https://github.com/agentscope-ai/QwenPaw) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-qwenpaw/) |
 | [CrewAI](https://github.com/crewAIInc/crewAI) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-crewai/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-crewai/) |

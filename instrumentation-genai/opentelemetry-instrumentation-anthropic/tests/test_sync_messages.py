@@ -46,19 +46,14 @@ def assert_span_attributes(
         operation_name
         == span.attributes[GenAIAttributes.GEN_AI_OPERATION_NAME]
     )
-    # The TelemetryHandler uses GEN_AI_PROVIDER_NAME (new semconv) instead of GEN_AI_SYSTEM (deprecated)
     assert (
         GenAIAttributes.GenAiSystemValues.ANTHROPIC.value
-        == span.attributes.get(
-            GenAIAttributes.GEN_AI_PROVIDER_NAME,
-            span.attributes.get(GenAIAttributes.GEN_AI_SYSTEM),
-        )
+        == span.attributes[GenAIAttributes.GEN_AI_SYSTEM]
     )
     assert (
         request_model == span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
     )
-    if server_address is not None:
-        assert ServerAttributes.SERVER_ADDRESS in span.attributes
+    assert server_address == span.attributes[ServerAttributes.SERVER_ADDRESS]
 
     if response_id is not None:
         assert (
