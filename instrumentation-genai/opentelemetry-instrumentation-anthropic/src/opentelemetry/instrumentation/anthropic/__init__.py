@@ -32,7 +32,7 @@ Usage
     # Use Anthropic client normally
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-sonnet-4-20250514",
         max_tokens=1024,
         messages=[{"role": "user", "content": "Hello!"}]
     )
@@ -42,6 +42,9 @@ Configuration
 
 Message content capture can be enabled by setting the environment variable:
 ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true``
+
+Or via the ``OTEL_INSTRUMENTATION_GENAI_EXPERIMENTAL_CONTENT_CAPTURING_MODE``
+environment variable (values: ``none``, ``span``, ``event``, ``all``).
 
 API
 ---
@@ -54,10 +57,18 @@ from wrapt import (
 )
 
 from opentelemetry.instrumentation.anthropic.package import _instruments
-from opentelemetry.instrumentation.anthropic.patch import messages_create
+from opentelemetry.instrumentation.anthropic.patch import (
+    async_messages_create,
+    messages_create,
+)
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.types import ContentCapturingMode
+from opentelemetry.util.genai.utils import (
+    get_content_capturing_mode,
+    is_experimental_mode,
+)
 
 
 class AnthropicInstrumentor(BaseInstrumentor):
@@ -65,13 +76,18 @@ class AnthropicInstrumentor(BaseInstrumentor):
 
     This instrumentor will automatically trace Anthropic API calls and
     optionally capture message content as events.
+
+    Supported features:
+    - Sync and async Messages.create
+    - Streaming responses (stream=True)
+    - Content capture (input/output messages, system instructions)
+    - Tool calling (tool definitions, tool use blocks, tool results)
+    - Token usage metrics (including cache tokens)
+    - Error handling and exception recording
     """
 
     def __init__(self) -> None:
         super().__init__()
-        self._tracer = None
-        self._logger = None
-        self._meter = None
 
     # pylint: disable=no-self-use
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -86,21 +102,34 @@ class AnthropicInstrumentor(BaseInstrumentor):
                 - meter_provider: MeterProvider instance
                 - logger_provider: LoggerProvider instance
         """
-        # Get providers from kwargs
         tracer_provider = kwargs.get("tracer_provider")
         meter_provider = kwargs.get("meter_provider")
+        logger_provider = kwargs.get("logger_provider")
 
-        # TODO: Add logger_provider to TelemetryHandler to capture content events.
         handler = TelemetryHandler(
             tracer_provider=tracer_provider,
             meter_provider=meter_provider,
+            logger_provider=logger_provider,
         )
 
-        # Patch Messages.create
+        content_mode = (
+            get_content_capturing_mode()
+            if is_experimental_mode()
+            else ContentCapturingMode.NO_CONTENT
+        )
+
+        # Patch sync Messages.create
         wrap_function_wrapper(
-            module="anthropic.resources.messages",
-            name="Messages.create",
-            wrapper=messages_create(handler),
+            "anthropic.resources.messages",
+            "Messages.create",
+            messages_create(handler, content_mode),
+        )
+
+        # Patch async AsyncMessages.create
+        wrap_function_wrapper(
+            "anthropic.resources.messages",
+            "AsyncMessages.create",
+            async_messages_create(handler, content_mode),
         )
 
     def _uninstrument(self, **kwargs: Any) -> None:
@@ -112,5 +141,9 @@ class AnthropicInstrumentor(BaseInstrumentor):
 
         unwrap(
             anthropic.resources.messages.Messages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
+            "create",
+        )
+        unwrap(
+            anthropic.resources.messages.AsyncMessages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
             "create",
         )

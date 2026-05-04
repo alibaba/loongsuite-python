@@ -109,6 +109,8 @@ def vcr_config():
         ],
         "decode_compressed_response": True,
         "before_record_response": scrub_response_headers,
+        "match_on": ["method", "body"],
+        "record_mode": "none",
     }
 
 

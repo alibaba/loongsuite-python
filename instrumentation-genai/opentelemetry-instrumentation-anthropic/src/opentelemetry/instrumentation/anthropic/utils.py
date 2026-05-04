@@ -16,130 +16,290 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
 from typing import TYPE_CHECKING, Any, Optional, Sequence
 from urllib.parse import urlparse
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
-from opentelemetry.semconv._incubating.attributes import (
-    server_attributes as ServerAttributes,
+from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    InputMessage,
+    LLMInvocation,
+    OutputMessage,
+    MessagePart,
+    Text,
+    ToolCall,
+    ToolCallResponse,
 )
-from opentelemetry.util.types import AttributeValue
 
 if TYPE_CHECKING:
     from anthropic.resources.messages import Messages
 
 
-@dataclass
-class MessageCreateParams:
-    """Parameters extracted from Messages.create() call."""
-
-    model: str | None = None
-    max_tokens: int | None = None
-    temperature: float | None = None
-    top_p: float | None = None
-    top_k: int | None = None
-    stop_sequences: Sequence[str] | None = None
+def is_streaming(kwargs: dict[str, Any]) -> bool:
+    """Check if the request is a streaming request."""
+    return bool(kwargs.get("stream"))
 
 
-# Use parameter signature from
-# https://github.com/anthropics/anthropic-sdk-python/blob/9b5ab24ba17bcd5e762e5a5fd69bb3c17b100aaa/src/anthropic/resources/messages/messages.py#L92
-# to handle named vs positional args robustly
-def extract_params(  # pylint: disable=too-many-locals
-    *,
-    max_tokens: int | None = None,
-    messages: Any | None = None,
-    model: str | None = None,
-    metadata: Any | None = None,
-    service_tier: Any | None = None,
-    stop_sequences: Sequence[str] | None = None,
-    stream: Any | None = None,
-    system: Any | None = None,
-    temperature: float | None = None,
-    thinking: Any | None = None,
-    tool_choice: Any | None = None,
-    tools: Any | None = None,
-    top_p: float | None = None,
-    top_k: int | None = None,
-    extra_headers: Any | None = None,
-    extra_query: Any | None = None,
-    extra_body: Any | None = None,
-    timeout: Any | None = None,
-    **_kwargs: Any,
-) -> MessageCreateParams:
-    """Extract relevant parameters from Messages.create() arguments."""
-    return MessageCreateParams(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        stop_sequences=stop_sequences,
-    )
-
-
-def set_server_address_and_port(
-    client_instance: "Messages", attributes: dict[str, Any]
-) -> None:
+def get_server_address_and_port(
+    client_instance: "Messages",
+) -> tuple[str | None, int | None]:
     """Extract server address and port from the Anthropic client instance."""
     base_client = getattr(client_instance, "_client", None)
     base_url = getattr(base_client, "base_url", None)
     if not base_url:
-        return
+        return None, None
 
-    port: Optional[int] = None
+    address: str | None = None
+    port: int | None = None
+
     if hasattr(base_url, "host"):
         # httpx.URL object
-        attributes[ServerAttributes.SERVER_ADDRESS] = base_url.host
+        address = base_url.host
         port = getattr(base_url, "port", None)
     elif isinstance(base_url, str):
         url = urlparse(base_url)
-        attributes[ServerAttributes.SERVER_ADDRESS] = url.hostname
+        address = url.hostname
         port = url.port
 
-    if port and port != 443 and port > 0:
-        attributes[ServerAttributes.SERVER_PORT] = port
+    if port == 443:
+        port = None
+
+    return address, port
 
 
-def get_llm_request_attributes(
-    params: MessageCreateParams, client_instance: "Messages"
-) -> dict[str, AttributeValue]:
-    """Extract LLM request attributes from MessageCreateParams.
+def create_anthropic_invocation(
+    kwargs: dict[str, Any],
+    client_instance: "Messages",
+    capture_content: bool,
+) -> LLMInvocation:
+    """Create an LLMInvocation from Anthropic Messages.create() parameters.
 
-    Returns a dictionary of OpenTelemetry semantic convention attributes for LLM requests.
-    The attributes follow the GenAI semantic conventions (gen_ai.*) and server semantic
-    conventions (server.*) as defined in the OpenTelemetry specification.
-
-    GenAI attributes included:
-    - gen_ai.operation.name: The operation name (e.g., "chat")
-    - gen_ai.system: The GenAI system identifier (e.g., "anthropic")
-    - gen_ai.request.model: The model identifier
-    - gen_ai.request.max_tokens: Maximum tokens in the request
-    - gen_ai.request.temperature: Sampling temperature
-    - gen_ai.request.top_p: Top-p sampling parameter
-    - gen_ai.request.top_k: Top-k sampling parameter
-    - gen_ai.request.stop_sequences: Stop sequences for the request
-
-    Server attributes included (if available):
-    - server.address: The server hostname
-    - server.port: The server port (if not default 443)
-
-    Only non-None values are included in the returned dictionary.
+    This populates the LLMInvocation with all semantic convention attributes
+    from the request parameters, including content capture if enabled.
     """
-    attributes = {
-        GenAIAttributes.GEN_AI_OPERATION_NAME: GenAIAttributes.GenAiOperationNameValues.CHAT.value,
-        GenAIAttributes.GEN_AI_SYSTEM: GenAIAttributes.GenAiSystemValues.ANTHROPIC.value,  # pyright: ignore[reportDeprecated]
-        GenAIAttributes.GEN_AI_REQUEST_MODEL: params.model,
-        GenAIAttributes.GEN_AI_REQUEST_MAX_TOKENS: params.max_tokens,
-        GenAIAttributes.GEN_AI_REQUEST_TEMPERATURE: params.temperature,
-        GenAIAttributes.GEN_AI_REQUEST_TOP_P: params.top_p,
-        GenAIAttributes.GEN_AI_REQUEST_TOP_K: params.top_k,
-        GenAIAttributes.GEN_AI_REQUEST_STOP_SEQUENCES: params.stop_sequences,
-    }
+    invocation = LLMInvocation(
+        request_model=kwargs.get("model", ""),
+    )
+    invocation.provider = (
+        GenAIAttributes.GenAiSystemValues.ANTHROPIC.value  # pyright: ignore[reportDeprecated]
+    )
 
-    set_server_address_and_port(client_instance, attributes)
+    # Request parameters
+    invocation.max_tokens = kwargs.get("max_tokens")
+    invocation.temperature = kwargs.get("temperature")
+    invocation.top_p = kwargs.get("top_p")
+    invocation.top_k = kwargs.get("top_k")
 
-    # Filter out None values
-    return {k: v for k, v in attributes.items() if v is not None}
+    stop_sequences = kwargs.get("stop_sequences")
+    if stop_sequences is not None:
+        invocation.stop_sequences = list(stop_sequences)
+
+    # Server address
+    address, port = get_server_address_and_port(client_instance)
+    if address:
+        invocation.server_address = address
+    if port:
+        invocation.server_port = port
+
+    # Content capture
+    if capture_content:
+        # Input messages
+        messages = kwargs.get("messages", [])
+        invocation.input_messages = _convert_messages_to_input(messages)
+
+        # System instruction
+        system = kwargs.get("system")
+        if system:
+            invocation.system_instruction = _convert_system_to_parts(system)
+
+        # Tool definitions
+        tools = kwargs.get("tools")
+        if tools:
+            invocation.tool_definitions = _convert_tools_to_definitions(tools)
+
+    return invocation
+
+
+def populate_response(
+    invocation: LLMInvocation,
+    result: Any,
+    capture_content: bool,
+) -> None:
+    """Populate an LLMInvocation with response data from an Anthropic Message."""
+    if result is None:
+        return
+
+    if getattr(result, "model", None):
+        invocation.response_model_name = result.model
+
+    if getattr(result, "id", None):
+        invocation.response_id = result.id
+
+    if getattr(result, "stop_reason", None):
+        invocation.finish_reasons = [result.stop_reason]
+
+    # Token usage
+    usage = getattr(result, "usage", None)
+    if usage:
+        if hasattr(usage, "input_tokens"):
+            invocation.input_tokens = usage.input_tokens
+        if hasattr(usage, "output_tokens"):
+            invocation.output_tokens = usage.output_tokens
+        # Cache token usage (Anthropic-specific)
+        if hasattr(usage, "cache_creation_input_tokens") and usage.cache_creation_input_tokens:
+            invocation.usage_cache_creation_input_tokens = usage.cache_creation_input_tokens
+        if hasattr(usage, "cache_read_input_tokens") and usage.cache_read_input_tokens:
+            invocation.usage_cache_read_input_tokens = usage.cache_read_input_tokens
+
+    # Output messages (content blocks)
+    if capture_content:
+        content = getattr(result, "content", None)
+        if content:
+            invocation.output_messages = _convert_content_blocks_to_output(
+                content, getattr(result, "stop_reason", None)
+            )
+
+
+def _convert_messages_to_input(
+    messages: list[dict[str, Any]],
+) -> list[InputMessage]:
+    """Convert Anthropic message format to InputMessage list."""
+    input_messages: list[InputMessage] = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        parts: list[MessagePart] = []
+        content = msg.get("content")
+
+        if isinstance(content, str):
+            parts.append(Text(content=content))
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block_type = block.get("type", "")
+                    if block_type == "text":
+                        parts.append(Text(content=block.get("text", "")))
+                    elif block_type == "tool_use":
+                        parts.append(
+                            ToolCall(
+                                name=block.get("name", ""),
+                                id=block.get("id"),
+                                arguments=block.get("input"),
+                            )
+                        )
+                    elif block_type == "tool_result":
+                        tool_content = block.get("content", "")
+                        if isinstance(tool_content, list):
+                            # Extract text from content blocks
+                            text_parts = []
+                            for sub_block in tool_content:
+                                if isinstance(sub_block, dict) and sub_block.get("type") == "text":
+                                    text_parts.append(sub_block.get("text", ""))
+                            tool_content = "\n".join(text_parts)
+                        parts.append(
+                            ToolCallResponse(
+                                id=block.get("tool_use_id"),
+                                response=tool_content,
+                            )
+                        )
+                    elif block_type == "image":
+                        # Skip image blocks for now (binary data)
+                        pass
+                elif isinstance(block, str):
+                    parts.append(Text(content=block))
+
+        input_messages.append(InputMessage(role=role, parts=parts))
+    return input_messages
+
+
+def _convert_system_to_parts(
+    system: Any,
+) -> list[MessagePart]:
+    """Convert Anthropic system prompt to MessagePart list."""
+    parts: list[MessagePart] = []
+    if isinstance(system, str):
+        parts.append(Text(content=system))
+    elif isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    parts.append(Text(content=block.get("text", "")))
+            elif isinstance(block, str):
+                parts.append(Text(content=block))
+    return parts
+
+
+def _convert_tools_to_definitions(
+    tools: list[Any],
+) -> list[FunctionToolDefinition]:
+    """Convert Anthropic tool definitions to FunctionToolDefinition list."""
+    definitions: list[FunctionToolDefinition] = []
+    for tool in tools:
+        if isinstance(tool, dict):
+            name = tool.get("name", "")
+            description = tool.get("description")
+            input_schema = tool.get("input_schema")
+            definitions.append(
+                FunctionToolDefinition(
+                    name=name,
+                    description=description,
+                    parameters=input_schema,
+                )
+            )
+        else:
+            # Pydantic model or other object
+            name = getattr(tool, "name", "")
+            description = getattr(tool, "description", None)
+            input_schema = getattr(tool, "input_schema", None)
+            tool_type = getattr(tool, "type", "custom")
+            if tool_type == "custom" or name:
+                definitions.append(
+                    FunctionToolDefinition(
+                        name=name,
+                        description=description,
+                        parameters=input_schema,
+                    )
+                )
+    return definitions
+
+
+def _convert_content_blocks_to_output(
+    content: list[Any],
+    stop_reason: str | None,
+) -> list[OutputMessage]:
+    """Convert Anthropic content blocks to OutputMessage list."""
+    parts: list[MessagePart] = []
+    for block in content:
+        block_type = getattr(block, "type", None)
+        if block_type == "text":
+            text = getattr(block, "text", "")
+            parts.append(Text(content=text))
+        elif block_type == "tool_use":
+            name = getattr(block, "name", "")
+            tool_id = getattr(block, "id", None)
+            tool_input = getattr(block, "input", None)
+            parts.append(
+                ToolCall(
+                    name=name,
+                    id=tool_id,
+                    arguments=tool_input,
+                )
+            )
+        elif block_type == "thinking":
+            # Extended thinking block - capture as text for now
+            thinking_text = getattr(block, "thinking", "")
+            if thinking_text:
+                from opentelemetry.util.genai.types import Reasoning
+                parts.append(Reasoning(content=thinking_text))
+
+    if parts:
+        return [
+            OutputMessage(
+                role="assistant",
+                parts=parts,
+                finish_reason=stop_reason or "error",
+            )
+        ]
+    return []
