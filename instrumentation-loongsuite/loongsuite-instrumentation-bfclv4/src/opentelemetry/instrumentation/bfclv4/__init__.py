@@ -108,6 +108,8 @@ class BFCLv4Instrumentor(BaseInstrumentor):
             self._inference_wrapped = False
         if not hasattr(self, "_tool_wrapped"):
             self._tool_wrapped = False
+        if not hasattr(self, "_tool_targets"):
+            self._tool_targets: List[Tuple[str, str]] = []
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -121,9 +123,9 @@ class BFCLv4Instrumentor(BaseInstrumentor):
         # 1) ENTRY -----------------------------------------------------
         try:
             wrap_function_wrapper(
-                module=_GENERATE_RESULTS_MODULE,
-                name=_GENERATE_RESULTS_NAME,
-                wrapper=GenerateResultsWrapper(helper),
+                _GENERATE_RESULTS_MODULE,
+                _GENERATE_RESULTS_NAME,
+                GenerateResultsWrapper(helper),
             )
             self._entry_wrapped = True
         except Exception as exc:  # noqa: BLE001
@@ -137,9 +139,9 @@ class BFCLv4Instrumentor(BaseInstrumentor):
         # 2) AGENT -----------------------------------------------------
         try:
             wrap_function_wrapper(
-                module=_BASE_HANDLER_MODULE,
-                name=_BASE_HANDLER_NAME,
-                wrapper=BaseHandlerInferenceWrapper(helper),
+                _BASE_HANDLER_MODULE,
+                _BASE_HANDLER_NAME,
+                BaseHandlerInferenceWrapper(helper),
             )
             self._inference_wrapped = True
         except Exception as exc:  # noqa: BLE001
@@ -154,20 +156,39 @@ class BFCLv4Instrumentor(BaseInstrumentor):
         self._instrument_handlers(helper)
 
         # 5) TOOL ------------------------------------------------------
-        try:
-            wrap_function_wrapper(
-                module=_EXECUTE_TOOL_MODULE,
-                name=_EXECUTE_TOOL_NAME,
-                wrapper=ExecuteFuncCallWrapper(helper),
-            )
-            self._tool_wrapped = True
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "bfclv4: failed to wrap %s.%s: %s",
-                _EXECUTE_TOOL_MODULE,
+        # ``execute_multi_turn_func_call`` is re-exported via ``from ... import``
+        # in several BFCL modules, so wrapping just the source module misses
+        # the call sites that use the local binding. We wrap each known
+        # re-export site as well to guarantee the TOOL span is always emitted.
+        tool_targets = [
+            (_EXECUTE_TOOL_MODULE, _EXECUTE_TOOL_NAME),
+            (
+                "bfcl_eval.model_handler.base_handler",
                 _EXECUTE_TOOL_NAME,
-                exc,
-            )
+            ),
+            (
+                "bfcl_eval.eval_checker.multi_turn_eval.multi_turn_checker",
+                _EXECUTE_TOOL_NAME,
+            ),
+        ]
+        wrapper_instance = ExecuteFuncCallWrapper(helper)
+        self._tool_targets = []
+        for module_name, attr_name in tool_targets:
+            try:
+                wrap_function_wrapper(
+                    module_name,
+                    attr_name,
+                    wrapper_instance,
+                )
+                self._tool_targets.append((module_name, attr_name))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "bfclv4: failed to wrap %s.%s: %s",
+                    module_name,
+                    attr_name,
+                    exc,
+                )
+        self._tool_wrapped = bool(self._tool_targets)
 
     def _instrument_handlers(self, helper: GenAIHookHelper) -> None:
         # Reflectively wrap every concrete ``_query_FC`` / ``_query_prompting``
@@ -199,9 +220,9 @@ class BFCLv4Instrumentor(BaseInstrumentor):
                 seen_func_ids.add(key)
                 try:
                     wrap_function_wrapper(
-                        module=cls.__module__,
-                        name=f"{cls.__name__}.{method_name}",
-                        wrapper=QueryWrapper(helper, mode),
+                        cls.__module__,
+                        f"{cls.__name__}.{method_name}",
+                        QueryWrapper(helper, mode),
                     )
                     self._wrapped_query_methods.append((cls, method_name))
                 except Exception as exc:  # noqa: BLE001
@@ -223,9 +244,9 @@ class BFCLv4Instrumentor(BaseInstrumentor):
                 seen_func_ids.add(key)
                 try:
                     wrap_function_wrapper(
-                        module=cls.__module__,
-                        name=f"{cls.__name__}.{method_name}",
-                        wrapper=TurnBumpWrapper(reset=is_first),
+                        cls.__module__,
+                        f"{cls.__name__}.{method_name}",
+                        TurnBumpWrapper(reset=is_first),
                     )
                     self._wrapped_turn_methods.append((cls, method_name))
                 except Exception as exc:  # noqa: BLE001
@@ -242,14 +263,18 @@ class BFCLv4Instrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs: Any) -> None:  # noqa: D401
         if self._tool_wrapped:
-            try:
-                module = importlib.import_module(_EXECUTE_TOOL_MODULE)
-                unwrap(module, _EXECUTE_TOOL_NAME)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug(
-                    "bfclv4: failed to unwrap execute_multi_turn_func_call: %s",
-                    exc,
-                )
+            for module_name, attr_name in getattr(self, "_tool_targets", []):
+                try:
+                    module = importlib.import_module(module_name)
+                    unwrap(module, attr_name)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "bfclv4: failed to unwrap %s.%s: %s",
+                        module_name,
+                        attr_name,
+                        exc,
+                    )
+            self._tool_targets = []
             self._tool_wrapped = False
 
         for cls, method_name in self._wrapped_query_methods:
