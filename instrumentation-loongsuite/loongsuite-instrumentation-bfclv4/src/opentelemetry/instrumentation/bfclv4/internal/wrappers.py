@@ -435,40 +435,16 @@ class QueryWrapper:
 
             # Post-call attribute enrichment - use try/except so that any
             # vendor-side parsing surprise never breaks BFCL itself.
+            #
+            # IMPORTANT: We must NOT re-call ``_parse_query_response_*`` here,
+            # because for streaming providers (e.g. Qwen DashScope) the
+            # ``api_response`` is a single-pass generator that the parser
+            # consumes; calling it twice leaves BFCL's own subsequent call to
+            # the parser with an exhausted iterator, which crashes inference
+            # with ``UnboundLocalError: chunk``. Token usage will instead be
+            # recovered later from the AGENT-level metadata payload.
             try:
                 if span is not None and span.is_recording():
-                    parser_name = (
-                        "_parse_query_response_FC"
-                        if self._mode == "FC"
-                        else "_parse_query_response_prompting"
-                    )
-                    parser = getattr(instance, parser_name, None)
-                    if parser is not None:
-                        parsed = parser(api_response)
-                        if isinstance(parsed, dict):
-                            input_token = parsed.get("input_token")
-                            output_token = parsed.get("output_token")
-                            if isinstance(input_token, (int, float)):
-                                span.set_attribute(
-                                    "gen_ai.usage.input_tokens",
-                                    int(input_token),
-                                )
-                            if isinstance(output_token, (int, float)):
-                                span.set_attribute(
-                                    "gen_ai.usage.output_tokens",
-                                    int(output_token),
-                                )
-                            if isinstance(input_token, (int, float)) and isinstance(
-                                output_token, (int, float)
-                            ):
-                                span.set_attribute(
-                                    "gen_ai.usage.total_tokens",
-                                    int(input_token) + int(output_token),
-                                )
-                            model_resp = parsed.get("model_responses")
-                            step_inv.finish_reason = _infer_finish_reason(
-                                model_resp
-                            )
                     if isinstance(query_latency, (int, float)):
                         try:
                             span.set_attribute(
