@@ -433,6 +433,33 @@ class QueryWrapper:
                 # inference: ..." result string at the AGENT layer.
                 raise
 
+            # When the underlying handler returns a streaming wrapper
+            # (e.g. ``ChatStreamWrapper`` from openai-v2), the LLM span and
+            # its OTel context attach are kept alive until the stream is
+            # consumed by BFCL's ``_parse_query_response_*`` *outside* of
+            # this STEP context manager. That breaks the LIFO ordering of
+            # context attach/detach, leaving the LLM span as the "current"
+            # span after the STEP CM exits, which causes the next STEP and
+            # any TOOL spans to be parented to the previous STEP rather
+            # than to the AGENT.
+            #
+            # To preserve LIFO ordering, force-consume the stream here
+            # (inside the STEP context) and replace it with a plain
+            # iterator over the cached chunks. This makes ``stop_llm``
+            # (which detaches the LLM context) run *before* STEP detaches.
+            if api_response is not None and hasattr(
+                api_response, "__next__"
+            ) and not isinstance(api_response, (str, bytes)):
+                try:
+                    chunks = list(api_response)
+                    api_response = iter(chunks)
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "bfclv4 STEP: failed to materialise streaming "
+                        "response; LLM/STEP nesting may be incorrect",
+                        exc_info=True,
+                    )
+
             # Post-call attribute enrichment - use try/except so that any
             # vendor-side parsing surprise never breaks BFCL itself.
             #
