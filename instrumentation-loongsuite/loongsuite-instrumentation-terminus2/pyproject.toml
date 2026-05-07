@@ -1,0 +1,52 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loongsuite-instrumentation-terminus2"
+dynamic = ["version"]
+description = "LoongSuite Terminus2 Instrumentation"
+license = "Apache-2.0"
+requires-python = ">=3.8"
+authors = [
+  { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "wrapt >= 1.0.0, < 2.0.0",
+]
+
+[project.optional-dependencies]
+instruments = [
+  "terminal-bench >= 0.1.0",
+]
+
+[project.entry-points.opentelemetry_instrumentor]
+terminus2 = "opentelemetry.instrumentation.terminus2:Terminus2Instrumentor"
+
+[project.urls]
+Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-terminus2"
+Repository = "https://github.com/alibaba/loongsuite-python-agent"
+
+[tool.hatch.version]
+path = "src/opentelemetry/instrumentation/terminus2/version.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opentelemetry"]

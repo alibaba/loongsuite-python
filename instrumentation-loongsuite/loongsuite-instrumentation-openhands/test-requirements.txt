@@ -1,0 +1,9 @@
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+wrapt>=1.0.0
+httpx>=0.24.0
+
+-e ./instrumentation-loongsuite/loongsuite-instrumentation-openhands
+-e ./opentelemetry-instrumentation
+-e ./opentelemetry-sdk
+-e ./opentelemetry-semantic-conventions
