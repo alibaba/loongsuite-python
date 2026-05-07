@@ -1,0 +1,4 @@
+terminal-bench>=0.1.0
+-e aliyun-semantic-conventions
+-e util/opentelemetry-util-http
+-e instrumentation-loongsuite/loongsuite-instrumentation-terminus2
