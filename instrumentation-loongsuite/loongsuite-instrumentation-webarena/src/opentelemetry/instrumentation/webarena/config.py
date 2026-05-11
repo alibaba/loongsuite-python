@@ -1,0 +1,40 @@
+"""Configuration via environment variables."""
+
+from __future__ import annotations
+
+import os
+
+
+def _int_env(name: str, default: str) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except ValueError:
+        return int(default)
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Cap on non-content string attribute values (URLs, tool names, etc.)
+WEBARENA_OTEL_MAX_ATTR_LENGTH = _int_env(
+    "WEBARENA_OTEL_MAX_ATTR_LENGTH", "1024"
+)
+
+# Cap on prompt / message preview length when capture-message-content is on
+WEBARENA_OTEL_PROMPT_PREVIEW_MAX_LEN = _int_env(
+    "WEBARENA_OTEL_PROMPT_PREVIEW_MAX_LEN", "4096"
+)
+
+
+def capture_message_content() -> bool:
+    """Whether to record prompt / completion / tool argument bodies.
+
+    Honours the standard semantic-conventions opt-in flag.
+    """
+    return _bool_env(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", False
+    )
