@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "opentelemetry-util-genai"
+name = "loongsuite-util-genai"
 dynamic = ["version"]
 # LoongSuite Extension
 description = "LoongSuite GenAI Utils"

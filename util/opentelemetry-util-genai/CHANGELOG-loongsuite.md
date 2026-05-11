@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.5.0 (2026-05-11)
+
 ### Added
 
 - Add `gen_ai.skill.name`, `gen_ai.skill.id`, `gen_ai.skill.description`, and
