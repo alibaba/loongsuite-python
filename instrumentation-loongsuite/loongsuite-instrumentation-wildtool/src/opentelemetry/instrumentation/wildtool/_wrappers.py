@@ -53,6 +53,7 @@ M3
 import json
 import logging
 from contextvars import ContextVar
+from dataclasses import asdict
 from typing import List, Optional
 
 from opentelemetry.trace import StatusCode, set_span_in_context
@@ -172,6 +173,40 @@ def _task_results_to_output_messages(result) -> List[OutputMessage]:
             )
         )
     return messages
+
+
+def _get_message_attributes(input_messages, output_messages) -> dict:
+    attributes = {}
+    try:
+        if input_messages:
+            attributes["gen_ai.input.messages"] = json.dumps(
+                [asdict(message) for message in input_messages],
+                ensure_ascii=False,
+            )
+        if output_messages:
+            attributes["gen_ai.output.messages"] = json.dumps(
+                [asdict(message) for message in output_messages],
+                ensure_ascii=False,
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Failed to serialize message attrs: %s", e)
+    return attributes
+
+
+def _set_message_attributes(invocation) -> None:
+    attributes = _get_message_attributes(
+        invocation.input_messages, invocation.output_messages
+    )
+    if not attributes:
+        return
+    invocation.attributes.update(attributes)
+    span = invocation.span
+    if span is None or not span.is_recording():
+        return
+    try:
+        span.set_attributes(attributes)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Failed to set message attrs: %s", e)
 
 
 def _extract_task_results(result) -> List:
@@ -310,12 +345,15 @@ class WildToolEntryWrapper:
             },
         )
         self._handler.start_entry(invocation)
+        _set_message_attributes(invocation)
         try:
             result = wrapped(*args, **kwargs)
             invocation.output_messages = _task_results_to_output_messages(result)
+            _set_message_attributes(invocation)
             self._handler.stop_entry(invocation)
             return result
         except Exception as e:
+            _set_message_attributes(invocation)
             self._handler.fail_entry(
                 invocation, Error(message=str(e), type=type(e))
             )
@@ -345,9 +383,11 @@ class WildToolAgentWrapper:
             },
         )
         self._handler.start_invoke_agent(invocation)
+        _set_message_attributes(invocation)
         try:
             result = wrapped(*args, **kwargs)
             invocation.output_messages = _task_results_to_output_messages(result)
+            _set_message_attributes(invocation)
             total_input = 0
             total_output = 0
             for task_result in (result or []):
@@ -365,6 +405,7 @@ class WildToolAgentWrapper:
             self._handler.stop_invoke_agent(invocation)
             return result
         except Exception as e:
+            _set_message_attributes(invocation)
             self._handler.fail_invoke_agent(
                 invocation, Error(message=str(e), type=type(e))
             )
