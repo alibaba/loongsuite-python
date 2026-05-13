@@ -6,10 +6,10 @@ Automatic instrumentation for the `claw-eval
 <https://github.com/claw-eval/claw-eval>`_ evaluation framework.
 
 Uses **wrapt** monkey-patching to wrap key entry points, the agent loop,
-LLM provider calls, tool dispatchers, user-agent simulation, and LLM
-judge grading — producing a hierarchical trace:
+tool dispatchers, compaction, and judge calls that should be suppressed from
+producing their own spans — producing a hierarchical trace:
 
-    ENTRY → AGENT → STEP → LLM / TOOL / CHAIN
+    ENTRY → AGENT → STEP → TOOL / CHAIN
 
 Usage
 -----
@@ -80,10 +80,9 @@ class ClawEvalInstrumentor(BaseInstrumentor):
 
     * **ENTRY** — ``cli.cmd_run``, ``cli.cmd_batch``, ``cli._run_single_task``
     * **AGENT** — ``runner.loop.run_task``
-    * **LLM**   — ``OpenAICompatProvider.chat`` (with automatic STEP rotation)
+    * **STEP** — ``OpenAICompatProvider.chat`` rotates STEP spans
     * **CHAIN** — ``compact.do_auto_compact``
     * **TOOL**  — ``ToolDispatcher.dispatch``, ``SandboxToolDispatcher.dispatch``
-    * **LLM (user_agent)** — ``UserAgent.generate_response``
     * **Judge (suppress only)** — ``LLMJudge.evaluate``, ``evaluate_actions``,
       ``evaluate_visual``: nested LLM SDK / HTTP spans are suppressed and no
       judge LLM span is emitted, keeping the trace tail clean.
@@ -121,7 +120,6 @@ class ClawEvalInstrumentor(BaseInstrumentor):
             RunSingleTaskWrapper,
             RunTaskWrapper,
             ToolDispatchWrapper,
-            UserAgentWrapper,
         )
 
         # --- CLI entry points (ENTRY) ---
@@ -156,7 +154,7 @@ class ClawEvalInstrumentor(BaseInstrumentor):
         except Exception as exc:
             logger.warning("Could not wrap run_task: %s", exc)
 
-        # --- LLM provider (LLM + STEP rotation) ---
+        # --- Provider chat (STEP rotation) ---
         try:
             wrap_function_wrapper(
                 "claw_eval.runner.providers.openai_compat",
@@ -197,18 +195,6 @@ class ClawEvalInstrumentor(BaseInstrumentor):
         except Exception as exc:
             logger.debug(
                 "Could not wrap SandboxToolDispatcher.dispatch: %s", exc
-            )
-
-        # --- UserAgent (LLM role=user_agent) ---
-        try:
-            wrap_function_wrapper(
-                "claw_eval.runner.user_agent",
-                "UserAgent.generate_response",
-                UserAgentWrapper(tracer),
-            )
-        except Exception as exc:
-            logger.debug(
-                "Could not wrap UserAgent.generate_response: %s", exc
             )
 
         # --- LLM Judge (suppress nested SDK / HTTP spans, no judge span) ---
@@ -257,7 +243,7 @@ class ClawEvalInstrumentor(BaseInstrumentor):
         # Agent loop
         _unwrap_func("claw_eval.runner.loop", "run_task")
 
-        # LLM provider
+        # Provider chat
         _unwrap_method(
             "claw_eval.runner.providers.openai_compat",
             "OpenAICompatProvider",
@@ -277,13 +263,6 @@ class ClawEvalInstrumentor(BaseInstrumentor):
             "claw_eval.runner.sandbox_dispatcher",
             "SandboxToolDispatcher",
             "dispatch",
-        )
-
-        # UserAgent
-        _unwrap_method(
-            "claw_eval.runner.user_agent",
-            "UserAgent",
-            "generate_response",
         )
 
         # LLM Judge

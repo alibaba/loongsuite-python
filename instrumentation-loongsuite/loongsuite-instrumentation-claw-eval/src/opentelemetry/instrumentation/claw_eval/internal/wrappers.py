@@ -5,11 +5,8 @@ Span hierarchy
 ENTRY (cmd_run / cmd_batch / _run_single_task)
 └── AGENT (run_task)
     ├── STEP (rotated per main-loop provider.chat call)
-    │   ├── LLM  (provider.chat, role=main)
     │   ├── TOOL (dispatcher.dispatch / sandbox_dispatcher.dispatch)
     │   ├── CHAIN (do_auto_compact)
-    │   │   └── LLM (provider.chat, role=compact)
-    │   └── LLM  (user_agent.generate_response, role=user_agent)
     └── (judge.evaluate* + per-task grader._llm_score_classifications:
          nested LLM SDK / HTTP spans suppressed, no span emitted)
 """
@@ -17,7 +14,6 @@ ENTRY (cmd_run / cmd_batch / _run_single_task)
 from __future__ import annotations
 
 import json
-import os
 from contextvars import ContextVar
 from typing import Any
 
@@ -32,10 +28,6 @@ from opentelemetry.trace import (
     StatusCode,
     Tracer,
     set_span_in_context,
-)
-
-from opentelemetry.instrumentation.claw_eval.config import (
-    OTEL_CLAW_EVAL_CAPTURE_CONTENT,
 )
 
 try:
@@ -318,27 +310,6 @@ def _serialize_tool_definitions(tools) -> str:
         return str(arr)
 
 
-def _build_assistant_text_output(
-    text: str,
-    role: str = "assistant",
-    finish_reason: str = "stop",
-) -> str:
-    """Build a one-message ``OutputMessages`` JSON for a plain text reply."""
-    if not text:
-        return ""
-    arr = [
-        {
-            "role": role,
-            "parts": [{"type": "text", "content": text}],
-            "finish_reason": finish_reason,
-        }
-    ]
-    try:
-        return json.dumps(arr, ensure_ascii=False, default=str)
-    except Exception:
-        return str(arr)
-
-
 # ---------------------------------------------------------------------------
 # STEP lifecycle helpers
 # ---------------------------------------------------------------------------
@@ -506,7 +477,7 @@ class RunTaskWrapper:
 
     ``ProviderChatWrapper`` is intentionally left untouched: the shim wraps
     the *bound* method that already goes through ``ProviderChatWrapper``, so
-    LLM spans / STEP rotation continue to work exactly as before.
+    STEP rotation continues to work exactly as before.
     """
 
     __slots__ = ("_tracer",)
@@ -683,9 +654,8 @@ def _populate_agent_span(span, capture: dict, task_prompt: str) -> None:
     The GenAI semantic-convention attributes (``gen_ai.input.messages``,
     ``gen_ai.output.messages``, ``gen_ai.system_instructions``,
     ``gen_ai.usage.{input,output}_tokens``) are always written when the data
-    has been captured. ``OTEL_CLAW_EVAL_CAPTURE_CONTENT`` only gates the
-    *non-standard* per-LLM-call previews (UserAgent / Judge wrappers) — the
-    AGENT span is the canonical record of a task's IO and must surface it.
+    has been captured. The AGENT span is the canonical record of a task's IO
+    and must surface it now that per-LLM-call spans are suppressed.
     """
     inp = int(capture.get("input_tokens", 0) or 0)
     out = int(capture.get("output_tokens", 0) or 0)
@@ -726,7 +696,7 @@ def _get_task_prompt(task) -> str:
 
 
 class ProviderChatWrapper:
-    """Creates an LLM span for ``provider.chat`` and rotates STEP spans.
+    """Rotates STEP spans around main-loop provider chat calls.
 
     When ``compact_depth == 0`` and inside an agent run, each call ends
     the previous STEP and starts a new one so that subsequent TOOL spans
@@ -745,12 +715,7 @@ class ProviderChatWrapper:
         if in_agent and compact_depth == 0:
             _rotate_step(self._tracer)
 
-        try:
-            result = wrapped(*args, **kwargs)
-        except Exception as exc:
-            raise
-        else:
-            return result
+        return wrapped(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -872,57 +837,6 @@ def _extract_dispatch_attrs(span, result) -> None:
     output_text = _extract_tool_result_text(tool_result)
     if output_text:
         span.set_attribute(GEN_AI_TOOL_CALL_RESULT, output_text)
-
-
-# ---------------------------------------------------------------------------
-# UserAgent wrapper (UserAgent.generate_response)
-# ---------------------------------------------------------------------------
-
-
-class UserAgentWrapper:
-    """Creates an LLM span with ``claw_eval.llm.role=user_agent``."""
-
-    __slots__ = ("_tracer",)
-
-    def __init__(self, tracer: Tracer):
-        self._tracer = tracer
-
-    def __call__(self, wrapped, instance, args, kwargs):
-        model_id = getattr(instance, "model_id", "unknown")
-        with self._tracer.start_as_current_span(
-                f"chat {model_id}", kind=SpanKind.CLIENT
-        ) as span:
-            span.set_attribute(GEN_AI_SPAN_KIND, "LLM")
-            span.set_attribute(
-                GenAI.GEN_AI_OPERATION_NAME,
-                GenAI.GenAiOperationNameValues.CHAT.value,
-            )
-            span.set_attribute(GEN_AI_FRAMEWORK, "claw-eval")
-            span.set_attribute(GenAI.GEN_AI_REQUEST_MODEL, str(model_id))
-            span.set_attribute("claw_eval.llm.role", "user_agent")
-
-            suppress_tok = _maybe_suppress_llm_sdk()
-
-            try:
-                result = wrapped(*args, **kwargs)
-            except Exception as exc:
-                span.record_exception(exc)
-                span.set_status(Status(StatusCode.ERROR))
-                raise
-            else:
-                if OTEL_CLAW_EVAL_CAPTURE_CONTENT and result is not None:
-                    span.set_attribute(
-                        GenAI.GEN_AI_OUTPUT_MESSAGES,
-                        _build_assistant_text_output(
-                            str(result),
-                            role="user",
-                            finish_reason="stop",
-                        ),
-                    )
-                return result
-            finally:
-                if suppress_tok is not None:
-                    otel_context.detach(suppress_tok)
 
 
 # ---------------------------------------------------------------------------
