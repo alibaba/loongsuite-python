@@ -134,6 +134,11 @@ def _text_messages_json(role: str, content: Any) -> str:
     except Exception:
         return str([message])
 
+
+def _semconv_value(value: Any) -> Any:
+    """Return enum.value when present, otherwise the value itself."""
+    return getattr(value, "value", value)
+
 # ── ReAct step lifecycle tracked via contextvars ────────────────────────────
 # A STEP span stays open across `_handle_llm_interaction` ⇒ `_execute_commands`
 # so both become its children. It is closed when the next iteration starts or
@@ -503,11 +508,12 @@ class _RunAgentLoopWrapper:
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND, GenAiSpanKind.AGENT.value
+                CommonAttributes.GEN_AI_SPAN_KIND,
+                _semconv_value(GenAiSpanKind.AGENT),
             )
             span.set_attribute(
                 CommonAttributes.GEN_AI_OPERATION_NAME,
-                GenAiOperationName.INVOKE_AGENT.value,
+                _semconv_value(GenAiOperationName.INVOKE_AGENT),
             )
             span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
             span.set_attribute("gen_ai.agent.name", _AGENT_NAME)
@@ -592,11 +598,12 @@ class _ExecuteCommandsWrapper:
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND, GenAiSpanKind.TOOL.value
+                CommonAttributes.GEN_AI_SPAN_KIND,
+                _semconv_value(GenAiSpanKind.TOOL),
             )
             span.set_attribute(
                 CommonAttributes.GEN_AI_OPERATION_NAME,
-                GenAiOperationName.EXECUTE_TOOL.value,
+                _semconv_value(GenAiOperationName.EXECUTE_TOOL),
             )
             span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
             span.set_attribute(ToolAttributes.GEN_AI_TOOL_NAME, _TERMINAL_TOOL_NAME)
@@ -604,7 +611,8 @@ class _ExecuteCommandsWrapper:
                 ToolAttributes.GEN_AI_TOOL_DESCRIPTION, _TERMINAL_TOOL_DESCRIPTION
             )
             span.set_attribute(
-                ToolAttributes.GEN_AI_TOOL_TYPE, GenAiToolType.EXTENSION.value
+                ToolAttributes.GEN_AI_TOOL_TYPE,
+                _semconv_value(GenAiToolType.EXTENSION),
             )
             span.set_attribute("terminus2.commands.count", len(commands))
 
@@ -721,7 +729,8 @@ class _ParseResponseWrapper:
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND, GenAiSpanKind.TASK.value
+                CommonAttributes.GEN_AI_SPAN_KIND,
+                _semconv_value(GenAiSpanKind.TASK),
             )
             span.set_attribute(CommonAttributes.GEN_AI_OPERATION_NAME, _OP_RUN_TASK)
             span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
@@ -800,7 +809,8 @@ class _SummarizeWrapper:
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND, GenAiSpanKind.CHAIN.value
+                CommonAttributes.GEN_AI_SPAN_KIND,
+                _semconv_value(GenAiSpanKind.CHAIN),
             )
             span.set_attribute(CommonAttributes.GEN_AI_OPERATION_NAME, _OP_TASK)
             span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
