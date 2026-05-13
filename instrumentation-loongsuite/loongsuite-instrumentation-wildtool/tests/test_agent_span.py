@@ -72,15 +72,10 @@ class TestAgentSpan:
         assert attrs.get("gen_ai.usage.output_tokens") == 20
 
     def test_agent_span_captures_input_and_output_messages(
-        self, monkeypatch, span_exporter, instrument, simple_test_entry,
+        self, span_exporter, instrument, simple_test_entry,
         tool_call_response_factory, text_response_factory,
     ):
-        """AGENT span should carry GenAI input/output messages when content
-        capture is enabled.
-        """
-        monkeypatch.setenv(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-        )
+        """AGENT span should always carry GenAI input/output messages."""
 
         handler = _StubHandler()
         resp0 = tool_call_response_factory(

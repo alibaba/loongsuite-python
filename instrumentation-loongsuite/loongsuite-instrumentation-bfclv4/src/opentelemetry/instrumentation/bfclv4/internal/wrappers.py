@@ -27,10 +27,11 @@ that the LoongSuite semantic-validator expects.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import os
 import time
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 from opentelemetry.instrumentation.bfclv4.internal.attributes import (
     BFCL_NUM_THREADS,
@@ -63,7 +64,6 @@ from opentelemetry.instrumentation.bfclv4.internal.threading_propagation import 
 )
 from opentelemetry.instrumentation.bfclv4.utils import (
     GenAIHookHelper,
-    to_text_input,
     to_text_output,
     truncate_text,
 )
@@ -76,8 +76,22 @@ from opentelemetry.util.genai.extended_types import (
     InvokeAgentInvocation,
     ReactStepInvocation,
 )
+from opentelemetry.util.genai.types import (
+    InputMessage,
+    MessagePart,
+    OutputMessage,
+    Text,
+)
+from opentelemetry.util.genai.utils import (
+    ContentCapturingMode,
+    gen_ai_json_dumps,
+    get_content_capturing_mode,
+    is_experimental_mode,
+)
 
 logger = logging.getLogger(__name__)
+
+GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +138,185 @@ def _join_test_category(value: Any) -> Optional[str]:
         joined = ",".join(str(v) for v in value if v is not None)
         return joined or None
     return str(value)
+
+
+def _should_capture_content_on_span() -> bool:
+    try:
+        return is_experimental_mode() and get_content_capturing_mode() in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _system_instruction_attribute(
+    system_instructions: List[MessagePart],
+) -> Optional[str]:
+    if not system_instructions or not _should_capture_content_on_span():
+        return None
+    try:
+        return gen_ai_json_dumps(
+            [dataclasses.asdict(part) for part in system_instructions]
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "bfclv4: failed to serialise system instructions", exc_info=True
+        )
+        return None
+
+
+def _test_cases_to_messages(
+    test_cases: Any,
+) -> Tuple[List[InputMessage], List[MessagePart]]:
+    inputs: List[InputMessage] = []
+    system_instructions: List[MessagePart] = []
+
+    if isinstance(test_cases, dict):
+        test_entries = [test_cases]
+    elif isinstance(test_cases, (list, tuple)):
+        test_entries = list(test_cases)
+    else:
+        test_entries = []
+
+    for test_entry in test_entries:
+        entry_inputs, entry_system = _test_entry_to_messages(test_entry)
+        inputs.extend(entry_inputs)
+        system_instructions.extend(entry_system)
+
+    return inputs, system_instructions
+
+
+def _test_entry_to_messages(
+    test_entry: Any,
+) -> Tuple[List[InputMessage], List[MessagePart]]:
+    if not isinstance(test_entry, dict):
+        return [], []
+
+    inputs: List[InputMessage] = []
+    system_instructions: List[MessagePart] = []
+
+    for key in (
+        "system",
+        "system_prompt",
+        "system_instruction",
+        "system_instructions",
+    ):
+        value = test_entry.get(key)
+        if value not in (None, "", [], {}):
+            system_instructions.append(
+                Text(content=truncate_text(_safe_str(value)))
+            )
+
+    _append_question_messages(
+        test_entry.get("question"),
+        inputs,
+        system_instructions,
+    )
+    return inputs, system_instructions
+
+
+def _append_question_messages(
+    value: Any,
+    inputs: List[InputMessage],
+    system_instructions: List[MessagePart],
+) -> None:
+    if value in (None, "", [], {}):
+        return
+
+    if isinstance(value, dict):
+        role = str(value.get("role") or "user")
+        content = value.get("content")
+        if content in (None, "", [], {}):
+            # Some BFCL fixtures use the whole dict as the content payload.
+            content = {
+                k: v
+                for k, v in value.items()
+                if k not in {"role", "name", "tool_call_id"}
+            }
+        if content in (None, "", [], {}):
+            return
+        text = truncate_text(_safe_str(content))
+        if role == "system":
+            system_instructions.append(Text(content=text))
+        else:
+            inputs.append(InputMessage(role=role, parts=[Text(content=text)]))
+        return
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _append_question_messages(item, inputs, system_instructions)
+        return
+
+    inputs.append(
+        InputMessage(
+            role="user",
+            parts=[Text(content=truncate_text(_safe_str(value)))],
+        )
+    )
+
+
+def _result_to_output_messages(result: Any) -> List[OutputMessage]:
+    payload = result[0] if isinstance(result, tuple) and result else result
+
+    if payload in (None, "", [], {}):
+        return []
+
+    if isinstance(payload, (list, tuple)):
+        messages: List[OutputMessage] = []
+        for item in payload:
+            messages.extend(_result_to_output_messages(item))
+        return messages
+
+    content = _extract_result_content(payload)
+    if content in (None, "", [], {}):
+        return []
+
+    return to_text_output("assistant", truncate_text(_safe_str(content)))
+
+
+def _extract_result_content(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+
+    for key in (
+        "final_answer",
+        "answer",
+        "output",
+        "result",
+        "model_response",
+        "model_responses",
+        "inference_output",
+    ):
+        value = result.get(key)
+        if value not in (None, "", [], {}):
+            return value
+
+    inference_log = result.get("inference_log")
+    if isinstance(inference_log, dict):
+        for key in sorted(
+            (k for k in inference_log if k.startswith("step_")),
+            key=_step_log_sort_key,
+            reverse=True,
+        ):
+            step_data = inference_log.get(key)
+            if not isinstance(step_data, dict):
+                continue
+            output = step_data.get("inference_output")
+            if output not in (None, "", [], {}):
+                return output
+            answer = step_data.get("inference_answer")
+            if answer not in (None, "", [], {}):
+                return answer
+
+    return result
+
+
+def _step_log_sort_key(key: str) -> int:
+    try:
+        return int(key[len("step_"):])
+    except (TypeError, ValueError):
+        return -1
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +375,23 @@ class GenerateResultsWrapper:
             os.environ.get("BFCL_SESSION_ID") or session_id_default
         )
 
-        entry_inv = EntryInvocation(session_id=session_id)
+        input_messages, system_instructions = _test_cases_to_messages(
+            test_cases_total
+        )
+        entry_attributes = {}
+        system_instruction_value = _system_instruction_attribute(
+            system_instructions
+        )
+        if system_instruction_value is not None:
+            entry_attributes[GEN_AI_SYSTEM_INSTRUCTIONS] = (
+                system_instruction_value
+            )
+
+        entry_inv = EntryInvocation(
+            session_id=session_id,
+            input_messages=input_messages,
+            attributes=entry_attributes,
+        )
         handler = get_extended_telemetry_handler()
 
         attributes = {GEN_AI_FRAMEWORK: FRAMEWORK_NAME}
@@ -215,7 +424,9 @@ class GenerateResultsWrapper:
                                 key,
                                 exc_info=True,
                             )
-                return wrapped(*args, **kwargs)
+                result = wrapped(*args, **kwargs)
+                inv.output_messages = _result_to_output_messages(result)
+                return result
         finally:
             if original_executor is not None:
                 try:
@@ -299,12 +510,13 @@ class BaseHandlerInferenceWrapper:
                         if value is not None:
                             inv.span.set_attribute(key, value)
 
-                # Capture inputs for the AGENT (gated by content-capture mode).
-                question = test_entry.get("question")
-                if question is not None:
-                    inv.input_messages = to_text_input(
-                        "user", truncate_text(_safe_str(question))
-                    )
+                # Capture inputs for the AGENT (gated by content-capture mode
+                # in util-genai when the span finishes).
+                input_messages, system_instructions = _test_entry_to_messages(
+                    test_entry
+                )
+                inv.input_messages = input_messages
+                inv.system_instruction = system_instructions
 
                 # Run the original inference call.
                 try:
@@ -355,11 +567,7 @@ class BaseHandlerInferenceWrapper:
                     if output_tokens is not None:
                         inv.output_tokens = output_tokens
 
-                if result_payload is not None:
-                    inv.output_messages = to_text_output(
-                        "assistant",
-                        truncate_text(_safe_str(result_payload)),
-                    )
+                inv.output_messages = _result_to_output_messages(result)
 
                 return result
         finally:

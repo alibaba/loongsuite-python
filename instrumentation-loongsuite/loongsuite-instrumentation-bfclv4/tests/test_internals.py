@@ -93,6 +93,58 @@ def test_infer_finish_reason_heuristic():
     assert _infer_finish_reason(None) == "unknown"
 
 
+def test_test_entry_to_messages_extracts_genai_content():
+    from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
+        _test_entry_to_messages,
+    )
+
+    test_entry = {
+        "id": "simple_001",
+        "system_prompt": "Use the provided tools.",
+        "question": [
+            [
+                {"role": "system", "content": "Answer concisely."},
+                {"role": "user", "content": "What is the weather in Paris?"},
+            ],
+            [{"role": "assistant", "content": "I will check."}],
+        ],
+    }
+
+    inputs, system_instructions = _test_entry_to_messages(test_entry)
+
+    assert [message.role for message in inputs] == ["user", "assistant"]
+    assert (
+        inputs[0].parts[0].content == "What is the weather in Paris?"
+    )
+    assert inputs[1].parts[0].content == "I will check."
+    assert [part.content for part in system_instructions] == [
+        "Use the provided tools.",
+        "Answer concisely.",
+    ]
+
+
+def test_result_to_output_messages_extracts_last_inference_log_output():
+    from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
+        _result_to_output_messages,
+    )
+
+    outputs = _result_to_output_messages(
+        {
+            "inference_log": {
+                "step_0": {
+                    "inference_output": {"content": "intermediate"}
+                },
+                "step_1": {"inference_output": {"content": "final"}},
+            }
+        }
+    )
+
+    assert len(outputs) == 1
+    assert outputs[0].role == "assistant"
+    assert outputs[0].parts[0].content == '{"content": "final"}'
+    assert outputs[0].finish_reason == "stop"
+
+
 def test_provider_mapping_without_bfcl(monkeypatch):
     from opentelemetry.instrumentation.bfclv4.internal.provider import (
         infer_provider,

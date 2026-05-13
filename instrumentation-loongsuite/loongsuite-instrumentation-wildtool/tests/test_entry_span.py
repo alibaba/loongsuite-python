@@ -80,14 +80,9 @@ class TestEntrySpan:
         assert span.status.status_code != StatusCode.ERROR
 
     def test_entry_span_captures_input_and_output_messages(
-        self, monkeypatch, span_exporter, instrument,
+        self, span_exporter, instrument,
     ):
-        """ENTRY span should carry GenAI input/output messages when content
-        capture is enabled.
-        """
-        monkeypatch.setenv(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-        )
+        """ENTRY span should always carry GenAI input/output messages."""
 
         from opentelemetry.instrumentation.wildtool._wrappers import (  # noqa: PLC0415
             WildToolEntryWrapper,
