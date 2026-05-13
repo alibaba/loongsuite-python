@@ -83,6 +83,11 @@ _TERMINAL_TOOL_DESCRIPTION = "Send keystrokes to a tmux terminal session"
 _GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
 _GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
 
+# Message content attributes. These are not exposed by
+# aliyun.semconv.trace_v2.CommonAttributes in all supported versions.
+_GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
+_GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
+
 # ── Span kind / operation values not present in trace_v2 enums ───────────────
 _SPAN_KIND_ENTRY = "ENTRY"
 _SPAN_KIND_STEP = "STEP"
@@ -116,6 +121,18 @@ def _commands_to_arguments_json(commands) -> str:
         return json.dumps(serialized, ensure_ascii=False)
     except Exception:
         return str(serialized)
+
+
+def _text_messages_json(role: str, content: Any) -> str:
+    """Serialize a single text message using the GenAI message schema."""
+    message = {
+        "role": role,
+        "parts": [{"type": "text", "content": str(content)}],
+    }
+    try:
+        return json.dumps([message], ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return str([message])
 
 # ── ReAct step lifecycle tracked via contextvars ────────────────────────────
 # A STEP span stays open across `_handle_llm_interaction` ⇒ `_execute_commands`
@@ -369,9 +386,9 @@ class _PerformTaskWrapper:
     Per spec: span name ``enter_ai_application_system``,
     ``gen_ai.span.kind=ENTRY``, ``gen_ai.operation.name=enter``.
 
-    Records the user instruction as ``input.value`` and a serialized summary
-    of ``AgentResult`` (failure_mode, token totals, marker count) as
-    ``output.value`` once the task completes.
+    Records the user instruction as ``gen_ai.input.messages`` and a
+    serialized summary of ``AgentResult`` (failure_mode, token totals,
+    marker count) as ``gen_ai.output.messages`` once the task completes.
     """
 
     def __init__(self, tracer):
@@ -401,9 +418,9 @@ class _PerformTaskWrapper:
 
             if instruction:
                 span.set_attribute(
-                    CommonAttributes.INPUT_VALUE, str(instruction)
+                    _GEN_AI_INPUT_MESSAGES,
+                    _text_messages_json("user", instruction),
                 )
-                span.set_attribute(CommonAttributes.INPUT_MIME_TYPE, "text/plain")
 
             try:
                 result = wrapped(*args, **kwargs)
@@ -431,8 +448,10 @@ class _PerformTaskWrapper:
             except Exception:
                 output_value = str(output_summary)
 
-            span.set_attribute(CommonAttributes.OUTPUT_VALUE, output_value)
-            span.set_attribute(CommonAttributes.OUTPUT_MIME_TYPE, "application/json")
+            span.set_attribute(
+                _GEN_AI_OUTPUT_MESSAGES,
+                _text_messages_json("assistant", output_value),
+            )
             span.set_attribute("terminus2.failure_mode", failure_mode_str)
 
             span.set_status(Status(StatusCode.OK))
@@ -505,10 +524,9 @@ class _RunAgentLoopWrapper:
 
             if original_instruction:
                 span.set_attribute(
-                    CommonAttributes.INPUT_VALUE,
-                    str(original_instruction),
+                    _GEN_AI_INPUT_MESSAGES,
+                    _text_messages_json("user", original_instruction),
                 )
-                span.set_attribute(CommonAttributes.INPUT_MIME_TYPE, "text/plain")
 
             try:
                 result = wrapped(*args, **kwargs)
@@ -593,9 +611,6 @@ class _ExecuteCommandsWrapper:
             arguments_json = _commands_to_arguments_json(commands)
             # Spec attribute (gen-ai.md §Tool)
             span.set_attribute(_GEN_AI_TOOL_CALL_ARGUMENTS, arguments_json)
-            # Common input.value mirror — many viewers only render this
-            span.set_attribute(CommonAttributes.INPUT_VALUE, arguments_json)
-            span.set_attribute(CommonAttributes.INPUT_MIME_TYPE, "application/json")
 
             try:
                 result = wrapped(*args, **kwargs)
@@ -611,9 +626,6 @@ class _ExecuteCommandsWrapper:
                 output_text = str(terminal_output)
                 # Spec attribute (gen-ai.md §Tool)
                 span.set_attribute(_GEN_AI_TOOL_CALL_RESULT, output_text)
-                # Common output.value mirror
-                span.set_attribute(CommonAttributes.OUTPUT_VALUE, output_text)
-                span.set_attribute(CommonAttributes.OUTPUT_MIME_TYPE, "text/plain")
 
             span.set_status(Status(StatusCode.OK))
             return result
@@ -717,9 +729,9 @@ class _ParseResponseWrapper:
 
             if response_text is not None:
                 span.set_attribute(
-                    CommonAttributes.INPUT_VALUE, str(response_text)
+                    _GEN_AI_INPUT_MESSAGES,
+                    _text_messages_json("assistant", response_text),
                 )
-                span.set_attribute(CommonAttributes.INPUT_MIME_TYPE, "text/plain")
 
             try:
                 result = wrapped(*args, **kwargs)
@@ -747,8 +759,10 @@ class _ParseResponseWrapper:
                 output_value = json.dumps(output_summary, ensure_ascii=False)
             except Exception:
                 output_value = str(output_summary)
-            span.set_attribute(CommonAttributes.OUTPUT_VALUE, output_value)
-            span.set_attribute(CommonAttributes.OUTPUT_MIME_TYPE, "application/json")
+            span.set_attribute(
+                _GEN_AI_OUTPUT_MESSAGES,
+                _text_messages_json("assistant", output_value),
+            )
 
             if result.error:
                 span.set_attribute("terminus2.parse.error", str(result.error))

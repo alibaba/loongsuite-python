@@ -1,10 +1,6 @@
 """Tests for AGENT span (P2: inference_multi_turn)."""
 
 import json
-from unittest.mock import patch
-
-import pytest
-from opentelemetry.trace import StatusCode
 
 from wtb.model_handler.base_handler import BaseHandler
 
@@ -75,12 +71,49 @@ class TestAgentSpan:
         assert attrs.get("gen_ai.usage.input_tokens") == 30
         assert attrs.get("gen_ai.usage.output_tokens") == 20
 
+    def test_agent_span_captures_input_and_output_messages(
+        self, monkeypatch, span_exporter, instrument, simple_test_entry,
+        tool_call_response_factory, text_response_factory,
+    ):
+        """AGENT span should carry GenAI input/output messages when content
+        capture is enabled.
+        """
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
+
+        handler = _StubHandler()
+        resp0 = tool_call_response_factory(
+            "get_weather", {"city": "Beijing"}, "call_001"
+        )
+        resp1 = text_response_factory("The weather in Beijing is Sunny, 25°C")
+        handler._step_responses = [resp0, resp1]
+
+        handler.inference_multi_turn(simple_test_entry)
+
+        spans = span_exporter.get_finished_spans()
+        agent_span = [s for s in spans if "invoke_agent" in s.name][0]
+        attrs = dict(agent_span.attributes or {})
+        input_messages = json.loads(attrs["gen_ai.input.messages"])
+        output_messages = json.loads(attrs["gen_ai.output.messages"])
+
+        assert input_messages[0]["role"] == "user"
+        assert (
+            input_messages[0]["parts"][0]["content"]
+            == "What is the weather in Beijing?"
+        )
+        assert output_messages[0]["role"] == "assistant"
+        assert (
+            output_messages[0]["parts"][0]["content"]
+            == "The weather in Beijing is Sunny, 25°C"
+        )
+
     def test_agent_parent_is_entry(
         self, span_exporter, instrument, simple_test_entry,
         tool_call_response_factory, text_response_factory,
     ):
         """When called via multi_threaded_inference, AGENT span should be child of ENTRY."""
-        from wtb._llm_response_generation import multi_threaded_inference
+        from wtb._llm_response_generation import multi_threaded_inference  # noqa: I001, PLC0415
 
         handler = _StubHandler()
         resp0 = tool_call_response_factory(
