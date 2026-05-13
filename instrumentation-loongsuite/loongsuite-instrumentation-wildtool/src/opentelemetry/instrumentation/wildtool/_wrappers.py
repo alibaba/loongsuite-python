@@ -63,7 +63,12 @@ from opentelemetry.util.genai.extended_types import (
     InvokeAgentInvocation,
     ReactStepInvocation,
 )
-from opentelemetry.util.genai.types import Error
+from opentelemetry.util.genai.types import (
+    Error,
+    InputMessage,
+    OutputMessage,
+    Text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +96,7 @@ _chain_step_invocations: ContextVar[Optional[List[ReactStepInvocation]]] = (
 
 _PROVIDER_FALLBACK_NAME = "openai"
 _INPUT_VALUE_MAX_CHARS = 4096
+_MESSAGE_CONTENT_MAX_CHARS = 4096
 
 
 def _close_active_step(handler: ExtendedTelemetryHandler) -> None:
@@ -119,6 +125,168 @@ def _stringify(value) -> str:
         return str(value)
 
 
+def _tasks_to_input_messages(test_entry) -> List[InputMessage]:
+    if not isinstance(test_entry, dict):
+        return []
+    tasks = test_entry.get("english_tasks")
+    if not isinstance(tasks, list):
+        return []
+
+    messages = []
+    for task in tasks:
+        if task in (None, "", [], {}):
+            continue
+        messages.append(
+            InputMessage(
+                role="user",
+                parts=[
+                    Text(
+                        content=_truncate(
+                            _stringify(task), _MESSAGE_CONTENT_MAX_CHARS
+                        )
+                    )
+                ],
+            )
+        )
+    return messages
+
+
+def _task_results_to_output_messages(result) -> List[OutputMessage]:
+    task_results = _extract_task_results(result)
+    messages = []
+    for task_result in task_results:
+        content = _extract_task_result_output(task_result)
+        if content in (None, "", [], {}):
+            continue
+        messages.append(
+            OutputMessage(
+                role="assistant",
+                parts=[
+                    Text(
+                        content=_truncate(
+                            _stringify(content), _MESSAGE_CONTENT_MAX_CHARS
+                        )
+                    )
+                ],
+                finish_reason=_extract_finish_reason(task_result),
+            )
+        )
+    return messages
+
+
+def _extract_task_results(result) -> List:
+    if isinstance(result, list):
+        return result
+    if not isinstance(result, dict):
+        return []
+
+    for key in (
+        "result",
+        "results",
+        "inference_result",
+        "inference_results",
+        "result_list",
+        "task_results",
+        "answer",
+        "answers",
+    ):
+        value = result.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return [value]
+        if value not in (None, "", [], {}):
+            return [value]
+
+    if any(
+        key in result
+        for key in (
+            "action_name_label",
+            "is_optimal",
+            "inference_log",
+            "inference_output",
+            "final_answer",
+        )
+    ):
+        return [result]
+    return []
+
+
+def _extract_task_result_output(task_result):
+    if not isinstance(task_result, dict):
+        return task_result
+
+    for key in ("final_answer", "answer", "output", "result"):
+        value = task_result.get(key)
+        if value not in (None, "", [], {}):
+            return value
+
+    inference_log = task_result.get("inference_log")
+    output_from_log = _extract_output_from_inference_log(inference_log)
+    if output_from_log not in (None, "", [], {}):
+        return output_from_log
+
+    label = task_result.get("action_name_label")
+    if label is not None or "is_optimal" in task_result:
+        return {
+            "action_name_label": label,
+            "is_optimal": task_result.get("is_optimal"),
+        }
+    return None
+
+
+def _extract_output_from_inference_log(inference_log):
+    if not isinstance(inference_log, dict):
+        return None
+
+    for key in sorted(
+        (k for k in inference_log if k.startswith("step_")),
+        key=_step_log_sort_key,
+        reverse=True,
+    ):
+        step_data = inference_log.get(key)
+        if not isinstance(step_data, dict):
+            continue
+
+        output = step_data.get("inference_output")
+        if isinstance(output, dict):
+            for output_key in (
+                "content",
+                "reasoning_content",
+                "current_action_name_label",
+                "error_reason",
+            ):
+                value = output.get(output_key)
+                if value not in (None, "", [], {}):
+                    return value
+
+        answer = step_data.get("inference_answer")
+        if isinstance(answer, dict):
+            candidate = answer.get("candidate_0_answer_function_list")
+            if isinstance(candidate, dict):
+                observation = candidate.get("observation")
+                if observation not in (None, "", [], {}):
+                    return observation
+            if answer not in (None, "", [], {}):
+                return answer
+    return None
+
+
+def _step_log_sort_key(key: str) -> int:
+    try:
+        return int(key[len("step_"):])
+    except (TypeError, ValueError):
+        return -1
+
+
+def _extract_finish_reason(task_result) -> str:
+    if isinstance(task_result, dict):
+        label = task_result.get("action_name_label")
+        if label == "error":
+            return "error"
+    return "stop"
+
+
 class WildToolEntryWrapper:
     """P1: Wraps multi_threaded_inference → ENTRY span."""
 
@@ -134,6 +302,7 @@ class WildToolEntryWrapper:
 
         invocation = EntryInvocation(
             session_id=test_case.get("id"),
+            input_messages=_tasks_to_input_messages(test_case),
             attributes={
                 "gen_ai.framework": "wildtool",
                 "gen_ai.request.model": model_name,
@@ -143,6 +312,7 @@ class WildToolEntryWrapper:
         self._handler.start_entry(invocation)
         try:
             result = wrapped(*args, **kwargs)
+            invocation.output_messages = _task_results_to_output_messages(result)
             self._handler.stop_entry(invocation)
             return result
         except Exception as e:
@@ -164,6 +334,7 @@ class WildToolAgentWrapper:
         invocation = InvokeAgentInvocation(
             provider=None,
             agent_name=type(instance).__name__,
+            input_messages=_tasks_to_input_messages(test_entry),
             conversation_id=test_entry.get("id"),
             request_model=getattr(instance, "model_name", None),
             attributes={
@@ -176,6 +347,7 @@ class WildToolAgentWrapper:
         self._handler.start_invoke_agent(invocation)
         try:
             result = wrapped(*args, **kwargs)
+            invocation.output_messages = _task_results_to_output_messages(result)
             total_input = 0
             total_output = 0
             for task_result in (result or []):

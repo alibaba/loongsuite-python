@@ -7,10 +7,12 @@ unwrapped function. All tests therefore import the symbol lazily after the
 ``instrument`` fixture has run.
 """
 
-import pytest
-from opentelemetry.trace import StatusCode
+import json
 
+import pytest
 from wtb.model_handler.base_handler import BaseHandler
+
+from opentelemetry.trace import StatusCode
 
 
 class _StubHandler(BaseHandler):
@@ -46,7 +48,7 @@ class _StubHandler(BaseHandler):
 class TestEntrySpan:
     def test_entry_span_created(self, span_exporter, instrument):
         """ENTRY span should be created with correct attributes."""
-        from wtb._llm_response_generation import multi_threaded_inference
+        from wtb._llm_response_generation import multi_threaded_inference  # noqa: I001, PLC0415
 
         handler = _StubHandler()
         test_case = {
@@ -77,6 +79,62 @@ class TestEntrySpan:
         # the span UNSET, failures explicitly mark it ERROR.
         assert span.status.status_code != StatusCode.ERROR
 
+    def test_entry_span_captures_input_and_output_messages(
+        self, monkeypatch, span_exporter, instrument,
+    ):
+        """ENTRY span should carry GenAI input/output messages when content
+        capture is enabled.
+        """
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
+
+        from opentelemetry.instrumentation.wildtool._wrappers import (  # noqa: PLC0415
+            WildToolEntryWrapper,
+        )
+
+        wrapper = WildToolEntryWrapper(instrument._handler)
+        test_case = {
+            "id": "wild_tool_bench_test_messages",
+            "english_tasks": ["Search for the capital of France"],
+        }
+
+        def _success(handler, model_name, test_case):
+            return [
+                {
+                    "action_name_label": "correct",
+                    "is_optimal": True,
+                    "inference_log": {
+                        "step_0": {
+                            "inference_output": {
+                                "content": "Paris is the capital of France."
+                            }
+                        }
+                    },
+                }
+            ]
+
+        wrapper(_success, None, (_StubHandler(), "gpt-4o", test_case), {})
+
+        spans = span_exporter.get_finished_spans()
+        entry_span = [
+            s for s in spans if s.name == "enter_ai_application_system"
+        ][0]
+        attrs = dict(entry_span.attributes or {})
+        input_messages = json.loads(attrs["gen_ai.input.messages"])
+        output_messages = json.loads(attrs["gen_ai.output.messages"])
+
+        assert input_messages[0]["role"] == "user"
+        assert (
+            input_messages[0]["parts"][0]["content"]
+            == "Search for the capital of France"
+        )
+        assert output_messages[0]["role"] == "assistant"
+        assert (
+            output_messages[0]["parts"][0]["content"]
+            == "Paris is the capital of France."
+        )
+
     def test_entry_span_error_path(self, span_exporter, instrument):
         """The ENTRY wrapper marks the span ERROR when the wrapped callable
         raises an unhandled exception.
@@ -88,7 +146,7 @@ class TestEntrySpan:
         deliberately raises, bypassing ``multi_threaded_inference``'s own
         error handling.
         """
-        from opentelemetry.instrumentation.wildtool._wrappers import (
+        from opentelemetry.instrumentation.wildtool._wrappers import (  # noqa: PLC0415
             WildToolEntryWrapper,
         )
 
