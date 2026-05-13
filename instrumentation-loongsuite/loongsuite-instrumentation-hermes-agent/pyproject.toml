@@ -24,19 +24,17 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+  "loongsuite-util-genai",
   "opentelemetry-api >= 1.37.0, < 1.40",
   "opentelemetry-instrumentation >= 0.60b1, < 0.61",
   "opentelemetry-instrumentation-threading >= 0.60b1, < 0.61",
   "opentelemetry-sdk >= 1.37.0, < 1.40",
   "opentelemetry-semantic-conventions >= 0.60b1, < 0.61",
-  "opentelemetry-util-genai",
   "wrapt >= 1.0.0, < 2.0.0",
 ]
 
 [project.optional-dependencies]
-instruments = [
-  "openai >= 1.0.0",
-]
+instruments = []
 
 [project.entry-points.opentelemetry_instrumentor]
 hermes-agent = "opentelemetry.instrumentation.hermes_agent:HermesAgentInstrumentor"

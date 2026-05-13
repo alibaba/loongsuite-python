@@ -23,6 +23,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+  "loongsuite-util-genai",
   "opentelemetry-api >= 1.37.0",
   "opentelemetry-instrumentation >= 0.58b0",
   "opentelemetry-semantic-conventions >= 0.58b0",
@@ -30,9 +31,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-instruments = [
-  "claw-eval >= 0.1.0"
-]
+instruments = []
 
 [project.entry-points.opentelemetry_instrumentor]
 claw_eval = "opentelemetry.instrumentation.claw_eval:ClawEvalInstrumentor"
