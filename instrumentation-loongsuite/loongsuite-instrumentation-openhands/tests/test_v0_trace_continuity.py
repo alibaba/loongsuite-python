@@ -227,7 +227,9 @@ def test_io_attributes_on_entry_agent_step(instrumented_v0):
     # AGENT
     assert agent.attributes.get("gen_ai.input.messages")
     assert "do the thing" in agent.attributes.get("gen_ai.input.messages")
-    assert agent.attributes.get("input.value")
+    assert "gen_ai.system_instruction" not in agent.attributes
+    assert "input.value" not in agent.attributes
+    assert "output.value" not in agent.attributes
     assert agent.attributes.get("gen_ai.session.id") == "io-sid"
 
     # STEP
@@ -242,5 +244,7 @@ def test_io_attributes_on_entry_agent_step(instrumented_v0):
     assert tool.attributes.get("gen_ai.tool.name") == "bash"
     assert tool.attributes.get("input.value")
     assert "cat /etc/hosts" in tool.attributes.get("input.value")
-    assert tool.attributes.get("output.value")
-    assert "exit_code" in tool.attributes.get("output.value")
+    assert "output.value" not in tool.attributes
+    result = tool.attributes.get("gen_ai.tool.call.result")
+    assert result
+    assert "exit_code" in result

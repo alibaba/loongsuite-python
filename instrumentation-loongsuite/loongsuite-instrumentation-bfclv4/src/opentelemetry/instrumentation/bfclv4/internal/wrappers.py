@@ -30,7 +30,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import threading
 import time
+from contextvars import ContextVar
 from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 from opentelemetry.instrumentation.bfclv4.internal.attributes import (
@@ -77,10 +79,13 @@ from opentelemetry.util.genai.extended_types import (
     ReactStepInvocation,
 )
 from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    GenericToolDefinition,
     InputMessage,
     MessagePart,
     OutputMessage,
     Text,
+    ToolDefinition,
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
@@ -92,6 +97,28 @@ from opentelemetry.util.genai.utils import (
 logger = logging.getLogger(__name__)
 
 GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
+GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
+
+
+class _EntryOutputAccumulator:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._messages: List[OutputMessage] = []
+
+    def extend(self, messages: List[OutputMessage]) -> None:
+        if not messages:
+            return
+        with self._lock:
+            self._messages.extend(messages)
+
+    def snapshot(self) -> List[OutputMessage]:
+        with self._lock:
+            return list(self._messages)
+
+
+_ENTRY_OUTPUT_ACCUMULATOR: ContextVar[Optional[_EntryOutputAccumulator]] = (
+    ContextVar("bfclv4_entry_output_accumulator", default=None)
+)
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +193,38 @@ def _system_instruction_attribute(
         return None
 
 
+def _tool_definitions_attribute(
+    tool_definitions: List[ToolDefinition],
+) -> Optional[str]:
+    if not tool_definitions:
+        return None
+    try:
+        if not is_experimental_mode():
+            return None
+
+        should_record_full = get_content_capturing_mode() in (
+            ContentCapturingMode.SPAN_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+        payload: List[dict[str, Any]] = []
+        for tool_def in tool_definitions:
+            if should_record_full:
+                payload.append(dataclasses.asdict(tool_def))
+            else:
+                payload.append(
+                    {
+                        "name": getattr(tool_def, "name", ""),
+                        "type": getattr(tool_def, "type", "function"),
+                    }
+                )
+        return gen_ai_json_dumps(payload) if payload else None
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "bfclv4: failed to serialise tool definitions", exc_info=True
+        )
+        return None
+
+
 def _test_cases_to_messages(
     test_cases: Any,
 ) -> Tuple[List[InputMessage], List[MessagePart]]:
@@ -185,6 +244,20 @@ def _test_cases_to_messages(
         system_instructions.extend(entry_system)
 
     return inputs, system_instructions
+
+
+def _test_cases_to_tool_definitions(test_cases: Any) -> List[ToolDefinition]:
+    if isinstance(test_cases, dict):
+        test_entries = [test_cases]
+    elif isinstance(test_cases, (list, tuple)):
+        test_entries = list(test_cases)
+    else:
+        test_entries = []
+
+    definitions: List[ToolDefinition] = []
+    for test_entry in test_entries:
+        definitions.extend(_test_entry_to_tool_definitions(test_entry))
+    return _dedupe_tool_definitions(definitions)
 
 
 def _test_entry_to_messages(
@@ -214,6 +287,101 @@ def _test_entry_to_messages(
         system_instructions,
     )
     return inputs, system_instructions
+
+
+def _test_entry_to_tool_definitions(test_entry: Any) -> List[ToolDefinition]:
+    if not isinstance(test_entry, dict):
+        return []
+
+    definitions: List[ToolDefinition] = []
+    for key in ("function", "functions", "tools", "tool_definitions"):
+        definitions.extend(_tool_value_to_definitions(test_entry.get(key)))
+
+    missed_function = test_entry.get("missed_function")
+    if isinstance(missed_function, dict):
+        for value in missed_function.values():
+            definitions.extend(_tool_value_to_definitions(value))
+    else:
+        definitions.extend(_tool_value_to_definitions(missed_function))
+
+    return _dedupe_tool_definitions(definitions)
+
+
+def _tool_value_to_definitions(value: Any) -> List[ToolDefinition]:
+    if value in (None, "", [], {}):
+        return []
+
+    if isinstance(value, str):
+        try:
+            import json
+
+            value = json.loads(value)
+        except Exception:  # noqa: BLE001
+            return []
+
+    if isinstance(value, (list, tuple)):
+        definitions: List[ToolDefinition] = []
+        for item in value:
+            definitions.extend(_tool_value_to_definitions(item))
+        return definitions
+
+    if not isinstance(value, dict):
+        return []
+
+    nested_function = value.get("function")
+    if isinstance(nested_function, dict):
+        nested = dict(nested_function)
+        nested.setdefault("type", value.get("type", "function"))
+        return _tool_value_to_definitions(nested)
+
+    name = _first_present(
+        value,
+        ("name", "function_name", "tool_name", "api_name"),
+    )
+    tool_type = value.get("type")
+    description = value.get("description")
+    parameters = value.get("parameters")
+
+    if not name:
+        return []
+
+    if tool_type not in (None, "", "function") and parameters is None:
+        return [GenericToolDefinition(name=str(name), type=str(tool_type))]
+
+    return [
+        FunctionToolDefinition(
+            name=str(name),
+            description=(
+                _safe_str(description) if description is not None else None
+            ),
+            parameters=parameters,
+        )
+    ]
+
+
+def _first_present(value: dict[str, Any], keys: Tuple[str, ...]) -> Any:
+    for key in keys:
+        item = value.get(key)
+        if item not in (None, ""):
+            return item
+    return None
+
+
+def _dedupe_tool_definitions(
+    definitions: List[ToolDefinition],
+) -> List[ToolDefinition]:
+    deduped: List[ToolDefinition] = []
+    seen: set[str] = set()
+    for definition in definitions:
+        try:
+            key = gen_ai_json_dumps(dataclasses.asdict(definition))
+        except Exception:  # noqa: BLE001
+            key = repr(definition)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(definition)
+    return deduped
 
 
 def _append_question_messages(
@@ -319,6 +487,12 @@ def _step_log_sort_key(key: str) -> int:
         return -1
 
 
+def _append_entry_outputs(output_messages: List[OutputMessage]) -> None:
+    accumulator = _ENTRY_OUTPUT_ACCUMULATOR.get()
+    if accumulator is not None:
+        accumulator.extend(output_messages)
+
+
 # ---------------------------------------------------------------------------
 # ENTRY wrapper
 
@@ -378,13 +552,19 @@ class GenerateResultsWrapper:
         input_messages, system_instructions = _test_cases_to_messages(
             test_cases_total
         )
-        entry_attributes = {}
+        tool_definitions = _test_cases_to_tool_definitions(test_cases_total)
+        entry_attributes: dict[str, Any] = {}
         system_instruction_value = _system_instruction_attribute(
             system_instructions
         )
         if system_instruction_value is not None:
             entry_attributes[GEN_AI_SYSTEM_INSTRUCTIONS] = (
                 system_instruction_value
+            )
+        tool_definitions_value = _tool_definitions_attribute(tool_definitions)
+        if tool_definitions_value is not None:
+            entry_attributes[GEN_AI_TOOL_DEFINITIONS] = (
+                tool_definitions_value
             )
 
         entry_inv = EntryInvocation(
@@ -393,8 +573,10 @@ class GenerateResultsWrapper:
             attributes=entry_attributes,
         )
         handler = get_extended_telemetry_handler()
+        accumulator = _EntryOutputAccumulator()
+        accumulator_token = _ENTRY_OUTPUT_ACCUMULATOR.set(accumulator)
 
-        attributes = {GEN_AI_FRAMEWORK: FRAMEWORK_NAME}
+        attributes: dict[str, Any] = {GEN_AI_FRAMEWORK: FRAMEWORK_NAME}
         category_value = _join_test_category(
             _safe_get(cli_args, "test_category", None)
         )
@@ -425,9 +607,16 @@ class GenerateResultsWrapper:
                                 exc_info=True,
                             )
                 result = wrapped(*args, **kwargs)
-                inv.output_messages = _result_to_output_messages(result)
+                result_output_messages = _result_to_output_messages(result)
+                if result_output_messages:
+                    _append_entry_outputs(result_output_messages)
+                inv.output_messages = accumulator.snapshot()
                 return result
         finally:
+            try:
+                _ENTRY_OUTPUT_ACCUMULATOR.reset(accumulator_token)
+            except (LookupError, ValueError):
+                pass
             if original_executor is not None:
                 try:
                     _bfcl_gen.ThreadPoolExecutor = original_executor
@@ -482,6 +671,10 @@ class BaseHandlerInferenceWrapper:
             if isinstance(involved_classes, (list, tuple))
             else None
         )
+        input_messages, system_instructions = _test_entry_to_messages(
+            test_entry
+        )
+        tool_definitions = _test_entry_to_tool_definitions(test_entry)
 
         invocation = InvokeAgentInvocation(
             provider=provider or "unknown",
@@ -490,6 +683,9 @@ class BaseHandlerInferenceWrapper:
             agent_name=category or "bfcl_agent",
             agent_description=agent_description or None,
             conversation_id=test_entry_id,
+            input_messages=input_messages,
+            system_instruction=system_instructions,
+            tool_definitions=tool_definitions,
         )
 
         token = init_state()
@@ -509,14 +705,6 @@ class BaseHandlerInferenceWrapper:
                     for key, value in extra_attrs.items():
                         if value is not None:
                             inv.span.set_attribute(key, value)
-
-                # Capture inputs for the AGENT (gated by content-capture mode
-                # in util-genai when the span finishes).
-                input_messages, system_instructions = _test_entry_to_messages(
-                    test_entry
-                )
-                inv.input_messages = input_messages
-                inv.system_instruction = system_instructions
 
                 # Run the original inference call.
                 try:
@@ -567,7 +755,9 @@ class BaseHandlerInferenceWrapper:
                     if output_tokens is not None:
                         inv.output_tokens = output_tokens
 
-                inv.output_messages = _result_to_output_messages(result)
+                output_messages = _result_to_output_messages(result)
+                inv.output_messages = output_messages
+                _append_entry_outputs(output_messages)
 
                 return result
         finally:

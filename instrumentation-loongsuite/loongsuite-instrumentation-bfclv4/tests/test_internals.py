@@ -123,6 +123,54 @@ def test_test_entry_to_messages_extracts_genai_content():
     ]
 
 
+def test_test_entry_to_tool_definitions_extracts_bfcl_functions():
+    from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
+        _test_entry_to_tool_definitions,
+    )
+
+    test_entry = {
+        "id": "simple_001",
+        "function": [
+            {
+                "name": "get_weather",
+                "description": "Get weather information.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "book_flight",
+                    "description": "Book a flight.",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ],
+        "missed_function": {
+            "1": [
+                {
+                    "name": "cancel_booking",
+                    "description": "Cancel a booking.",
+                    "parameters": {"type": "object"},
+                }
+            ]
+        },
+    }
+
+    definitions = _test_entry_to_tool_definitions(test_entry)
+
+    assert [definition.name for definition in definitions] == [
+        "get_weather",
+        "book_flight",
+        "cancel_booking",
+    ]
+    assert definitions[0].type == "function"
+    assert definitions[0].parameters["required"] == ["location"]
+
+
 def test_result_to_output_messages_extracts_last_inference_log_output():
     from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
         _result_to_output_messages,
