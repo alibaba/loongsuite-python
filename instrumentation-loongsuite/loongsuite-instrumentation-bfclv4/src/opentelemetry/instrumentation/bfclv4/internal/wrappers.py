@@ -27,10 +27,12 @@ that the LoongSuite semantic-validator expects.
 
 from __future__ import annotations
 
+import ast
 import logging
 import os
 import sys
 import time
+from contextvars import ContextVar
 from typing import Any, Callable, Iterable, List, Optional
 
 from opentelemetry.instrumentation.bfclv4.internal.attributes import (
@@ -76,6 +78,11 @@ from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation,
     InvokeAgentInvocation,
     ReactStepInvocation,
+)
+from opentelemetry.util.genai.types import (
+    FunctionToolDefinition,
+    GenericToolDefinition,
+    Text,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,7 +138,13 @@ BFCLV4_DEBUG_ENV = "BFCLV4_DEBUG"
 GEN_AI_INPUT_MESSAGES_ATTR = "gen_ai.input.messages"
 GEN_AI_OUTPUT_MESSAGES_ATTR = "gen_ai.output.messages"
 GEN_AI_SYSTEM_INSTRUCTIONS_ATTR = "gen_ai.system_instructions"
+GEN_AI_TOOL_CALL_ARGUMENTS_ATTR = "gen_ai.tool.call.arguments"
+GEN_AI_TOOL_CALL_RESULT_ATTR = "gen_ai.tool.call.result"
+GEN_AI_TOOL_DESCRIPTION_ATTR = "gen_ai.tool.description"
 BFCL_SYNTHETIC_TOOL_CALL = "bfcl.tool.synthetic_from_model_response"
+_TOOL_DESCRIPTION_MAP: ContextVar[dict[str, str]] = ContextVar(
+    "bfclv4_tool_description_map", default={}
+)
 
 
 
@@ -153,6 +166,150 @@ def _message_dict(role: str, content: Any) -> dict:
 
 def _system_instruction_dict(content: Any) -> dict:
     return {"type": "text", "content": truncate_text(_safe_str(content))}
+
+
+def _test_entry_to_messages(test_entry: Any):
+    if not isinstance(test_entry, dict):
+        return [], []
+
+    inputs = []
+    system_instructions = []
+    for key in (
+        "system",
+        "system_prompt",
+        "system_instruction",
+        "system_instructions",
+    ):
+        value = test_entry.get(key)
+        if value not in (None, "", [], {}):
+            system_instructions.append(Text(content=truncate_text(_safe_str(value))))
+
+    _append_question_messages(
+        test_entry.get("question"),
+        inputs,
+        system_instructions,
+    )
+    return inputs, system_instructions
+
+
+def _append_question_messages(
+    value: Any,
+    inputs: list,
+    system_instructions: list,
+) -> None:
+    if value in (None, "", [], {}):
+        return
+
+    if isinstance(value, dict):
+        role = str(value.get("role") or "user")
+        content = value.get("content")
+        if content in (None, "", [], {}):
+            content = {
+                k: v
+                for k, v in value.items()
+                if k not in {"role", "name", "tool_call_id"}
+            }
+        if content in (None, "", [], {}):
+            return
+        text = truncate_text(_safe_str(content))
+        if role == "system":
+            system_instructions.append(Text(content=text))
+        else:
+            inputs.extend(to_text_input(role, text))
+        return
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _append_question_messages(item, inputs, system_instructions)
+        return
+
+    inputs.extend(to_text_input("user", truncate_text(_safe_str(value))))
+
+
+def _test_entry_to_tool_definitions(test_entry: Any) -> list:
+    if not isinstance(test_entry, dict):
+        return []
+
+    definitions = []
+    for key in ("function", "functions", "tools", "tool_definitions"):
+        definitions.extend(_tool_value_to_definitions(test_entry.get(key)))
+
+    missed_function = test_entry.get("missed_function")
+    if isinstance(missed_function, dict):
+        for value in missed_function.values():
+            definitions.extend(_tool_value_to_definitions(value))
+    else:
+        definitions.extend(_tool_value_to_definitions(missed_function))
+
+    return _dedupe_tool_definitions(definitions)
+
+
+def _tool_value_to_definitions(value: Any) -> list:
+    if value in (None, "", [], {}):
+        return []
+
+    if isinstance(value, str):
+        try:
+            import json
+
+            value = json.loads(value)
+        except Exception:  # noqa: BLE001
+            return []
+
+    if isinstance(value, (list, tuple)):
+        definitions = []
+        for item in value:
+            definitions.extend(_tool_value_to_definitions(item))
+        return definitions
+
+    if not isinstance(value, dict):
+        return []
+
+    nested_function = value.get("function")
+    if isinstance(nested_function, dict):
+        nested = dict(nested_function)
+        nested.setdefault("type", value.get("type", "function"))
+        return _tool_value_to_definitions(nested)
+
+    name = value.get("name") or value.get("function_name") or value.get("tool_name")
+    if not name:
+        return []
+
+    tool_type = value.get("type")
+    description = value.get("description")
+    parameters = value.get("parameters")
+    if tool_type not in (None, "", "function") and parameters is None:
+        return [GenericToolDefinition(name=str(name), type=str(tool_type))]
+
+    return [
+        FunctionToolDefinition(
+            name=str(name),
+            description=_safe_str(description) if description is not None else None,
+            parameters=parameters,
+        )
+    ]
+
+
+def _dedupe_tool_definitions(definitions: list) -> list:
+    deduped = []
+    seen = set()
+    for definition in definitions:
+        key = _json_attr(getattr(definition, "__dict__", repr(definition)))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(definition)
+    return deduped
+
+
+def _tool_description_map(test_entry: Any) -> dict[str, str]:
+    descriptions: dict[str, str] = {}
+    for definition in _test_entry_to_tool_definitions(test_entry):
+        name = getattr(definition, "name", None)
+        description = getattr(definition, "description", None)
+        if name and description:
+            descriptions[str(name)] = _safe_str(description)
+    return descriptions
 
 
 def _extract_questions_from_cases(cases: Any) -> list:
@@ -185,6 +342,67 @@ def _set_json_span_attr(span: Any, key: str, value: Any) -> None:
         logger.debug("bfclv4: failed to set json attr %s", key, exc_info=True)
 
 
+def _span_attr_value(value: Any) -> str:
+    return value if isinstance(value, str) else _json_attr(value)
+
+
+def _set_tool_call_span_attrs(
+    span: Any,
+    *,
+    arguments: Any = None,
+    result: Any = None,
+    description: Optional[str] = None,
+) -> None:
+    if span is None:
+        return
+    try:
+        if not span.is_recording():
+            return
+        if arguments is not None:
+            span.set_attribute(
+                GEN_AI_TOOL_CALL_ARGUMENTS_ATTR,
+                _span_attr_value(arguments),
+            )
+        if result is not None:
+            span.set_attribute(
+                GEN_AI_TOOL_CALL_RESULT_ATTR,
+                _span_attr_value(result),
+            )
+        if description:
+            span.set_attribute(GEN_AI_TOOL_DESCRIPTION_ATTR, description)
+    except Exception:  # noqa: BLE001
+        logger.debug("bfclv4: failed to set TOOL call attrs", exc_info=True)
+
+
+def _parse_python_call_arguments(func_call: Any) -> Any:
+    if not isinstance(func_call, str) or "(" not in func_call:
+        return _extract_tool_arguments(func_call)
+    try:
+        expr = ast.parse(func_call, mode="eval").body
+    except SyntaxError:
+        return _extract_tool_arguments(func_call)
+    if not isinstance(expr, ast.Call):
+        return _extract_tool_arguments(func_call)
+
+    parsed: dict[str, Any] = {}
+    for index, arg in enumerate(expr.args):
+        parsed[f"arg_{index}"] = _literal_or_source(arg, func_call)
+    for keyword in expr.keywords:
+        if keyword.arg is None:
+            parsed["kwargs"] = _literal_or_source(keyword.value, func_call)
+        else:
+            parsed[keyword.arg] = _literal_or_source(keyword.value, func_call)
+    return parsed or None
+
+
+def _literal_or_source(node: ast.AST, source: str) -> Any:
+    try:
+        return ast.literal_eval(node)
+    except Exception:  # noqa: BLE001
+        segment = ast.get_source_segment(source, node)
+        return segment if segment is not None else _safe_str(node)
+
+
 def _iter_model_tool_calls(result_payload: Any):
     """Yield (tool_name, arguments) pairs from BFCL single-turn decoded output."""
     if not isinstance(result_payload, list):
@@ -194,7 +412,7 @@ def _iter_model_tool_calls(result_payload: Any):
             for name, arguments in item.items():
                 yield str(name), arguments
         elif isinstance(item, str):
-            yield _extract_tool_name(item), _extract_tool_arguments(item)
+            yield _extract_tool_name(item), _parse_python_call_arguments(item)
 
 
 def _emit_synthetic_tool_spans(
@@ -210,10 +428,12 @@ def _emit_synthetic_tool_spans(
     handler_obj = get_extended_telemetry_handler()
     emitted = 0
     for index, (tool_name, arguments) in enumerate(calls):
+        description = _TOOL_DESCRIPTION_MAP.get({}).get(tool_name)
         tool_inv = ExecuteToolInvocation(
             tool_name=tool_name or "unknown",
             tool_call_id=_synth_tool_call_id(test_entry_id, model_name, index),
             tool_type="function",
+            tool_description=description,
             tool_call_arguments=arguments,
             tool_call_result=None,
         )
@@ -226,6 +446,11 @@ def _emit_synthetic_tool_spans(
                     span.set_attribute(BFCL_SYNTHETIC_TOOL_CALL, True)
                     if test_entry_id is not None:
                         span.set_attribute(BFCL_TEST_ENTRY_ID, str(test_entry_id))
+                    _set_tool_call_span_attrs(
+                        span,
+                        arguments=arguments,
+                        description=description,
+                    )
             emitted += 1
         except Exception:  # noqa: BLE001
             logger.debug("bfclv4 synthetic TOOL span emission failed", exc_info=True)
@@ -400,6 +625,9 @@ class BaseHandlerInferenceWrapper:
         )
 
         token = init_state()
+        tool_description_token = _TOOL_DESCRIPTION_MAP.set(
+            _tool_description_map(test_entry)
+        )
         handler = get_extended_telemetry_handler()
         try:
             with handler.invoke_agent(invocation) as inv:
@@ -498,6 +726,10 @@ class BaseHandlerInferenceWrapper:
 
                 return result
         finally:
+            try:
+                _TOOL_DESCRIPTION_MAP.reset(tool_description_token)
+            except (LookupError, ValueError):
+                pass
             reset_state(token)
 
 
@@ -513,6 +745,67 @@ def _safe_str(value: Any) -> str:
             return str(value)
         except Exception:  # noqa: BLE001
             return "<unserialisable>"
+
+
+def _result_to_output_messages(result: Any):
+    payload = result[0] if isinstance(result, tuple) and result else result
+    if payload in (None, "", [], {}):
+        return []
+
+    if isinstance(payload, (list, tuple)):
+        messages = []
+        for item in payload:
+            messages.extend(_result_to_output_messages(item))
+        return messages
+
+    content = _extract_result_content(payload)
+    if content in (None, "", [], {}):
+        return []
+    return to_text_output("assistant", truncate_text(_safe_str(content)))
+
+
+def _extract_result_content(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+
+    for key in (
+        "final_answer",
+        "answer",
+        "output",
+        "result",
+        "model_response",
+        "model_responses",
+        "inference_output",
+    ):
+        value = result.get(key)
+        if value not in (None, "", [], {}):
+            return value
+
+    inference_log = result.get("inference_log")
+    if isinstance(inference_log, dict):
+        for key in sorted(
+            (k for k in inference_log if k.startswith("step_")),
+            key=_step_log_sort_key,
+            reverse=True,
+        ):
+            step_data = inference_log.get(key)
+            if not isinstance(step_data, dict):
+                continue
+            output = step_data.get("inference_output")
+            if output not in (None, "", [], {}):
+                return output
+            answer = step_data.get("inference_answer")
+            if answer not in (None, "", [], {}):
+                return answer
+
+    return result
+
+
+def _step_log_sort_key(key: str) -> int:
+    try:
+        return int(key[len("step_"):])
+    except (TypeError, ValueError):
+        return -1
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +1028,8 @@ class ExecuteFuncCallWrapper:
         handler_obj = get_extended_telemetry_handler()
         for index, func_call in enumerate(func_call_list):
             tool_name = _extract_tool_name(func_call)
-            arguments = _extract_tool_arguments(func_call)
+            arguments = _parse_python_call_arguments(func_call)
+            description = _TOOL_DESCRIPTION_MAP.get({}).get(tool_name)
             execution_result = (
                 execution_results[index]
                 if index < len(execution_results)
@@ -748,6 +1042,7 @@ class ExecuteFuncCallWrapper:
                     test_entry_id, model_name, index
                 ),
                 tool_type="function",
+                tool_description=description,
                 tool_call_arguments=arguments,
                 tool_call_result=execution_result,
             )
@@ -765,6 +1060,12 @@ class ExecuteFuncCallWrapper:
                             span.set_attribute(
                                 BFCL_TEST_ENTRY_ID, str(test_entry_id)
                             )
+                        _set_tool_call_span_attrs(
+                            span,
+                            arguments=arguments,
+                            result=execution_result,
+                            description=description,
+                        )
                         if isinstance(execution_result, str) and execution_result.startswith(
                             "Error during execution:"
                         ):

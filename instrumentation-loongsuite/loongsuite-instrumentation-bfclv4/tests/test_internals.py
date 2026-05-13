@@ -72,6 +72,7 @@ def test_extract_tool_name_and_arguments():
     from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
         _extract_tool_arguments,
         _extract_tool_name,
+        _parse_python_call_arguments,
     )
 
     assert _extract_tool_name("calc.add(1, 2)") == "add"
@@ -79,6 +80,10 @@ def test_extract_tool_name_and_arguments():
     assert _extract_tool_name("not a call") == "unknown"
     assert _extract_tool_arguments("foo(a=1, b=2)") == "a=1, b=2"
     assert _extract_tool_arguments("foo()") is None
+    assert _parse_python_call_arguments("foo(a=1, b='x')") == {
+        "a": 1,
+        "b": "x",
+    }
 
 
 def test_infer_finish_reason_heuristic():
@@ -126,6 +131,7 @@ def test_test_entry_to_messages_extracts_genai_content():
 def test_test_entry_to_tool_definitions_extracts_bfcl_functions():
     from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
         _test_entry_to_tool_definitions,
+        _tool_description_map,
     )
 
     test_entry = {
@@ -169,6 +175,9 @@ def test_test_entry_to_tool_definitions_extracts_bfcl_functions():
     ]
     assert definitions[0].type == "function"
     assert definitions[0].parameters["required"] == ["location"]
+    assert _tool_description_map(test_entry)["get_weather"] == (
+        "Get weather information."
+    )
 
 
 def test_result_to_output_messages_extracts_last_inference_log_output():
