@@ -91,6 +91,9 @@ def test_v0_full_span_tree(instrumented_v0):
     assert a.name.startswith("invoke_agent ")
     assert a.attributes.get("gen_ai.agent.name") == "CodeActAgent"
     assert a.attributes.get("gen_ai.request.model") == "qwen3-coder-plus"
+    assert "gen_ai.system_instruction" not in a.attributes
+    assert "input.value" not in a.attributes
+    assert "output.value" not in a.attributes
 
     # All STEP spans share the AGENT as parent.
     for s in step:

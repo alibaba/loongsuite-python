@@ -36,18 +36,25 @@ correct parent-child links.
 I/O capture
 -----------
 
-ENTRY / AGENT / STEP / TOOL spans all set:
+ENTRY / STEP spans set:
 
 * ``input.value`` and ``output.value`` (OpenInference convention)
 * ``input.mime_type`` / ``output.mime_type``
 * ``gen_ai.input.messages`` / ``gen_ai.output.messages`` where the GenAI
   semconv applies (LLM-style messages + assistant tool calls)
 
+AGENT spans set GenAI message attributes without OpenInference
+``input.value`` / ``output.value`` mirrors.
+
+TOOL spans set ``input.value`` plus GenAI tool-call attributes; tool results
+are recorded in ``gen_ai.tool.call.result`` instead of ``output.value``.
+
 Capture is always on and content is emitted untruncated.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -118,7 +125,6 @@ GEN_AI_CONVERSATION_ID = "gen_ai.conversation.id"
 GEN_AI_SESSION_ID = "gen_ai.session.id"
 GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
-GEN_AI_SYSTEM_INSTRUCTION = "gen_ai.system_instruction"
 
 # Tool span attributes per ARMS GenAI semconv (gen-ai.md §Tool).
 GEN_AI_TOOL_CALL_ID = "gen_ai.tool.call.id"
@@ -920,9 +926,6 @@ class RunAgentUntilDoneWrapper:
                 try:
                     state = safe_get_attr(controller, "state")
                     _capture_agent_io_attributes(span, controller, agent, state)
-                    output_repr = _final_state_to_output(state)
-                    if output_repr:
-                        _set_io(span, output_value=output_repr)
                     if state is not None:
                         agent_state = safe_get_attr(state, "agent_state")
                         if agent_state is not None:
@@ -1360,11 +1363,9 @@ class AgentControllerStepWrapper:
             pass
 
         # Mirror the latest history snapshot back up to the AGENT span
-        # so AGENT's input.value / gen_ai.input.messages stay current
-        # *during* the run (not just at close-time). The user wants to
-        # see the conversation accumulate on AGENT live, since the
-        # downstream dashboards may read AGENT before the controller
-        # actually closes.
+        # so AGENT's GenAI message attributes stay current during the run
+        # (not just at close-time). Downstream dashboards may read AGENT
+        # before the controller actually closes.
         try:
             agent_span = getattr(instance, _AGENT_SPAN_ATTR, None)
             if agent_span is not None:
@@ -1532,7 +1533,7 @@ class RuntimeRunActionWrapper:
 
     Bridges the session context across worker threads, then opens a TOOL
     span whose ``input.value`` describes the action and whose
-    ``output.value`` describes the resulting observation.
+    ``gen_ai.tool.call.result`` describes the resulting observation.
     """
 
     __slots__ = ("_tracer",)
@@ -1632,12 +1633,11 @@ class RuntimeRunActionWrapper:
             # gen_ai.tool.call.arguments + input.value
             arguments_dict = _tool_call_arguments(action)
             try:
-                if arguments_dict:
-                    args_json = to_json_str(arguments_dict)
-                    if args_json:
-                        span.set_attribute(GEN_AI_TOOL_CALL_ARGUMENTS, args_json)
-                        # OpenInference compat — input.value mirrors the args.
-                        _set_io(span, input_value=args_json)
+                args_json = to_json_str(arguments_dict)
+                if args_json:
+                    span.set_attribute(GEN_AI_TOOL_CALL_ARGUMENTS, args_json)
+                    # OpenInference compat — input.value mirrors the args.
+                    _set_io(span, input_value=args_json)
                 # Convenience preview attribute on the action's primary
                 # input field (command / code / path / ...).
                 preview_field, preview_text = _first_preview_field(action)
@@ -1708,6 +1708,23 @@ _TOOL_ARG_FIELDS: tuple[str, ...] = (
 )
 
 
+def _coerce_tool_arguments(value: Any) -> dict[str, Any]:
+    """Normalize tool call arguments to a JSON-object-compatible dict."""
+    if value in (None, "", [], {}):
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return {"raw": value}
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+    return {"value": value}
+
+
 def _tool_call_arguments(action: Any) -> dict[str, Any]:
     """Return the bare arguments dict for ``gen_ai.tool.call.arguments``.
 
@@ -1721,6 +1738,10 @@ def _tool_call_arguments(action: Any) -> dict[str, Any]:
     # JSON arguments the model emitted (most faithful to what the LLM
     # actually requested).
     tcm = safe_get_attr(action, "tool_call_metadata")
+    if tcm is not None:
+        direct_args = _coerce_tool_arguments(safe_get_attr(tcm, "arguments"))
+        if direct_args:
+            return direct_args
     model_response = safe_get_attr(tcm, "model_response") if tcm else None
     if model_response is not None:
         try:
@@ -1759,15 +1780,9 @@ def _tool_call_arguments(action: Any) -> dict[str, Any]:
                         if not isinstance(fn, dict)
                         else fn.get("arguments")
                     )
-                    if isinstance(raw_args, str):
-                        try:
-                            import json as _json
-
-                            return _json.loads(raw_args)
-                        except Exception:
-                            return {"raw": raw_args}
-                    if isinstance(raw_args, dict):
-                        return raw_args
+                    parsed_args = _coerce_tool_arguments(raw_args)
+                    if parsed_args:
+                        return parsed_args
         except Exception:
             pass
     # Fallback: harvest known argument-bearing fields off the Action object.
@@ -1823,15 +1838,14 @@ def _annotate_observation(span: trace_api.Span, observation: Any) -> None:
     if error:
         span.set_attribute("openhands.observation.error", safe_str(error))
         span.set_status(Status(StatusCode.ERROR, safe_str(error)))
-    # Emit gen_ai.tool.call.result + OpenInference output.value.
+    # TOOL spans do not emit OpenInference output.value; the result lives in
+    # the GenAI tool-call result attribute.
     try:
         result_payload = _observation_to_result(observation)
         result_payload.setdefault("observation", obs_type)
         out = to_json_str(result_payload)
         if out:
             span.set_attribute(GEN_AI_TOOL_CALL_RESULT, out)
-            span.set_attribute(OUTPUT_VALUE, out)
-            span.set_attribute(OUTPUT_MIME, "application/json")
     except Exception:
         pass
 
@@ -1877,8 +1891,6 @@ def _capture_agent_io_attributes(
             payload = to_json_str(sys_instr)
             if payload:
                 span.set_attribute(GEN_AI_SYSTEM_INSTRUCTIONS, payload)
-                # Some downstream ARMS views still look for the legacy singular key.
-                span.set_attribute(GEN_AI_SYSTEM_INSTRUCTION, payload)
     except Exception:
         pass
     try:
@@ -1889,13 +1901,11 @@ def _capture_agent_io_attributes(
                 payload = to_json_str(input_msgs)
                 if payload:
                     span.set_attribute(GEN_AI_INPUT_MESSAGES, payload)
-                    _set_io(span, input_value=payload)
             output_msgs = _history_to_output_messages_schema(history)
             if output_msgs:
                 payload = to_json_str(output_msgs)
                 if payload:
                     span.set_attribute(GEN_AI_OUTPUT_MESSAGES, payload)
-                    _set_io(span, output_value=payload)
     except Exception:
         pass
 

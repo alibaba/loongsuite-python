@@ -123,6 +123,7 @@ def test_tool_span_carries_all_arms_required_attributes(instrumented):
     result = json.loads(result_json)
     assert result.get("exit_code") == 0
     assert "observation" in result
+    assert "output.value" not in attrs
 
 
 def test_tool_span_falls_back_to_action_field_when_no_tool_call_metadata(
@@ -177,6 +178,132 @@ def test_tool_span_falls_back_to_action_field_when_no_tool_call_metadata(
     # Arguments still produced from the action's fields
     args = json.loads(attrs["gen_ai.tool.call.arguments"])
     assert args.get("command") == "echo hi"
+
+
+def test_tool_span_reads_arguments_from_tool_call_metadata(instrumented):
+    inst, exporter = instrumented
+
+    import openhands.controller.agent_controller as ctrl_mod
+    import openhands.core.loop as loop_mod
+    import openhands.core.main as main_mod
+    import openhands.runtime.base as rt_base
+
+    ctrl = ctrl_mod.AgentController(sid="tool-direct-args-sid")
+    runtime = rt_base.Runtime(sid="tool-direct-args-sid")
+
+    class DirectToolCallMetadata:
+        function_name = "execute_bash"
+        tool_call_id = "call_direct_args"
+        arguments = {"command": "pwd", "timeout": 3}
+
+    action = rt_base.Action(
+        action_type="run",
+        command="pwd",
+        tool_call_metadata=DirectToolCallMetadata(),
+    )
+
+    class MessageAction:
+        content = "print cwd"
+        source = "user"
+
+    async def _inner(_c, _r):
+        await ctrl._step()
+        runtime.run_action(action)
+
+    loop_mod._test_inner_callback = _inner
+    main_mod._test_inner_args = (ctrl, runtime)
+
+    async def _scenario():
+        await main_mod.run_controller(
+            config=None,
+            initial_user_action=MessageAction(),
+            sid="tool-direct-args-sid",
+        )
+
+    try:
+        asyncio.run(_scenario())
+    finally:
+        loop_mod._test_inner_callback = None
+        main_mod._test_inner_args = None
+
+    tool = _spans_by_kind(exporter, "TOOL")[0]
+    attrs = tool.attributes
+    assert attrs["gen_ai.tool.call.id"] == "call_direct_args"
+    assert json.loads(attrs["gen_ai.tool.call.arguments"]) == {
+        "command": "pwd",
+        "timeout": 3,
+    }
+
+
+def test_tool_span_always_emits_arguments_attribute(instrumented):
+    inst, exporter = instrumented
+
+    import openhands.controller.agent_controller as ctrl_mod
+    import openhands.core.loop as loop_mod
+    import openhands.core.main as main_mod
+    import openhands.runtime.base as rt_base
+
+    ctrl = ctrl_mod.AgentController(sid="tool-empty-args-sid")
+    runtime = rt_base.Runtime(sid="tool-empty-args-sid")
+    action = rt_base.Action(action_type="run", command="")
+
+    class MessageAction:
+        content = "run empty command"
+        source = "user"
+
+    async def _inner(_c, _r):
+        await ctrl._step()
+        runtime.run_action(action)
+
+    loop_mod._test_inner_callback = _inner
+    main_mod._test_inner_args = (ctrl, runtime)
+
+    async def _scenario():
+        await main_mod.run_controller(
+            config=None,
+            initial_user_action=MessageAction(),
+            sid="tool-empty-args-sid",
+        )
+
+    try:
+        asyncio.run(_scenario())
+    finally:
+        loop_mod._test_inner_callback = None
+        main_mod._test_inner_args = None
+
+    attrs = _spans_by_kind(exporter, "TOOL")[0].attributes
+    assert attrs["gen_ai.tool.call.arguments"] == "{}"
+
+
+def test_agent_io_capture_omits_legacy_and_openinference_attrs(tracer_provider):
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _capture_agent_io_attributes,
+    )
+
+    class SystemMessageAction:
+        content = "You are helpful."
+
+    class MessageAction:
+        content = "hello"
+        source = "user"
+
+    class AgentFinishAction:
+        final_thought = "done"
+
+    class State:
+        history = [SystemMessageAction(), MessageAction(), AgentFinishAction()]
+
+    tracer = tracer_provider.get_tracer(__name__)
+    with tracer.start_as_current_span("agent") as span:
+        _capture_agent_io_attributes(span, None, None, State())
+
+    attrs = tracer_provider._exporter.get_finished_spans()[0].attributes  # type: ignore[attr-defined]
+    assert attrs.get("gen_ai.system_instructions")
+    assert attrs.get("gen_ai.input.messages")
+    assert attrs.get("gen_ai.output.messages")
+    assert "gen_ai.system_instruction" not in attrs
+    assert "input.value" not in attrs
+    assert "output.value" not in attrs
 
 
 def test_agent_span_emits_tool_definitions(instrumented):

@@ -55,14 +55,14 @@ so the trace remains:
 Semantic-convention I/O capture
 -------------------------------
 
-ENTRY, AGENT, STEP, and TOOL spans emit ``input.value`` / ``output.value`` and
-GenAI semantic attributes where applicable.
+ENTRY and STEP spans emit ``input.value`` / ``output.value`` and GenAI semantic
+attributes where applicable. AGENT and TOOL spans use GenAI-native attributes
+for messages and tool-call results without ``output.value`` mirrors.
 
 * **ENTRY** emits ``gen_ai.input.messages`` and ``gen_ai.output.messages`` using
   the ARMS parts-based message schema.
 * **AGENT** emits ``gen_ai.input.messages``, ``gen_ai.output.messages``,
-  ``gen_ai.system_instructions`` / ``gen_ai.system_instruction``, and
-  ``gen_ai.tool.definitions``.
+  ``gen_ai.system_instructions``, and ``gen_ai.tool.definitions``.
 * **STEP** emits recent input history and the pending assistant/tool-call
   output for the ReAct round.
 * **TOOL** emits ``gen_ai.tool.name``, ``gen_ai.tool.type``,
