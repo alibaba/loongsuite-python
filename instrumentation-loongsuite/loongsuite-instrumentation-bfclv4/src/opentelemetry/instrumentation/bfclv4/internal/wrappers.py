@@ -27,13 +27,11 @@ that the LoongSuite semantic-validator expects.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import os
-import threading
+import sys
 import time
-from contextvars import ContextVar
-from typing import Any, Callable, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Iterable, List, Optional
 
 from opentelemetry.instrumentation.bfclv4.internal.attributes import (
     BFCL_NUM_THREADS,
@@ -66,6 +64,7 @@ from opentelemetry.instrumentation.bfclv4.internal.threading_propagation import 
 )
 from opentelemetry.instrumentation.bfclv4.utils import (
     GenAIHookHelper,
+    to_text_input,
     to_text_output,
     truncate_text,
 )
@@ -78,47 +77,8 @@ from opentelemetry.util.genai.extended_types import (
     InvokeAgentInvocation,
     ReactStepInvocation,
 )
-from opentelemetry.util.genai.types import (
-    FunctionToolDefinition,
-    GenericToolDefinition,
-    InputMessage,
-    MessagePart,
-    OutputMessage,
-    Text,
-    ToolDefinition,
-)
-from opentelemetry.util.genai.utils import (
-    ContentCapturingMode,
-    gen_ai_json_dumps,
-    get_content_capturing_mode,
-    is_experimental_mode,
-)
 
 logger = logging.getLogger(__name__)
-
-GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
-GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
-
-
-class _EntryOutputAccumulator:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._messages: List[OutputMessage] = []
-
-    def extend(self, messages: List[OutputMessage]) -> None:
-        if not messages:
-            return
-        with self._lock:
-            self._messages.extend(messages)
-
-    def snapshot(self) -> List[OutputMessage]:
-        with self._lock:
-            return list(self._messages)
-
-
-_ENTRY_OUTPUT_ACCUMULATOR: ContextVar[Optional[_EntryOutputAccumulator]] = (
-    ContextVar("bfclv4_entry_output_accumulator", default=None)
-)
 
 
 # ---------------------------------------------------------------------------
@@ -167,330 +127,109 @@ def _join_test_category(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _should_capture_content_on_span() -> bool:
+BFCLV4_DEBUG_ENV = "BFCLV4_DEBUG"
+GEN_AI_INPUT_MESSAGES_ATTR = "gen_ai.input.messages"
+GEN_AI_OUTPUT_MESSAGES_ATTR = "gen_ai.output.messages"
+GEN_AI_SYSTEM_INSTRUCTIONS_ATTR = "gen_ai.system_instructions"
+BFCL_SYNTHETIC_TOOL_CALL = "bfcl.tool.synthetic_from_model_response"
+
+
+
+def _json_attr(value: Any) -> str:
     try:
-        return is_experimental_mode() and get_content_capturing_mode() in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
+        import json
+
+        return json.dumps(value, ensure_ascii=False, default=str)
     except Exception:  # noqa: BLE001
-        return False
+        return _safe_str(value)
 
 
-def _system_instruction_attribute(
-    system_instructions: List[MessagePart],
-) -> Optional[str]:
-    if not system_instructions or not _should_capture_content_on_span():
-        return None
-    try:
-        return gen_ai_json_dumps(
-            [dataclasses.asdict(part) for part in system_instructions]
-        )
-    except Exception:  # noqa: BLE001
-        logger.debug(
-            "bfclv4: failed to serialise system instructions", exc_info=True
-        )
-        return None
+def _message_dict(role: str, content: Any) -> dict:
+    return {
+        "role": role,
+        "parts": [{"type": "text", "content": truncate_text(_safe_str(content))}],
+    }
 
 
-def _tool_definitions_attribute(
-    tool_definitions: List[ToolDefinition],
-) -> Optional[str]:
-    if not tool_definitions:
-        return None
-    try:
-        if not is_experimental_mode():
-            return None
-
-        should_record_full = get_content_capturing_mode() in (
-            ContentCapturingMode.SPAN_ONLY,
-            ContentCapturingMode.SPAN_AND_EVENT,
-        )
-        payload: List[dict[str, Any]] = []
-        for tool_def in tool_definitions:
-            if should_record_full:
-                payload.append(dataclasses.asdict(tool_def))
-            else:
-                payload.append(
-                    {
-                        "name": getattr(tool_def, "name", ""),
-                        "type": getattr(tool_def, "type", "function"),
-                    }
-                )
-        return gen_ai_json_dumps(payload) if payload else None
-    except Exception:  # noqa: BLE001
-        logger.debug(
-            "bfclv4: failed to serialise tool definitions", exc_info=True
-        )
-        return None
+def _system_instruction_dict(content: Any) -> dict:
+    return {"type": "text", "content": truncate_text(_safe_str(content))}
 
 
-def _test_cases_to_messages(
-    test_cases: Any,
-) -> Tuple[List[InputMessage], List[MessagePart]]:
-    inputs: List[InputMessage] = []
-    system_instructions: List[MessagePart] = []
-
-    if isinstance(test_cases, dict):
-        test_entries = [test_cases]
-    elif isinstance(test_cases, (list, tuple)):
-        test_entries = list(test_cases)
-    else:
-        test_entries = []
-
-    for test_entry in test_entries:
-        entry_inputs, entry_system = _test_entry_to_messages(test_entry)
-        inputs.extend(entry_inputs)
-        system_instructions.extend(entry_system)
-
-    return inputs, system_instructions
-
-
-def _test_cases_to_tool_definitions(test_cases: Any) -> List[ToolDefinition]:
-    if isinstance(test_cases, dict):
-        test_entries = [test_cases]
-    elif isinstance(test_cases, (list, tuple)):
-        test_entries = list(test_cases)
-    else:
-        test_entries = []
-
-    definitions: List[ToolDefinition] = []
-    for test_entry in test_entries:
-        definitions.extend(_test_entry_to_tool_definitions(test_entry))
-    return _dedupe_tool_definitions(definitions)
-
-
-def _test_entry_to_messages(
-    test_entry: Any,
-) -> Tuple[List[InputMessage], List[MessagePart]]:
-    if not isinstance(test_entry, dict):
-        return [], []
-
-    inputs: List[InputMessage] = []
-    system_instructions: List[MessagePart] = []
-
-    for key in (
-        "system",
-        "system_prompt",
-        "system_instruction",
-        "system_instructions",
-    ):
-        value = test_entry.get(key)
-        if value not in (None, "", [], {}):
-            system_instructions.append(
-                Text(content=truncate_text(_safe_str(value)))
-            )
-
-    _append_question_messages(
-        test_entry.get("question"),
-        inputs,
-        system_instructions,
-    )
-    return inputs, system_instructions
-
-
-def _test_entry_to_tool_definitions(test_entry: Any) -> List[ToolDefinition]:
-    if not isinstance(test_entry, dict):
+def _extract_questions_from_cases(cases: Any) -> list:
+    if not isinstance(cases, (list, tuple)):
         return []
-
-    definitions: List[ToolDefinition] = []
-    for key in ("function", "functions", "tools", "tool_definitions"):
-        definitions.extend(_tool_value_to_definitions(test_entry.get(key)))
-
-    missed_function = test_entry.get("missed_function")
-    if isinstance(missed_function, dict):
-        for value in missed_function.values():
-            definitions.extend(_tool_value_to_definitions(value))
-    else:
-        definitions.extend(_tool_value_to_definitions(missed_function))
-
-    return _dedupe_tool_definitions(definitions)
+    messages = []
+    for case in cases[:10]:
+        if isinstance(case, dict) and case.get("question") is not None:
+            messages.append(_message_dict("user", case.get("question")))
+    return messages
 
 
-def _tool_value_to_definitions(value: Any) -> List[ToolDefinition]:
-    if value in (None, "", [], {}):
+def _extract_tool_defs_from_cases(cases: Any) -> list:
+    if not isinstance(cases, (list, tuple)):
         return []
+    instructions = []
+    for case in cases[:10]:
+        if isinstance(case, dict) and case.get("function") is not None:
+            instructions.append(_system_instruction_dict(case.get("function")))
+    return instructions
 
-    if isinstance(value, str):
+
+def _set_json_span_attr(span: Any, key: str, value: Any) -> None:
+    if not value or span is None:
+        return
+    try:
+        if span.is_recording():
+            span.set_attribute(key, _json_attr(value))
+    except Exception:  # noqa: BLE001
+        logger.debug("bfclv4: failed to set json attr %s", key, exc_info=True)
+
+
+def _iter_model_tool_calls(result_payload: Any):
+    """Yield (tool_name, arguments) pairs from BFCL single-turn decoded output."""
+    if not isinstance(result_payload, list):
+        return
+    for item in result_payload:
+        if isinstance(item, dict):
+            for name, arguments in item.items():
+                yield str(name), arguments
+        elif isinstance(item, str):
+            yield _extract_tool_name(item), _extract_tool_arguments(item)
+
+
+def _emit_synthetic_tool_spans(
+    result_payload: Any,
+    *,
+    test_entry_id: Optional[Any],
+    model_name: Optional[Any],
+) -> int:
+    """Emit TOOL spans for BFCL cases that generate calls but do not execute them."""
+    calls = list(_iter_model_tool_calls(result_payload) or [])
+    if not calls:
+        return 0
+    handler_obj = get_extended_telemetry_handler()
+    emitted = 0
+    for index, (tool_name, arguments) in enumerate(calls):
+        tool_inv = ExecuteToolInvocation(
+            tool_name=tool_name or "unknown",
+            tool_call_id=_synth_tool_call_id(test_entry_id, model_name, index),
+            tool_type="function",
+            tool_call_arguments=arguments,
+            tool_call_result=None,
+        )
         try:
-            import json
-
-            value = json.loads(value)
+            with handler_obj.execute_tool(tool_inv) as inv:
+                span = inv.span
+                if span is not None and span.is_recording():
+                    span.set_attribute(GEN_AI_FRAMEWORK, FRAMEWORK_NAME)
+                    span.set_attribute(BFCL_TOOL_INDEX, index)
+                    span.set_attribute(BFCL_SYNTHETIC_TOOL_CALL, True)
+                    if test_entry_id is not None:
+                        span.set_attribute(BFCL_TEST_ENTRY_ID, str(test_entry_id))
+            emitted += 1
         except Exception:  # noqa: BLE001
-            return []
-
-    if isinstance(value, (list, tuple)):
-        definitions: List[ToolDefinition] = []
-        for item in value:
-            definitions.extend(_tool_value_to_definitions(item))
-        return definitions
-
-    if not isinstance(value, dict):
-        return []
-
-    nested_function = value.get("function")
-    if isinstance(nested_function, dict):
-        nested = dict(nested_function)
-        nested.setdefault("type", value.get("type", "function"))
-        return _tool_value_to_definitions(nested)
-
-    name = _first_present(
-        value,
-        ("name", "function_name", "tool_name", "api_name"),
-    )
-    tool_type = value.get("type")
-    description = value.get("description")
-    parameters = value.get("parameters")
-
-    if not name:
-        return []
-
-    if tool_type not in (None, "", "function") and parameters is None:
-        return [GenericToolDefinition(name=str(name), type=str(tool_type))]
-
-    return [
-        FunctionToolDefinition(
-            name=str(name),
-            description=(
-                _safe_str(description) if description is not None else None
-            ),
-            parameters=parameters,
-        )
-    ]
-
-
-def _first_present(value: dict[str, Any], keys: Tuple[str, ...]) -> Any:
-    for key in keys:
-        item = value.get(key)
-        if item not in (None, ""):
-            return item
-    return None
-
-
-def _dedupe_tool_definitions(
-    definitions: List[ToolDefinition],
-) -> List[ToolDefinition]:
-    deduped: List[ToolDefinition] = []
-    seen: set[str] = set()
-    for definition in definitions:
-        try:
-            key = gen_ai_json_dumps(dataclasses.asdict(definition))
-        except Exception:  # noqa: BLE001
-            key = repr(definition)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(definition)
-    return deduped
-
-
-def _append_question_messages(
-    value: Any,
-    inputs: List[InputMessage],
-    system_instructions: List[MessagePart],
-) -> None:
-    if value in (None, "", [], {}):
-        return
-
-    if isinstance(value, dict):
-        role = str(value.get("role") or "user")
-        content = value.get("content")
-        if content in (None, "", [], {}):
-            # Some BFCL fixtures use the whole dict as the content payload.
-            content = {
-                k: v
-                for k, v in value.items()
-                if k not in {"role", "name", "tool_call_id"}
-            }
-        if content in (None, "", [], {}):
-            return
-        text = truncate_text(_safe_str(content))
-        if role == "system":
-            system_instructions.append(Text(content=text))
-        else:
-            inputs.append(InputMessage(role=role, parts=[Text(content=text)]))
-        return
-
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            _append_question_messages(item, inputs, system_instructions)
-        return
-
-    inputs.append(
-        InputMessage(
-            role="user",
-            parts=[Text(content=truncate_text(_safe_str(value)))],
-        )
-    )
-
-
-def _result_to_output_messages(result: Any) -> List[OutputMessage]:
-    payload = result[0] if isinstance(result, tuple) and result else result
-
-    if payload in (None, "", [], {}):
-        return []
-
-    if isinstance(payload, (list, tuple)):
-        messages: List[OutputMessage] = []
-        for item in payload:
-            messages.extend(_result_to_output_messages(item))
-        return messages
-
-    content = _extract_result_content(payload)
-    if content in (None, "", [], {}):
-        return []
-
-    return to_text_output("assistant", truncate_text(_safe_str(content)))
-
-
-def _extract_result_content(result: Any) -> Any:
-    if not isinstance(result, dict):
-        return result
-
-    for key in (
-        "final_answer",
-        "answer",
-        "output",
-        "result",
-        "model_response",
-        "model_responses",
-        "inference_output",
-    ):
-        value = result.get(key)
-        if value not in (None, "", [], {}):
-            return value
-
-    inference_log = result.get("inference_log")
-    if isinstance(inference_log, dict):
-        for key in sorted(
-            (k for k in inference_log if k.startswith("step_")),
-            key=_step_log_sort_key,
-            reverse=True,
-        ):
-            step_data = inference_log.get(key)
-            if not isinstance(step_data, dict):
-                continue
-            output = step_data.get("inference_output")
-            if output not in (None, "", [], {}):
-                return output
-            answer = step_data.get("inference_answer")
-            if answer not in (None, "", [], {}):
-                return answer
-
-    return result
-
-
-def _step_log_sort_key(key: str) -> int:
-    try:
-        return int(key[len("step_"):])
-    except (TypeError, ValueError):
-        return -1
-
-
-def _append_entry_outputs(output_messages: List[OutputMessage]) -> None:
-    accumulator = _ENTRY_OUTPUT_ACCUMULATOR.get()
-    if accumulator is not None:
-        accumulator.extend(output_messages)
+            logger.debug("bfclv4 synthetic TOOL span emission failed", exc_info=True)
+    return emitted
 
 
 # ---------------------------------------------------------------------------
@@ -549,34 +288,13 @@ class GenerateResultsWrapper:
             os.environ.get("BFCL_SESSION_ID") or session_id_default
         )
 
-        input_messages, system_instructions = _test_cases_to_messages(
-            test_cases_total
-        )
-        tool_definitions = _test_cases_to_tool_definitions(test_cases_total)
-        entry_attributes: dict[str, Any] = {}
-        system_instruction_value = _system_instruction_attribute(
-            system_instructions
-        )
-        if system_instruction_value is not None:
-            entry_attributes[GEN_AI_SYSTEM_INSTRUCTIONS] = (
-                system_instruction_value
-            )
-        tool_definitions_value = _tool_definitions_attribute(tool_definitions)
-        if tool_definitions_value is not None:
-            entry_attributes[GEN_AI_TOOL_DEFINITIONS] = (
-                tool_definitions_value
-            )
-
-        entry_inv = EntryInvocation(
-            session_id=session_id,
-            input_messages=input_messages,
-            attributes=entry_attributes,
-        )
+        entry_inv = EntryInvocation(session_id=session_id)
+        entry_input_messages = _extract_questions_from_cases(test_cases_total)
+        entry_system_instructions = _extract_tool_defs_from_cases(test_cases_total)
+        entry_inv.input_messages = to_text_input("user", _safe_str(entry_input_messages))
         handler = get_extended_telemetry_handler()
-        accumulator = _EntryOutputAccumulator()
-        accumulator_token = _ENTRY_OUTPUT_ACCUMULATOR.set(accumulator)
 
-        attributes: dict[str, Any] = {GEN_AI_FRAMEWORK: FRAMEWORK_NAME}
+        attributes = {GEN_AI_FRAMEWORK: FRAMEWORK_NAME}
         category_value = _join_test_category(
             _safe_get(cli_args, "test_category", None)
         )
@@ -606,17 +324,17 @@ class GenerateResultsWrapper:
                                 key,
                                 exc_info=True,
                             )
+                    _set_json_span_attr(inv.span, GEN_AI_INPUT_MESSAGES_ATTR, entry_input_messages)
+                    _set_json_span_attr(inv.span, GEN_AI_SYSTEM_INSTRUCTIONS_ATTR, entry_system_instructions)
                 result = wrapped(*args, **kwargs)
-                result_output_messages = _result_to_output_messages(result)
-                if result_output_messages:
-                    _append_entry_outputs(result_output_messages)
-                inv.output_messages = accumulator.snapshot()
+                if inv.span is not None and inv.span.is_recording():
+                    _set_json_span_attr(
+                        inv.span,
+                        GEN_AI_OUTPUT_MESSAGES_ATTR,
+                        [_message_dict("assistant", {"model": model_name, "status": "generate_results_completed"})],
+                    )
                 return result
         finally:
-            try:
-                _ENTRY_OUTPUT_ACCUMULATOR.reset(accumulator_token)
-            except (LookupError, ValueError):
-                pass
             if original_executor is not None:
                 try:
                     _bfcl_gen.ThreadPoolExecutor = original_executor
@@ -671,10 +389,6 @@ class BaseHandlerInferenceWrapper:
             if isinstance(involved_classes, (list, tuple))
             else None
         )
-        input_messages, system_instructions = _test_entry_to_messages(
-            test_entry
-        )
-        tool_definitions = _test_entry_to_tool_definitions(test_entry)
 
         invocation = InvokeAgentInvocation(
             provider=provider or "unknown",
@@ -683,9 +397,6 @@ class BaseHandlerInferenceWrapper:
             agent_name=category or "bfcl_agent",
             agent_description=agent_description or None,
             conversation_id=test_entry_id,
-            input_messages=input_messages,
-            system_instruction=system_instructions,
-            tool_definitions=tool_definitions,
         )
 
         token = init_state()
@@ -706,6 +417,22 @@ class BaseHandlerInferenceWrapper:
                         if value is not None:
                             inv.span.set_attribute(key, value)
 
+                # Capture inputs for the AGENT. Also write span attributes directly
+                # because util-genai gates message attributes behind experimental
+                # content-capture mode, which makes K8s semantic validation opaque.
+                question = test_entry.get("question")
+                functions = test_entry.get("function")
+                if question is not None:
+                    inv.input_messages = to_text_input(
+                        "user", truncate_text(_safe_str(question))
+                    )
+                if functions is not None:
+                    inv.system_instruction = to_text_input(
+                        "system", truncate_text(_safe_str(functions))
+                    )[0].parts if to_text_input("system", truncate_text(_safe_str(functions))) else []
+                if inv.span is not None and inv.span.is_recording():
+                    _set_json_span_attr(inv.span, GEN_AI_INPUT_MESSAGES_ATTR, [_message_dict("user", question)])
+                    _set_json_span_attr(inv.span, GEN_AI_SYSTEM_INSTRUCTIONS_ATTR, [_system_instruction_dict(functions)])
                 # Run the original inference call.
                 try:
                     result = wrapped(*args, **kwargs)
@@ -755,9 +482,19 @@ class BaseHandlerInferenceWrapper:
                     if output_tokens is not None:
                         inv.output_tokens = output_tokens
 
-                output_messages = _result_to_output_messages(result)
-                inv.output_messages = output_messages
-                _append_entry_outputs(output_messages)
+                if result_payload is not None:
+                    inv.output_messages = to_text_output(
+                        "assistant",
+                        truncate_text(_safe_str(result_payload)),
+                    )
+                    if inv.span is not None and inv.span.is_recording():
+                        _set_json_span_attr(inv.span, GEN_AI_OUTPUT_MESSAGES_ATTR, [_message_dict("assistant", result_payload)])
+
+                synthetic_tool_count = _emit_synthetic_tool_spans(
+                    result_payload,
+                    test_entry_id=test_entry_id,
+                    model_name=request_model,
+                )
 
                 return result
         finally:
