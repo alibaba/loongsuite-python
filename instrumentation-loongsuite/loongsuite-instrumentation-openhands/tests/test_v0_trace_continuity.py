@@ -18,6 +18,7 @@ We assert:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -240,11 +241,12 @@ def test_io_attributes_on_entry_agent_step(instrumented_v0):
     out = step.attributes.get("output.value")
     assert "tool_calls" in out and "echo step" in out
 
-    # TOOL
+    # TOOL spans: arguments only via gen_ai.tool.call.arguments; no input/output.value.
     assert tool.attributes.get("gen_ai.tool.name") == "bash"
-    assert tool.attributes.get("input.value")
-    assert "cat /etc/hosts" in tool.attributes.get("input.value")
+    assert "input.value" not in tool.attributes
     assert "output.value" not in tool.attributes
+    args = json.loads(tool.attributes["gen_ai.tool.call.arguments"])
+    assert args.get("command") == "cat /etc/hosts"
     result = tool.attributes.get("gen_ai.tool.call.result")
     assert result
     assert "exit_code" in result

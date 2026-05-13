@@ -28,6 +28,8 @@ that the LoongSuite semantic-validator expects.
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 import logging
 import os
 import sys
@@ -140,6 +142,9 @@ GEN_AI_OUTPUT_MESSAGES_ATTR = "gen_ai.output.messages"
 GEN_AI_SYSTEM_INSTRUCTIONS_ATTR = "gen_ai.system_instructions"
 GEN_AI_TOOL_CALL_ARGUMENTS_ATTR = "gen_ai.tool.call.arguments"
 GEN_AI_TOOL_CALL_RESULT_ATTR = "gen_ai.tool.call.result"
+GEN_AI_TOOL_CALL_ID_ATTR = "gen_ai.tool.call.id"
+GEN_AI_TOOL_NAME_ATTR = "gen_ai.tool.name"
+GEN_AI_TOOL_TYPE_ATTR = "gen_ai.tool.type"
 GEN_AI_TOOL_DESCRIPTION_ATTR = "gen_ai.tool.description"
 BFCL_SYNTHETIC_TOOL_CALL = "bfcl.tool.synthetic_from_model_response"
 _TOOL_DESCRIPTION_MAP: ContextVar[dict[str, str]] = ContextVar(
@@ -309,7 +314,65 @@ def _tool_description_map(test_entry: Any) -> dict[str, str]:
         description = getattr(definition, "description", None)
         if name and description:
             descriptions[str(name)] = _safe_str(description)
+
+    # Multi-turn BFCL cases often leave ``function`` empty and expose tools via
+    # involved_classes. Pull method docstrings from BFCL's executable classes so
+    # TOOL spans still carry gen_ai.tool.description.
+    if isinstance(test_entry, dict):
+        involved_classes = test_entry.get("involved_classes") or []
+        try:
+            from bfcl_eval.constants.executable_backend_config import (  # noqa: PLC0415
+                CLASS_FILE_PATH_MAPPING,
+            )
+        except Exception:  # noqa: BLE001
+            CLASS_FILE_PATH_MAPPING = {}
+        for class_name in involved_classes if isinstance(involved_classes, (list, tuple)) else []:
+            module_name = CLASS_FILE_PATH_MAPPING.get(class_name)
+            if not module_name:
+                continue
+            try:
+                module = importlib.import_module(module_name)
+                cls = getattr(module, class_name)
+            except Exception:  # noqa: BLE001
+                continue
+            for method_name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
+                if method_name.startswith("_") or method_name in descriptions:
+                    continue
+                doc = inspect.getdoc(method)
+                if doc:
+                    descriptions[method_name] = truncate_text(doc, 1024)
     return descriptions
+
+
+def _lookup_tool_description(tool_name: Optional[str]) -> Optional[str]:
+    if not tool_name:
+        return None
+    description = _TOOL_DESCRIPTION_MAP.get().get(str(tool_name))
+    if description:
+        return description
+    try:
+        from bfcl_eval.constants.executable_backend_config import (  # noqa: PLC0415
+            CLASS_FILE_PATH_MAPPING,
+        )
+    except Exception:  # noqa: BLE001
+        CLASS_FILE_PATH_MAPPING = {}
+    for module_name in CLASS_FILE_PATH_MAPPING.values():
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # noqa: BLE001
+            continue
+        for _, cls in inspect.getmembers(module, inspect.isclass):
+            method = getattr(cls, str(tool_name), None)
+            if method is None:
+                continue
+            doc = inspect.getdoc(method)
+            if doc:
+                return truncate_text(doc, 1024)
+    return None
+
+
+def _normalise_tool_arguments(arguments: Any) -> Any:
+    return {} if arguments is None else arguments
 
 
 def _extract_questions_from_cases(cases: Any) -> list:
@@ -352,12 +415,21 @@ def _set_tool_call_span_attrs(
     arguments: Any = None,
     result: Any = None,
     description: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    tool_type: Optional[str] = "function",
 ) -> None:
     if span is None:
         return
     try:
         if not span.is_recording():
             return
+        if tool_call_id:
+            span.set_attribute(GEN_AI_TOOL_CALL_ID_ATTR, tool_call_id)
+        if tool_name:
+            span.set_attribute(GEN_AI_TOOL_NAME_ATTR, tool_name)
+        if tool_type:
+            span.set_attribute(GEN_AI_TOOL_TYPE_ATTR, tool_type)
         if arguments is not None:
             span.set_attribute(
                 GEN_AI_TOOL_CALL_ARGUMENTS_ATTR,
@@ -370,6 +442,15 @@ def _set_tool_call_span_attrs(
             )
         if description:
             span.set_attribute(GEN_AI_TOOL_DESCRIPTION_ATTR, description)
+        print(
+            "[bfclv4-tool-attrs] "
+            f"name={tool_name} id={tool_call_id} "
+            f"has_arguments={arguments is not None} "
+            f"has_result={result is not None} "
+            f"has_description={bool(description)}",
+            file=sys.stderr,
+            flush=True,
+        )
     except Exception:  # noqa: BLE001
         logger.debug("bfclv4: failed to set TOOL call attrs", exc_info=True)
 
@@ -428,13 +509,13 @@ def _emit_synthetic_tool_spans(
     handler_obj = get_extended_telemetry_handler()
     emitted = 0
     for index, (tool_name, arguments) in enumerate(calls):
-        description = _TOOL_DESCRIPTION_MAP.get({}).get(tool_name)
+        description = _lookup_tool_description(tool_name)
         tool_inv = ExecuteToolInvocation(
             tool_name=tool_name or "unknown",
             tool_call_id=_synth_tool_call_id(test_entry_id, model_name, index),
             tool_type="function",
             tool_description=description,
-            tool_call_arguments=arguments,
+            tool_call_arguments=_normalise_tool_arguments(arguments),
             tool_call_result=None,
         )
         try:
@@ -448,8 +529,11 @@ def _emit_synthetic_tool_spans(
                         span.set_attribute(BFCL_TEST_ENTRY_ID, str(test_entry_id))
                     _set_tool_call_span_attrs(
                         span,
-                        arguments=arguments,
+                        arguments=_normalise_tool_arguments(arguments),
                         description=description,
+                        tool_name=tool_name,
+                        tool_call_id=_synth_tool_call_id(test_entry_id, model_name, index),
+                        tool_type="function",
                     )
             emitted += 1
         except Exception:  # noqa: BLE001
@@ -1029,7 +1113,7 @@ class ExecuteFuncCallWrapper:
         for index, func_call in enumerate(func_call_list):
             tool_name = _extract_tool_name(func_call)
             arguments = _parse_python_call_arguments(func_call)
-            description = _TOOL_DESCRIPTION_MAP.get({}).get(tool_name)
+            description = _lookup_tool_description(tool_name)
             execution_result = (
                 execution_results[index]
                 if index < len(execution_results)
@@ -1043,7 +1127,7 @@ class ExecuteFuncCallWrapper:
                 ),
                 tool_type="function",
                 tool_description=description,
-                tool_call_arguments=arguments,
+                tool_call_arguments=_normalise_tool_arguments(arguments),
                 tool_call_result=execution_result,
             )
 
@@ -1062,9 +1146,12 @@ class ExecuteFuncCallWrapper:
                             )
                         _set_tool_call_span_attrs(
                             span,
-                            arguments=arguments,
+                            arguments=_normalise_tool_arguments(arguments),
                             result=execution_result,
                             description=description,
+                            tool_name=tool_name,
+                            tool_call_id=_synth_tool_call_id(test_entry_id, model_name, index),
+                            tool_type="function",
                         )
                         if isinstance(execution_result, str) and execution_result.startswith(
                             "Error during execution:"

@@ -9,6 +9,7 @@ reproduce in the stubs.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import types
 from dataclasses import dataclass, field
@@ -194,6 +195,8 @@ def _install_v0_stub_modules() -> None:
         sid: str | None = None,
         **kwargs,
     ):
+        if getattr(main_mod, "_test_raise_cancelled", False):
+            raise asyncio.CancelledError()
         # Mirror real V0: invoke the agent loop *inside* run_controller so
         # the AGENT span lives within the ENTRY span (and inherits its
         # stashed OTel context). Tests can install

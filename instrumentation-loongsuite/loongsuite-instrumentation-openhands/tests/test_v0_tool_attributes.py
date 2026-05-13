@@ -123,6 +123,7 @@ def test_tool_span_carries_all_arms_required_attributes(instrumented):
     result = json.loads(result_json)
     assert result.get("exit_code") == 0
     assert "observation" in result
+    assert "input.value" not in attrs
     assert "output.value" not in attrs
 
 
