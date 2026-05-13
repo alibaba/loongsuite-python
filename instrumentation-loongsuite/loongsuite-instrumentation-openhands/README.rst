@@ -56,8 +56,11 @@ Semantic-convention I/O capture
 -------------------------------
 
 ENTRY and STEP spans emit ``input.value`` / ``output.value`` and GenAI semantic
-attributes where applicable. AGENT and TOOL spans use GenAI-native attributes
-for messages and tool-call results without ``output.value`` mirrors.
+attributes where applicable. AGENT spans use GenAI-native attributes for
+messages without OpenInference ``input.value`` / ``output.value`` mirrors.
+TOOL spans never set ``input.value`` / ``output.value``; they always set
+``gen_ai.tool.call.arguments`` (JSON object string, ``"{}"`` when empty) and
+``gen_ai.tool.call.result``.
 
 * **ENTRY** emits ``gen_ai.input.messages`` and ``gen_ai.output.messages`` using
   the ARMS parts-based message schema.

@@ -162,3 +162,26 @@ def test_v0_runtime_error_observation_marks_span(instrumented_v0):
     assert span.attributes.get("openhands.action.exit_code") == 2
     assert span.status.status_code.name == "ERROR"
 
+
+def test_v0_run_controller_cancelled_is_not_span_error(instrumented_v0):
+    """``asyncio.CancelledError`` (e.g. wait_for) must not mark ENTRY as ERROR."""
+    _, exporter = instrumented_v0
+    import openhands.core.main as main_mod
+
+    main_mod._test_raise_cancelled = True
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(
+                main_mod.run_controller(
+                    config=None,
+                    initial_user_action=type("Msg", (), {"content": "hello"})(),
+                    sid="sid-cancel",
+                )
+            )
+    finally:
+        main_mod._test_raise_cancelled = False
+
+    entry = _spans_by_kind_attr(exporter, "ENTRY")
+    assert len(entry) == 1
+    assert entry[0].status.status_code.name == "UNSET"
+

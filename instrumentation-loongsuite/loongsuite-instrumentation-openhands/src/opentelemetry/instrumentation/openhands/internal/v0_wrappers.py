@@ -46,8 +46,9 @@ ENTRY / STEP spans set:
 AGENT spans set GenAI message attributes without OpenInference
 ``input.value`` / ``output.value`` mirrors.
 
-TOOL spans set ``input.value`` plus GenAI tool-call attributes; tool results
-are recorded in ``gen_ai.tool.call.result`` instead of ``output.value``.
+TOOL spans set ``gen_ai.tool.call.arguments`` (always, including ``"{}"``
+when empty) and ``gen_ai.tool.call.result`` for observations. They do
+not set OpenInference ``input.value`` / ``output.value``.
 
 Capture is always on and content is emitted untruncated.
 """
@@ -1532,8 +1533,9 @@ class RuntimeRunActionWrapper:
     """TOOL span around ``Runtime.run_action``.
 
     Bridges the session context across worker threads, then opens a TOOL
-    span whose ``input.value`` describes the action and whose
-    ``gen_ai.tool.call.result`` describes the resulting observation.
+    span with GenAI tool-call attributes. Arguments are always recorded
+    in ``gen_ai.tool.call.arguments`` (``"{}"`` when none); results go to
+    ``gen_ai.tool.call.result``. No ``input.value`` / ``output.value``.
     """
 
     __slots__ = ("_tracer",)
@@ -1630,23 +1632,21 @@ class RuntimeRunActionWrapper:
             except Exception:
                 pass
 
-            # gen_ai.tool.call.arguments + input.value
+            # gen_ai.tool.call.arguments — always emit (empty object as "{}" ).
+            # No OpenInference input.value / output.value on TOOL spans.
             arguments_dict = _tool_call_arguments(action)
             try:
                 args_json = to_json_str(arguments_dict)
-                if args_json:
-                    span.set_attribute(GEN_AI_TOOL_CALL_ARGUMENTS, args_json)
-                    # OpenInference compat — input.value mirrors the args.
-                    _set_io(span, input_value=args_json)
-                # Convenience preview attribute on the action's primary
-                # input field (command / code / path / ...).
+                if not args_json:
+                    args_json = "{}"
+                span.set_attribute(GEN_AI_TOOL_CALL_ARGUMENTS, args_json)
                 preview_field, preview_text = _first_preview_field(action)
                 if preview_text:
                     span.set_attribute(
                         f"openhands.action.{preview_field}", preview_text
                     )
             except Exception:
-                pass
+                span.set_attribute(GEN_AI_TOOL_CALL_ARGUMENTS, "{}")
 
             ctx = set_span_in_context(span)
             token = otel_context.attach(ctx)
