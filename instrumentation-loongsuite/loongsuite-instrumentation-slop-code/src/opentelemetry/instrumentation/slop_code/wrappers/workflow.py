@@ -41,12 +41,14 @@ class _WorkflowWrapper:
         problem_name = args[1] if len(args) > 1 else kwargs.get("problem_name", "unknown")
         config = args[2] if len(args) > 2 else kwargs.get("config")
 
-        span_name = f"workflow.{problem_name}"
+        span_name = f"chain {problem_name}"
 
         attrs = {
             gen_ai_attributes.GEN_AI_OPERATION_NAME: "workflow",
             gen_ai_attributes.GEN_AI_SYSTEM: SYSTEM_NAME,
             gen_ai_extended_attributes.GEN_AI_SPAN_KIND: "CHAIN",
+            "gen_ai.framework": SYSTEM_NAME,
+            "input.value": str(problem_name),
             "slop_code.problem.name": str(problem_name),
         }
 
@@ -85,6 +87,7 @@ class _WorkflowWrapper:
                                 "slop_code.passed_policy",
                                 summary.get("passed_policy"),
                             )
+                            set_optional_attr(span, "output.value", str(summary))
 
                     span.set_status(Status(StatusCode.OK))
                     return result

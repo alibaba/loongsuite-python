@@ -49,3 +49,24 @@ def set_optional_attr(span: Span, key: str, value: Optional[Any]) -> None:
         if isinstance(value, str) and len(value) > MAX_ATTR_LEN:
             value = value[:MAX_ATTR_LEN]
         span.set_attribute(key, value)
+
+
+def truncate_text(value: str, limit: int = MAX_ATTR_LEN) -> str:
+    """Return a bounded string suitable for span attributes."""
+    if value is None:
+        return value
+    return value if len(value) <= limit else value[:limit]
+
+def json_dumps_attr(value: Any) -> str:
+    """Serialize a value as JSON for ARMS GenAI string attributes."""
+    import json
+    return truncate_text(json.dumps(value, ensure_ascii=False, default=str))
+
+def genai_messages(messages: Any) -> str:
+    """Normalize chat-like messages to the ARMS GenAI message schema."""
+    normalized = []
+    for item in messages or []:
+        role = safe_get(item, "role") or (item.get("role") if isinstance(item, dict) else None) or "user"
+        content = safe_get(item, "content") or (item.get("content") if isinstance(item, dict) else None) or ""
+        normalized.append({"role": str(role), "parts": [{"type": "text", "content": str(content)}]})
+    return json_dumps_attr(normalized)
