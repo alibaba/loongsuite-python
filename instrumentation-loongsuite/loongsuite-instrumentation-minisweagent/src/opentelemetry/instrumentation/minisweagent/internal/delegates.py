@@ -1,42 +1,37 @@
 """Tracing delegates for Environment (factory-injected wrappers).
 
-LLM spans/metrics are intentionally NOT emitted here: the underlying
-LiteLLM/OpenAI instrumentation already produces a high-quality LLM span
-for each model call, so emitting another one from minisweagent would only
-duplicate data.
+LLM-call spans remain with LiteLLM/OpenAI instrumentation; this emits execute_tool.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.trace import SpanKind, Status, StatusCode, Tracer, use_span
+from opentelemetry import context as context_api
+from opentelemetry.trace import Tracer
 
-from opentelemetry.instrumentation.minisweagent.config import (
-    OTEL_MINISWEAGENT_COMMAND_PREVIEW_MAX_LEN,
-)
-
-GEN_AI_SPAN_KIND = "gen_ai.span.kind"
-GEN_AI_FRAMEWORK = "gen_ai.framework"
+logger = logging.getLogger(__name__)
 
 
-def _preview(text: str | None, max_len: int) -> str:
-    if not text:
-        return ""
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3] + "..."
+def _sanitize_tool_result(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(json.dumps(payload, default=str))
+    except (TypeError, ValueError):
+        logger.debug("tool result not JSON-normalizable", exc_info=True)
+        try:
+            return {"repr": repr(payload)}
+        except Exception:
+            return {"error": "unserializable_tool_result"}
 
 
 class TracingEnvironment:
-    """Delegates to an inner Environment and emits one TOOL span per ``execute`` call."""
+    """Delegates to inner Environment and emits ARMS-aligned TOOL (execute_tool) spans."""
 
     __slots__ = ("_inner", "_tracer")
 
-    def __init__(self, inner: Any, tracer: Tracer):
+    def __init__(self, inner: Any, tracer: Tracer):  # noqa: ARG002
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_tracer", tracer)
 
@@ -45,45 +40,42 @@ class TracingEnvironment:
 
     def execute(self, action: dict, cwd: str = "", **kwargs: Any) -> dict[str, Any]:
         from minisweagent.exceptions import InterruptAgentFlow  # noqa: PLC0415
+        from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler  # noqa: PLC0415
+        from opentelemetry.util.genai.extended_types import ExecuteToolInvocation  # noqa: PLC0415
+        from opentelemetry.util.genai.types import Error as GenAIError  # noqa: PLC0415
 
         command = action.get("command", "") if isinstance(action, dict) else ""
-        preview = _preview(str(command), OTEL_MINISWEAGENT_COMMAND_PREVIEW_MAX_LEN)
-        inner = self._inner
-        env_type = f"{inner.__class__.__module__}.{inner.__class__.__name__}"
-        span_name = "execute_tool bash"
-        span = self._tracer.start_span(span_name, kind=SpanKind.INTERNAL)
-        span.set_attribute(GEN_AI_SPAN_KIND, "TOOL")
-        span.set_attribute(
-            GenAI.GEN_AI_OPERATION_NAME, GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value
+        tool_call_id = (
+            action.get("tool_call_id") if isinstance(action, dict) else None
         )
-        span.set_attribute(GEN_AI_FRAMEWORK, "minisweagent")
-        span.set_attribute(GenAI.GEN_AI_TOOL_NAME, "bash")
-        span.set_attribute(GenAI.GEN_AI_TOOL_TYPE, "function")
-        span.set_attribute("minisweagent.environment.class", env_type)
-        if preview:
-            span.set_attribute("minisweagent.command.preview", preview)
+        han = get_extended_telemetry_handler()
+        inv = ExecuteToolInvocation(
+            tool_name="bash",
+            provider="minisweagent",
+            tool_type="function",
+            tool_call_id=tool_call_id if isinstance(tool_call_id, str) else None,
+            tool_description="Execute a bash command",
+            tool_call_arguments={"command": command},
+        )
 
-        with use_span(span, end_on_exit=False):
-            try:
-                result = self._inner.execute(action, cwd, **kwargs)
-            except InterruptAgentFlow as exc:
-                span.set_attribute("minisweagent.interrupt", type(exc).__qualname__)
-                raise
-            except Exception as exc:
-                span.record_exception(exc)
-                span.set_status(Status(StatusCode.ERROR))
-                raise
-            else:
-                if isinstance(result, dict):
-                    rc = result.get("returncode")
-                    if rc is not None:
-                        span.set_attribute("minisweagent.shell.returncode", int(rc))
-                    exinf = result.get("exception_info")
-                    if exinf:
-                        span.set_attribute(
-                            "minisweagent.shell.exception_info",
-                            _preview(str(exinf), OTEL_MINISWEAGENT_COMMAND_PREVIEW_MAX_LEN),
-                        )
-                return result
-            finally:
-                span.end()
+        han.start_execute_tool(inv, context=context_api.get_current())
+        try:
+            result = self._inner.execute(action, cwd, **kwargs)
+        except InterruptAgentFlow:
+            inv.tool_call_result = {"interrupted": "InterruptAgentFlow"}
+            han.stop_execute_tool(inv)
+            raise
+        except Exception as exc:
+            inv.tool_call_result = {"error": str(exc)}
+            han.fail_execute_tool(
+                inv, GenAIError(message=str(exc), type=type(exc))
+            )
+            raise
+
+        if isinstance(result, dict):
+            payload_out = dict(result)
+        else:
+            payload_out = {"value": result}
+        inv.tool_call_result = _sanitize_tool_result(payload_out)
+        han.stop_execute_tool(inv)
+        return result

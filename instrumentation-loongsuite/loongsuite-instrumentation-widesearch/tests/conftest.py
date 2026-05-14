@@ -10,8 +10,26 @@ import os
 import sys
 import types
 from dataclasses import dataclass, field
+from pathlib import Path
 from enum import Enum
 from typing import Any, Callable, List, Literal
+
+# Ensure workspace opentelemetry-util-genai is imported (not stale site-packages).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_UTIL_GENAI_SRC = _REPO_ROOT / "util" / "opentelemetry-util-genai" / "src"
+if _UTIL_GENAI_SRC.is_dir() and str(_UTIL_GENAI_SRC) not in sys.path:
+    sys.path.insert(0, str(_UTIL_GENAI_SRC))
+    # Plugins or other loaders may pull opentelemetry.util.genai.* from
+    # site-packages before this conftest runs — drop caches so imports resolve here.
+    for _m in list(sys.modules):
+        if _m == "opentelemetry.util.genai" or _m.startswith(
+            "opentelemetry.util.genai."
+        ):
+            del sys.modules[_m]
+
+_WIDESEARCH_PLUGIN_SRC = Path(__file__).resolve().parents[1] / "src"
+if _WIDESEARCH_PLUGIN_SRC.is_dir() and str(_WIDESEARCH_PLUGIN_SRC) not in sys.path:
+    sys.path.insert(0, str(_WIDESEARCH_PLUGIN_SRC))
 
 import pytest
 
@@ -193,11 +211,15 @@ async def run_single_query(
     tools_desc: list = None,
     system_prompt: str = "",
 ):
+    agent_instructions = (
+        system_prompt if system_prompt else "You are a helpful agent."
+    )
     agent = Agent(
         name=agent_name,
         tools=tools or {},
         tools_desc=tools_desc or [],
         model_config_name=model_config_name,
+        instructions=agent_instructions,
     )
     memory = MemoryAgent(system_instructions=system_prompt)
 
@@ -338,6 +360,10 @@ def pytest_configure(config: pytest.Config):
     os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai_latest_experimental"
     os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "span_only"
 
+
+for _m in list(sys.modules):
+    if _m.startswith("opentelemetry.instrumentation.widesearch"):
+        del sys.modules[_m]
 
 from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
 from opentelemetry.sdk.trace import TracerProvider

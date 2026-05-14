@@ -130,6 +130,45 @@ class TestEntrySpan:
         assert attrs.get("gen_ai.operation.name") == "enter"
         assert attrs.get("gen_ai.framework") == "widesearch"
 
+    def test_entry_span_records_gen_ai_arms_semantic_attrs(self, span_exporter, instrument):
+        """ENTRY should record input/output messages, but not agent-only metadata.
+
+        Controlled by OTEL_SEMCONV_STABILITY_OPT_IN + SPAN_ONLY capture mode (see conftest).
+        """
+        from src.agent.run import run_single_query
+
+        tools_desc = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_global",
+                    "description": "Search the web",
+                    "properties": {},
+                },
+            }
+        ]
+
+        _run_async(
+            run_single_query(
+                "What is AI?",
+                agent_name="searcher",
+                system_prompt="You are an expert researcher.",
+                tools_desc=tools_desc,
+            )
+        )
+
+        spans = span_exporter.get_finished_spans()
+        entry_spans = [
+            s for s in spans if s.name == "enter_ai_application_system"
+        ]
+        assert len(entry_spans) == 1
+        attrs = dict(entry_spans[0].attributes)
+        assert "gen_ai.input.messages" in attrs
+        assert '"role":"user"' in attrs["gen_ai.input.messages"]
+        assert "gen_ai.output.messages" in attrs
+        assert "gen_ai.system_instructions" not in attrs
+        assert "gen_ai.tool.definitions" not in attrs
+
     def test_entry_span_error(self, span_exporter, instrument):
         """ENTRY span should record ERROR on exception."""
         from src.agent.run import Runner, run_single_query
@@ -185,6 +224,49 @@ class TestAgentSpan:
         assert attrs.get("gen_ai.operation.name") == "invoke_agent"
         assert attrs.get("gen_ai.agent.name") == "search-agent"
         assert attrs.get("gen_ai.framework") == "widesearch"
+
+    def test_agent_span_records_gen_ai_arms_semantic_attrs(self, span_exporter, instrument):
+        """AGENT invoke_agent should expose ARMS-aligned message/tool attributes."""
+        from src.agent.run import Runner
+
+        tools_desc = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "add",
+                    "description": "Add numbers",
+                    "parameters": {},
+                },
+            }
+        ]
+
+        agent = Agent(
+            name="search-agent",
+            model_config_name="gpt-4o",
+            tools_desc=tools_desc,
+            instructions="Solve tasks with tools.",
+        )
+
+        async def _run():
+            results = []
+            async for step in Runner.run(agent, "Hello"):
+                results.append(step)
+            return results
+
+        _run_async(_run())
+
+        spans = span_exporter.get_finished_spans()
+        agent_spans = [
+            s for s in spans if "invoke_agent" in s.name
+        ]
+        assert len(agent_spans) == 1
+        attrs = dict(agent_spans[0].attributes)
+        assert "gen_ai.input.messages" in attrs
+        assert '"role":"user"' in attrs["gen_ai.input.messages"]
+        assert "gen_ai.output.messages" in attrs
+        assert "gen_ai.system_instructions" in attrs
+        assert "gen_ai.tool.definitions" in attrs
+        assert "add" in attrs["gen_ai.tool.definitions"]
 
     def test_agent_span_is_child_of_entry(self, span_exporter, instrument):
         """AGENT span should be a child of ENTRY span."""

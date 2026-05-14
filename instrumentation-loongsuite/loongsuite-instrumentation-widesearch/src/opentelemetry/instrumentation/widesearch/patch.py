@@ -44,8 +44,16 @@ async def wrap_run_single_query(
     token = _in_run_single_query.set(True)
 
     query = args[0] if args else kwargs.get("query", "")
+    system_prompt = kwargs.get("system_prompt") or ""
+    tools_desc_kw = kwargs.get("tools_desc")
     try:
-        invocation = _create_entry_invocation(query)
+        invocation = _create_entry_invocation(
+            query,
+            system_prompt=system_prompt or None,
+            tools_desc=(
+                tools_desc_kw if isinstance(tools_desc_kw, list) else None
+            ),
+        )
     except Exception as e:
         logger.debug(f"Failed to create entry invocation: {e}")
         _in_run_single_query.reset(token)
@@ -71,9 +79,13 @@ async def wrap_runner_run(
     """H2: AGENT span for Runner.run (async generator)."""
     starting_agent = args[0] if args else kwargs.get("starting_agent")
     user_input = args[1] if len(args) > 1 else kwargs.get("user_input", "")
+    memory = args[2] if len(args) > 2 else kwargs.get("memory")
+    system_prompt = getattr(memory, "system_instructions", None)
 
     try:
-        invocation = _create_agent_invocation(starting_agent, user_input)
+        invocation = _create_agent_invocation(
+            starting_agent, user_input, system_prompt=system_prompt
+        )
     except Exception as e:
         logger.debug(f"Failed to create agent invocation: {e}")
         async for step in wrapped(*args, **kwargs):
@@ -221,9 +233,7 @@ async def wrap_invoke_tool_call(
         )
 
         result_content = response.data
-        invocation.tool_call_result = (
-            str(result_content) if result_content else None
-        )
+        invocation.tool_call_result = result_content
 
         if error_marker or system_error_marker:
             msg = (error_marker or system_error_marker)["message"]

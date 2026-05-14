@@ -35,6 +35,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 
 def pytest_configure(config: pytest.Config):
     os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai_latest_experimental"
+    os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "SPAN_ONLY"
 
 
 # ==================== Exporters ====================

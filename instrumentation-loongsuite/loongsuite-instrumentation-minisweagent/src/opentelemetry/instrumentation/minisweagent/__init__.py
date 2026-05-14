@@ -5,14 +5,12 @@ LoongSuite mini-swe-agent Instrumentation
 Automatic instrumentation for the `mini-swe-agent
 <https://github.com/SWE-agent/mini-swe-agent>`_ framework.
 
-Uses **Method C (hybrid)**: factory injection via ``get_environment`` to
-wrap the returned object as a ``TracingEnvironment``, plus ``wrapt``
-wrapping of ``DefaultAgent.run`` / ``DefaultAgent.step``.
+Uses **Method C (hybrid)**:
 
-LLM-call spans are intentionally NOT produced here. The underlying
-LiteLLM/OpenAI instrumentation already emits a high-quality LLM span for
-each model call, so re-instrumenting at the minisweagent layer would only
-produce duplicate spans/metrics.
+* factory injection via ``get_environment`` → ``TracingEnvironment`` (TOOL / ``execute_tool``)
+* ``wrapt`` on ``DefaultAgent.run`` / ``DefaultAgent.step``, and ENTRY on Typer ``minisweagent.run.mini:app``
+
+LLM spans stay in LiteLLM/OpenAI instrumentation; this package adds Agent/ReAct/ENTRY/TOOL spans and (with the env vars described in the instrumentor docstring) full ARMS-aligned message / tool payloads.
 
 Usage
 -----
@@ -56,14 +54,16 @@ __all__ = ["MiniSweAgentInstrumentor"]
 class MiniSweAgentInstrumentor(BaseInstrumentor):
     """An instrumentor for the mini-swe-agent framework.
 
-    Covers three span kinds:
+    Covers GenAI span kinds (ARMS / LoongSuite conventions when
+    ``OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`` and
+    ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY``):
 
-    * **AGENT** – ``DefaultAgent.run`` (wrapt)
-    * **STEP**  – ``DefaultAgent.step`` (wrapt)
-    * **TOOL**  – ``TracingEnvironment.execute`` (factory injection via ``get_environment``)
+    * **ENTRY** – Typer ``mini`` callable ``app`` (``minisweagent.run.mini:app``), span name ``enter_ai_application_system``
+    * **AGENT** – ``DefaultAgent.run`` via ``invoke_agent`` (+ messages / system instruction / tool definitions)
+    * **STEP** – ``DefaultAgent.step`` (ReAct round)
+    * **TOOL** – ``TracingEnvironment.execute`` (``execute_tool`` for bash)
 
-    LLM-call spans are intentionally left to the underlying
-    LiteLLM/OpenAI instrumentation to avoid duplicate telemetry.
+    LLM-call spans remain with the underlying LiteLLM/OpenAI instrumentation.
     """
 
     _original_get_environment = None
@@ -83,9 +83,32 @@ class MiniSweAgentInstrumentor(BaseInstrumentor):
             DefaultAgentRunWrapper,
             DefaultAgentStepWrapper,
         )
+        from opentelemetry.instrumentation.minisweagent.internal.cli_wrappers import (
+            patch_mini_cli_app_module,
+        )
         from opentelemetry.instrumentation.minisweagent.internal.delegates import (
             TracingEnvironment,
         )
+
+        # --- factory injection: get_environment ---
+        try:
+            import minisweagent.environments as _envs_mod
+
+            if self.__class__._original_get_environment is None:
+                self.__class__._original_get_environment = _envs_mod.get_environment
+
+            def _wrapped_get_environment(*args: Any, **kw: Any) -> Any:
+                env = MiniSweAgentInstrumentor._original_get_environment(*args, **kw)
+                return TracingEnvironment(env, tracer)
+
+            _envs_mod.get_environment = _wrapped_get_environment
+        except Exception as exc:
+            logger.warning("Could not wrap get_environment: %s", exc)
+
+        try:
+            patch_mini_cli_app_module()
+        except Exception as exc:
+            logger.warning("Could not patch minisweagent.run.mini.app (ENTRY): %s", exc)
 
         # --- wrapt: DefaultAgent.run / DefaultAgent.step ---
         try:
@@ -106,20 +129,6 @@ class MiniSweAgentInstrumentor(BaseInstrumentor):
         except Exception as exc:
             logger.warning("Could not wrap DefaultAgent.step: %s", exc)
 
-        # --- factory injection: get_environment ---
-        try:
-            import minisweagent.environments as _envs_mod
-
-            self.__class__._original_get_environment = _envs_mod.get_environment
-
-            def _wrapped_get_environment(*args: Any, **kw: Any) -> Any:
-                env = MiniSweAgentInstrumentor._original_get_environment(*args, **kw)
-                return TracingEnvironment(env, tracer)
-
-            _envs_mod.get_environment = _wrapped_get_environment
-        except Exception as exc:
-            logger.warning("Could not wrap get_environment: %s", exc)
-
     def _uninstrument(self, **kwargs: Any) -> None:
         # --- restore wrapt patches on DefaultAgent ---
         try:
@@ -131,6 +140,15 @@ class MiniSweAgentInstrumentor(BaseInstrumentor):
                 DefaultAgent.step = DefaultAgent.step.__wrapped__  # type: ignore[attr-defined]
         except Exception as exc:
             logger.debug("Could not unwrap DefaultAgent: %s", exc)
+
+        try:
+            from opentelemetry.instrumentation.minisweagent.internal.cli_wrappers import (
+                unpatch_mini_cli_app_module,
+            )
+
+            unpatch_mini_cli_app_module()
+        except Exception as exc:
+            logger.debug("Could not unpatch mini app: %s", exc)
 
         # --- restore original factory ---
         if self.__class__._original_get_environment is not None:

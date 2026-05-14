@@ -24,24 +24,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import uuid
 from typing import Any, Callable, Optional
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace as trace_api
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.trace import (
-    Span,
-    SpanKind,
-    Status,
-    StatusCode,
-    Tracer,
-    set_span_in_context,
-)
-
 from opentelemetry.instrumentation.algotune.config import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -58,8 +47,189 @@ from opentelemetry.instrumentation.algotune.internal.utils import (
     safe_close_step,
     truncate,
 )
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.trace import (
+    Span,
+    SpanKind,
+    Status,
+    StatusCode,
+    Tracer,
+    set_span_in_context,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _algotune_capture_span_content_enabled() -> bool:
+    raw = os.getenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "")
+    return raw.strip().upper() in {
+        "TRUE",
+        "1",
+        "YES",
+        "ON",
+        "SPAN_ONLY",
+        "SPAN_AND_EVENT",
+    }
+
+
+def _text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        return str(value)
+
+
+def _span_message(role: str, content: Any) -> dict[str, Any]:
+    return {
+        "role": role or "user",
+        "parts": [
+            {"type": "text", "content": truncate(_text_value(content))}
+        ],
+    }
+
+
+def _algotune_tool_definitions() -> list[dict[str, Any]]:
+    try:
+        from AlgoTuner.interfaces.commands.types import (  # noqa: PLC0415
+            COMMAND_FORMATS,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+    definitions: list[dict[str, Any]] = []
+    for name, fmt in COMMAND_FORMATS.items():
+        description = (
+            getattr(fmt, "description", "") or f"AlgoTune command {name}"
+        )
+        example = getattr(fmt, "example", "") or ""
+        definitions.append(
+            {
+                "type": "function",
+                "name": str(name),
+                "description": truncate(str(description)),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": truncate(
+                                str(example).strip() or str(description)
+                            ),
+                        }
+                    },
+                    "required": ["command"],
+                },
+            }
+        )
+    return definitions
+
+
+def _agent_content_attributes(instance: Any) -> dict[str, Any]:
+    if not _algotune_capture_span_content_enabled():
+        return {}
+
+    state = getattr(instance, "state", None)
+    messages = list(getattr(state, "messages", None) or [])
+    input_messages: list[dict[str, Any]] = []
+    output_messages: list[dict[str, Any]] = []
+    system_instructions: list[dict[str, Any]] = []
+
+    for msg in messages[-20:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "user")
+        content = msg.get("content")
+        if role == "assistant":
+            output_messages.append(_span_message("assistant", content))
+        elif role == "system":
+            system_instructions.append(
+                {"type": "text", "content": truncate(_text_value(content))}
+            )
+        else:
+            input_messages.append(_span_message(role, content))
+
+    # AlgoTune puts its application instructions in the first user message.
+    # Surface that separately for UIs that render system instructions.
+    if not system_instructions and messages:
+        first = messages[0]
+        if isinstance(first, dict) and first.get("content"):
+            system_instructions.append(
+                {
+                    "type": "text",
+                    "content": truncate(_text_value(first.get("content"))),
+                }
+            )
+
+    tool_definitions = _algotune_tool_definitions()
+    attrs: dict[str, Any] = {
+        "algo.debug.input_messages.count": len(input_messages),
+        "algo.debug.output_messages.count": len(output_messages),
+        "algo.debug.system_instructions.count": len(system_instructions),
+        "algo.debug.tool_definitions.count": len(tool_definitions),
+    }
+
+    # Keep parent span output compact; large parent attributes are commonly
+    # harder to render than LLM child attributes in trace UIs.
+    output_payload = output_messages[-1:] if output_messages else []
+    attrs["gen_ai.output.messages"] = json.dumps(
+        output_payload, ensure_ascii=False, default=str
+    )
+    if output_payload:
+        try:
+            attrs["output.value"] = truncate(
+                _text_value(output_payload[-1]["parts"][0].get("content", ""))
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    if input_messages:
+        attrs["gen_ai.input.messages"] = json.dumps(
+            input_messages[-6:], ensure_ascii=False, default=str
+        )
+    if system_instructions:
+        attrs["gen_ai.system_instructions"] = json.dumps(
+            system_instructions[:1], ensure_ascii=False, default=str
+        )
+    if tool_definitions:
+        attrs["gen_ai.tool.definitions"] = json.dumps(
+            tool_definitions, ensure_ascii=False, default=str
+        )
+    return attrs
+
+
+def _publish_agent_content_attributes(instance: Any, *spans: Span) -> None:
+    attrs = _agent_content_attributes(instance)
+    if not attrs:
+        return
+    for span in spans:
+        try:
+            if span is not None and span.is_recording():
+                span.set_attributes(attrs)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _task_json_value(value: Any) -> str:
+    try:
+        return truncate(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:  # noqa: BLE001
+        return truncate(str(value))
+
+
+def _set_task_input(span: Span, value: Any) -> None:
+    span.set_attribute("input.mime_type", "application/json")
+    span.set_attribute("input.value", _task_json_value(value))
+
+
+def _set_task_output(span: Span, value: Any) -> None:
+    span.set_attribute("output.mime_type", "application/json")
+    span.set_attribute("output.value", _task_json_value(value))
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +333,7 @@ class RunTaskWrapper:
             pass
 
         model_name = str(getattr(instance, "model_name", "") or "")
+        parent_span = trace_api.get_current_span()
 
         with self._tracer.start_as_current_span(
             "invoke_agent AlgoTuner", kind=SpanKind.INTERNAL
@@ -212,6 +383,7 @@ class RunTaskWrapper:
                 rounds = int(getattr(instance, INST_ROUND_ATTR, 0) or 0)
                 span.set_attribute("algo.agent.total_rounds", rounds)
                 span.set_attribute("algo.agent.final_status", terminated_reason)
+                _publish_agent_content_attributes(instance, span, parent_span)
 
                 # Spend / final eval bookkeeping (best-effort; AlgoTune may
                 # have torn the interface down by now).
@@ -605,6 +777,16 @@ class RunnerEvalDatasetWrapper:
                 span.set_attribute(
                     "algo.eval.command_source", str(command_source)
                 )
+            _set_task_input(
+                span,
+                {
+                    "task": "benchmark.dataset_eval",
+                    "data_subset": str(data_subset) if data_subset else "",
+                    "command_source": str(command_source)
+                    if command_source
+                    else "",
+                },
+            )
 
             interface = getattr(instance, "interface", None)
             try:
@@ -615,16 +797,27 @@ class RunnerEvalDatasetWrapper:
             except Exception:  # noqa: BLE001
                 pass
 
-            err: Optional[str] = None
             try:
                 result = wrapped(*args, **kwargs)
             except Exception as exc:
-                err = type(exc).__qualname__
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
                 raise
             else:
                 self._record_eval_attributes(span, result)
+                try:
+                    result_data = result.data if hasattr(result, "data") else result
+                    _set_task_output(
+                        span,
+                        {
+                            "success": getattr(result, "success", None),
+                            "status": getattr(result, "status", None),
+                            "message": getattr(result, "message", None),
+                            "data": result_data,
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 return result
             finally:
                 pass
@@ -708,17 +901,42 @@ class EvaluateSingleWrapper:
                     )
                 except (TypeError, ValueError):
                     pass
+            _set_task_input(
+                span,
+                {
+                    "task": "benchmark.problem_eval",
+                    "problem_id": str(problem_id),
+                    "problem_index": problem_index,
+                    "baseline_time_ms": baseline_time_ms,
+                    "kwargs": kwargs,
+                },
+            )
 
-            err: Optional[str] = None
             try:
                 result = wrapped(*args, **kwargs)
             except Exception as exc:
-                err = type(exc).__qualname__
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
                 raise
             else:
                 self._record_problem_attributes(span, result)
+                try:
+                    _set_task_output(
+                        span,
+                        {
+                            "speedup": _safe_get(result, "speedup"),
+                            "solver_time_ms": _safe_get(
+                                result, "solver_time_ms"
+                            ),
+                            "is_valid": _safe_get(result, "is_valid"),
+                            "error_type": _safe_get(
+                                _safe_get(result, "execution"),
+                                "error_type",
+                            ),
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
                 return result
             finally:
                 pass
@@ -820,12 +1038,18 @@ class GetBaselineTimesWrapper:
             if subset:
                 span.set_attribute("algo.baseline.subset", str(subset))
             span.set_attribute("algo.baseline.cache_hit", cache_hit)
+            _set_task_input(
+                span,
+                {
+                    "task": "benchmark.baseline_generation",
+                    "subset": str(subset) if subset else "",
+                    "cache_hit": cache_hit,
+                },
+            )
 
-            err: Optional[str] = None
             try:
                 result = wrapped(*args, **kwargs)
             except SystemExit as exc:
-                err = "BaselineGenerationFailed"
                 code = exc.code if isinstance(exc.code, int) else 1
                 span.add_event(
                     "baseline.fatal_failure", {"exit_code": int(code)}
@@ -838,7 +1062,6 @@ class GetBaselineTimesWrapper:
                 )
                 raise
             except BaseException as exc:
-                err = type(exc).__qualname__
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
                 raise
@@ -847,6 +1070,13 @@ class GetBaselineTimesWrapper:
                     span.set_attribute(
                         "algo.baseline.actual_count", len(result)
                     )
+                _set_task_output(
+                    span,
+                    {
+                        "count": len(result) if isinstance(result, dict) else None,
+                        "result": result,
+                    },
+                )
                 return result
             finally:
                 pass
@@ -1024,13 +1254,11 @@ class TogetherModelQueryWrapper:
             except Exception:  # noqa: BLE001
                 pass
 
-            err: Optional[str] = None
             input_tokens = 0
             output_tokens = 0
             try:
                 result = wrapped(*args, **kwargs)
             except Exception as exc:
-                err = type(exc).__qualname__
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))
                 raise
