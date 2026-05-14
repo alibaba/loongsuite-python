@@ -297,6 +297,12 @@ class EntryInvocation:
     output_messages: List[OutputMessage] = field(
         default_factory=_new_output_messages
     )
+    system_instruction: List[MessagePart] = field(
+        default_factory=_new_system_instruction
+    )
+    tool_definitions: List[ToolDefinition] = field(
+        default_factory=_new_tool_definitions
+    )
     response_time_to_first_token: int | None = None  # nanoseconds
     monotonic_start_s: float | None = None
 

@@ -17,6 +17,8 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
     Text,
+    ToolCall as GenAIToolCall,
+    ToolCallResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,17 +27,31 @@ logger = logging.getLogger(__name__)
 _FRAMEWORK = "widesearch"
 
 
-def _create_entry_invocation(query: str) -> EntryInvocation:
+def _create_entry_invocation(
+    query: str,
+    *,
+    system_prompt: Optional[str] = None,
+    tools_desc: Optional[List[dict[str, Any]]] = None,
+) -> EntryInvocation:
     invocation = EntryInvocation()
     invocation.input_messages = [
         InputMessage(role="user", parts=[Text(content=query)])
     ]
     invocation.attributes["gen_ai.framework"] = _FRAMEWORK
+    if system_prompt:
+        invocation.system_instruction = [Text(content=system_prompt)]
+
+    defs = None
+    if tools_desc:
+        defs = _convert_tools_desc(tools_desc)
+        if defs is not None:
+            invocation.tool_definitions = defs
+
     return invocation
 
 
 def _create_agent_invocation(
-    agent: Any, user_input: str
+    agent: Any, user_input: str, system_prompt: Optional[str] = None
 ) -> InvokeAgentInvocation:
     agent_name = getattr(agent, "name", None) or "widesearch-agent"
 
@@ -52,7 +68,7 @@ def _create_agent_invocation(
             pass
     request_model = request_model or model_config_name
 
-    instructions = getattr(agent, "instructions", None) or ""
+    instructions = system_prompt or getattr(agent, "instructions", None) or ""
 
     invocation = InvokeAgentInvocation(
         provider="widesearch",
@@ -128,11 +144,42 @@ def _extract_output_messages(messages: Any) -> List[OutputMessage]:
 def _step_to_output_messages(step: Any) -> List[OutputMessage]:
     """Extract output messages from an ActionStep."""
     content = getattr(step, "content", None) or ""
+    parts = []
+    if content:
+        parts.append(Text(content=content))
+
+    for tool_call in getattr(step, "tool_calls", []) or []:
+        args = getattr(tool_call, "arguments", None)
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        parts.append(
+            GenAIToolCall(
+                id=getattr(tool_call, "tool_call_id", None),
+                name=getattr(tool_call, "tool_name", ""),
+                arguments=args,
+            )
+        )
+
+    for tool_result in getattr(step, "tool_call_results", []) or []:
+        result = getattr(tool_result, "content", None)
+        if result is None and getattr(tool_result, "error_marker", None):
+            result = getattr(tool_result, "error_marker", {}).get("message")
+        parts.append(
+            ToolCallResponse(
+                id=getattr(tool_result, "tool_call_id", None),
+                response=result,
+            )
+        )
+
+    finish_reason = "tool_calls" if getattr(step, "tool_calls", None) else "stop"
     return [
         OutputMessage(
             role="assistant",
-            parts=[Text(content=content)],
-            finish_reason="stop",
+            parts=parts or [Text(content="")],
+            finish_reason=finish_reason,
         )
     ]
 

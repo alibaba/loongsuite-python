@@ -26,6 +26,21 @@ def _float_env(name: str, default: str) -> float:
         return float(default)
 
 
+def _genai_capture_enabled() -> bool:
+    val = os.getenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")
+    if val is None:
+        return False
+    return val.strip().upper() in {
+        "TRUE",
+        "1",
+        "YES",
+        "ON",
+        "SPAN_ONLY",
+        "SPAN_AND_EVENT",
+        "EVENT_ONLY",
+    }
+
+
 # Master enable switch
 OTEL_INSTRUMENTATION_ALGOTUNE_ENABLED = _bool_env(
     "OTEL_INSTRUMENTATION_ALGOTUNE_ENABLED", True
@@ -33,9 +48,7 @@ OTEL_INSTRUMENTATION_ALGOTUNE_ENABLED = _bool_env(
 
 # Whether to capture potentially sensitive content (tool args/results).
 # LLM message content is controlled by the LiteLLM instrumentor itself.
-OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = _bool_env(
-    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", False
-)
+OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = _genai_capture_enabled()
 
 # Maximum length of any string attribute the instrumentor produces.
 ALGOTUNE_OTEL_MAX_CONTENT_LENGTH = _int_env(
