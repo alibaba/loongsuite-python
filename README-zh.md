@@ -43,6 +43,7 @@ LoongSuite Python Agent 同时也是上游 [OTel Python Agent](https://github.co
 | [LiteLLM](https://github.com/BerriAI/litellm) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-litellm/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-litellm/) |
 | [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-mcp/README.md) | in dev |
 | [Mem0](https://github.com/mem0ai/mem0) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-mem0/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-mem0/) |
+| [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-openai-agents/README.rst) | in dev |
 
 **发行版与辅助组件：**
 
