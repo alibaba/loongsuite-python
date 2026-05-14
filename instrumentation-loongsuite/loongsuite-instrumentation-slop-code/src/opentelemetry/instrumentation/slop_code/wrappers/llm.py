@@ -20,6 +20,8 @@ from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.slop_code.utils import (
     SYSTEM_NAME,
     set_optional_attr,
+    json_dumps_attr,
+    genai_messages,
 )
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import SpanKind, Status, StatusCode
@@ -53,7 +55,14 @@ class _RubricGradeWrapper:
             gen_ai_attributes.GEN_AI_SYSTEM: system_name,
             gen_ai_extended_attributes.GEN_AI_SPAN_KIND: gen_ai_extended_attributes.GenAiSpanKindValues.LLM.value,
             gen_ai_attributes.GEN_AI_REQUEST_MODEL: str(model),
+            "gen_ai.provider.name": system_name,
+            "gen_ai.framework": SYSTEM_NAME,
         }
+
+        prompt_prefix = args[0] if len(args) > 0 else kwargs.get("prompt_prefix")
+        criteria_text = args[1] if len(args) > 1 else kwargs.get("criteria_text")
+        if prompt_prefix is not None or criteria_text is not None:
+            attrs["gen_ai.input.messages"] = genai_messages([{"role": "user", "content": str(prompt_prefix or "") + "\n\n" + str(criteria_text or "")}])
 
         if temperature is not None:
             attrs[gen_ai_attributes.GEN_AI_REQUEST_TEMPERATURE] = float(temperature)
@@ -73,6 +82,8 @@ class _RubricGradeWrapper:
                         _set_usage_from_response(span, response_data)
                         response_id = response_data.get("id")
                         set_optional_attr(span, "gen_ai.response.id", response_id)
+                        if response_data.get("choices") is not None:
+                            span.set_attribute("gen_ai.output.messages", json_dumps_attr(response_data.get("choices")))
 
                 span.set_status(Status(StatusCode.OK))
                 return result
@@ -95,6 +106,8 @@ def _set_usage_from_response(span, response_data: dict) -> None:
 
     set_optional_attr(span, gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
     set_optional_attr(span, gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+    if input_tokens is not None and output_tokens is not None:
+        set_optional_attr(span, "gen_ai.usage.total_tokens", input_tokens + output_tokens)
 
     # Cache tokens (OpenRouter specific)
     cache_read = usage.get("cache_read_input_tokens")

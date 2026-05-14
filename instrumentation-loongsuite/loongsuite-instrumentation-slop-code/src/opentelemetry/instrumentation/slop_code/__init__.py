@@ -38,15 +38,20 @@ from opentelemetry.instrumentation.slop_code.wrappers.agent import (
 )
 from opentelemetry.instrumentation.slop_code.wrappers.entry import (
     _EntryWrapper,
+    _RunnerEntryWrapper,
 )
 from opentelemetry.instrumentation.slop_code.wrappers.llm import (
     _RubricGradeWrapper,
 )
 from opentelemetry.instrumentation.slop_code.wrappers.step import (
+    _MiniSWEObservationWrapper,
     _MiniSWEStepWrapper,
 )
 from opentelemetry.instrumentation.slop_code.wrappers.task import (
     _TaskRunCheckpointWrapper,
+)
+from opentelemetry.instrumentation.slop_code.wrappers.tool import (
+    _ToolExecuteActionWrapper,
 )
 from opentelemetry.instrumentation.slop_code.wrappers.workflow import (
     _WorkflowWrapper,
@@ -68,7 +73,7 @@ _MODULE_WORKER = "slop_code.entrypoints.problem_runner.worker"
 _MODULE_DRIVER = "slop_code.entrypoints.problem_runner.driver"
 _MODULE_RUNNER = "slop_code.agent_runner.runner"
 _MODULE_AGENT = "slop_code.agent_runner.agent"
-_MODULE_MINISWE = "slop_code.agent_runner.agents.miniswe"
+_MODULE_MINISWE = "slop_code.agent_runner.agents._miniswe_agent"
 _MODULE_RUBRIC = "slop_code.metrics.rubric.router"
 
 
@@ -120,7 +125,17 @@ class SlopCodeInstrumentor(BaseInstrumentor):
         except Exception as e:
             logger.warning(f"Could not wrap driver.run_agent_on_problem: {e}")
 
-        # 3.3 TASK span: AgentRunner._run_checkpoint
+        # 3.3 ENTRY span inside worker: AgentRunner.run
+        try:
+            wrap_function_wrapper(
+                module=_MODULE_RUNNER,
+                name="AgentRunner.run",
+                wrapper=_RunnerEntryWrapper(tracer),
+            )
+        except Exception as e:
+            logger.warning(f"Could not wrap AgentRunner.run: {e}")
+
+        # 3.4 TASK span: AgentRunner._run_checkpoint
         try:
             wrap_function_wrapper(
                 module=_MODULE_RUNNER,
@@ -130,7 +145,7 @@ class SlopCodeInstrumentor(BaseInstrumentor):
         except Exception as e:
             logger.warning(f"Could not wrap AgentRunner._run_checkpoint: {e}")
 
-        # 3.4 AGENT span: Agent.run_checkpoint
+        # 3.5 AGENT span: Agent.run_checkpoint
         try:
             wrap_function_wrapper(
                 module=_MODULE_AGENT,
@@ -140,7 +155,7 @@ class SlopCodeInstrumentor(BaseInstrumentor):
         except Exception as e:
             logger.warning(f"Could not wrap Agent.run_checkpoint: {e}")
 
-        # 3.5 STEP span: MiniSWEAgent.agent_step
+        # 3.6 STEP span: MiniSWEAgent.agent_step
         try:
             wrap_function_wrapper(
                 module=_MODULE_MINISWE,
@@ -150,7 +165,27 @@ class SlopCodeInstrumentor(BaseInstrumentor):
         except Exception as e:
             logger.debug(f"Could not wrap MiniSWEAgent.agent_step: {e}")
 
-        # 3.6 LLM span: grade_file_async
+        # 3.6 STEP end: MiniSWEAgent.get_observation
+        try:
+            wrap_function_wrapper(
+                module=_MODULE_MINISWE,
+                name="MiniSWEAgent.get_observation",
+                wrapper=_MiniSWEObservationWrapper(tracer),
+            )
+        except Exception as e:
+            logger.debug(f"Could not wrap MiniSWEAgent.get_observation: {e}")
+
+        # 3.7 TOOL span: MiniSWEAgent.execute_action
+        try:
+            wrap_function_wrapper(
+                module=_MODULE_MINISWE,
+                name="MiniSWEAgent.execute_action",
+                wrapper=_ToolExecuteActionWrapper(tracer),
+            )
+        except Exception as e:
+            logger.debug(f"Could not wrap MiniSWEAgent.execute_action: {e}")
+
+        # 3.8 LLM span: grade_file_async
         try:
             wrap_function_wrapper(
                 module=_MODULE_RUBRIC,
