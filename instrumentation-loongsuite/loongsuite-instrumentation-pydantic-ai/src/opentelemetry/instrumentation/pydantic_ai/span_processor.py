@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any
 
 from opentelemetry import metrics
@@ -30,6 +31,7 @@ GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
 
 FRAMEWORK_NAME = "pydantic-ai"
 SLOW_CALL_THRESHOLD_SECONDS = 1.0
+MAX_PROVIDER_TRACE_IDS = 2048
 
 OPERATION_TO_SPAN_KIND = {
     "create_agent": GenAiSpanKindValues.AGENT.value,
@@ -85,30 +87,35 @@ class LoongSuiteSpanProcessor(SpanProcessor):
     ) -> None:
         self._enabled = True
         self._slow_call_threshold_seconds = slow_call_threshold_seconds
-        meter = (
+        self._provider_llm_trace_ids: set[int] = set()
+        self._provider_llm_trace_order: deque[int] = deque(
+            maxlen=MAX_PROVIDER_TRACE_IDS
+        )
+        self._meter = (
             meter_provider.get_meter(__name__)
             if meter_provider is not None
             else metrics.get_meter(__name__)
         )
-        self._genai_calls_count = meter.create_counter("genai_calls_count")
-        self._genai_calls_error_count = meter.create_counter(
+        self._genai_calls_count = self._meter.create_counter("genai_calls_count")
+        self._genai_calls_error_count = self._meter.create_counter(
             "genai_calls_error_count"
         )
-        self._genai_calls_slow_count = meter.create_counter(
+        self._genai_calls_slow_count = self._meter.create_counter(
             "genai_calls_slow_count"
         )
-        self._genai_calls_duration = meter.create_histogram(
+        self._genai_calls_duration = self._meter.create_histogram(
             "genai_calls_duration_seconds",
             unit="s",
         )
-        self._genai_usage_tokens = meter.create_counter(
+        self._genai_usage_tokens = self._meter.create_counter(
             "genai_llm_usage_tokens",
             unit="{token}",
         )
-        self._genai_first_token = meter.create_histogram(
+        self._genai_first_token = self._meter.create_histogram(
             "genai_llm_first_token_seconds",
             unit="s",
         )
+        self._arms_request_metrics: dict[str, dict[str, Any]] = {}
 
     def on_start(
         self,
@@ -131,6 +138,9 @@ class LoongSuiteSpanProcessor(SpanProcessor):
         if not self._enabled:
             return
         current_attributes = dict(span.attributes or {})
+        if _is_provider_llm_span(span, current_attributes):
+            self._remember_provider_llm_trace(span)
+            return
         if not _is_pydantic_ai_span(span, current_attributes):
             return
         attributes = normalize_genai_attributes(current_attributes)
@@ -170,23 +180,33 @@ class LoongSuiteSpanProcessor(SpanProcessor):
             GenAiSpanKindValues.STEP.value,
         }:
             return
+        if (
+            span_kind == GenAiSpanKindValues.LLM.value
+            and self._has_provider_llm_span(span)
+        ):
+            return
 
         metric_attributes = {
             "modelName": _model_name(attributes),
             "spanKind": span_kind,
         }
+        call_type = _call_type(attributes)
         duration_seconds = _duration_seconds(span)
         self._genai_calls_count.add(1, metric_attributes)
+        self._record_arms_request_count(call_type)
         if duration_seconds is not None:
             self._genai_calls_duration.record(
                 duration_seconds,
                 metric_attributes,
             )
+            self._record_arms_request_duration(call_type, duration_seconds)
             if duration_seconds > self._slow_call_threshold_seconds:
                 self._genai_calls_slow_count.add(1, metric_attributes)
+                self._record_arms_request_slow_count(call_type)
 
         if span.status.status_code == StatusCode.ERROR:
             self._genai_calls_error_count.add(1, metric_attributes)
+            self._record_arms_request_error_count(call_type)
 
         if span_kind == GenAiSpanKindValues.LLM.value:
             self._record_llm_metrics(attributes, metric_attributes)
@@ -216,6 +236,60 @@ class LoongSuiteSpanProcessor(SpanProcessor):
                 metric_attributes,
             )
 
+    def _record_arms_request_count(self, call_type: str) -> None:
+        self._arms_metrics(call_type)["count"].add(1)
+
+    def _record_arms_request_error_count(self, call_type: str) -> None:
+        self._arms_metrics(call_type)["error_count"].add(1)
+
+    def _record_arms_request_slow_count(self, call_type: str) -> None:
+        self._arms_metrics(call_type)["slow_count"].add(1)
+
+    def _record_arms_request_duration(
+        self,
+        call_type: str,
+        duration_seconds: float,
+    ) -> None:
+        self._arms_metrics(call_type)["duration"].record(duration_seconds)
+
+    def _arms_metrics(self, call_type: str) -> dict[str, Any]:
+        metrics_by_type = self._arms_request_metrics.get(call_type)
+        if metrics_by_type is None:
+            metrics_by_type = {
+                "count": self._meter.create_counter(
+                    f"arms_{call_type}_requests_count"
+                ),
+                "error_count": self._meter.create_counter(
+                    f"arms_{call_type}_requests_error_count"
+                ),
+                "duration": self._meter.create_histogram(
+                    f"arms_{call_type}_requests_seconds",
+                    unit="s",
+                ),
+                "slow_count": self._meter.create_counter(
+                    f"arms_{call_type}_requests_slow_count"
+                ),
+            }
+            self._arms_request_metrics[call_type] = metrics_by_type
+        return metrics_by_type
+
+    def _remember_provider_llm_trace(self, span: ReadableSpan) -> None:
+        trace_id = _trace_id(span)
+        if trace_id is None or trace_id in self._provider_llm_trace_ids:
+            return
+        if (
+            len(self._provider_llm_trace_order)
+            == self._provider_llm_trace_order.maxlen
+        ):
+            old_trace_id = self._provider_llm_trace_order.popleft()
+            self._provider_llm_trace_ids.discard(old_trace_id)
+        self._provider_llm_trace_ids.add(trace_id)
+        self._provider_llm_trace_order.append(trace_id)
+
+    def _has_provider_llm_span(self, span: ReadableSpan) -> bool:
+        trace_id = _trace_id(span)
+        return trace_id is not None and trace_id in self._provider_llm_trace_ids
+
 
 def _to_int(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
@@ -240,11 +314,48 @@ def _model_name(attributes: dict[str, Any]) -> str:
     return "unknown"
 
 
+def _call_type(attributes: dict[str, Any]) -> str:
+    operation_name = attributes.get(GEN_AI_OPERATION_NAME)
+    if operation_name == "execute_tool":
+        return "tool"
+    if isinstance(operation_name, str) and operation_name:
+        return operation_name
+    span_kind = attributes.get(GEN_AI_SPAN_KIND)
+    if isinstance(span_kind, str) and span_kind:
+        return span_kind.lower()
+    return "unknown"
+
+
+def _trace_id(span: Any) -> int | None:
+    context = getattr(span, "context", None)
+    trace_id = getattr(context, "trace_id", None)
+    if isinstance(trace_id, int):
+        return trace_id
+    return None
+
+
+def _scope_name(span: Any) -> str | None:
+    scope = getattr(span, "instrumentation_scope", None)
+    scope_name = getattr(scope, "name", None)
+    return scope_name if isinstance(scope_name, str) else None
+
+
+def _is_provider_llm_span(span: Any, attributes: dict[str, Any]) -> bool:
+    if _is_pydantic_ai_span(span, attributes):
+        return False
+    operation_name = attributes.get(GEN_AI_OPERATION_NAME)
+    span_kind = attributes.get(GEN_AI_SPAN_KIND)
+    return operation_name in {
+        "chat",
+        "generate_content",
+        "text_completion",
+    } or span_kind == GenAiSpanKindValues.LLM.value
+
+
 def _is_pydantic_ai_span(span: Any, attributes: dict[str, Any]) -> bool:
     if attributes.get(GEN_AI_FRAMEWORK) == FRAMEWORK_NAME:
         return True
-    scope = getattr(span, "instrumentation_scope", None)
-    scope_name = getattr(scope, "name", None)
+    scope_name = _scope_name(span)
     if scope_name in {
         "pydantic-ai",
         "opentelemetry.instrumentation.pydantic_ai.capability",

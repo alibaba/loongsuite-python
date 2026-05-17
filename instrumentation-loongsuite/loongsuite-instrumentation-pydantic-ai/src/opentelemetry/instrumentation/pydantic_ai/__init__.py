@@ -37,6 +37,7 @@ class PydanticAIInstrumentor(BaseInstrumentor):
         self._span_processor: LoongSuiteSpanProcessor | None = None
         self._previous_agent_instrument: Any = None
         self._previous_embedder_instrument: Any = None
+        self._previous_auto_capability_types: Any = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
         return _instruments
@@ -103,19 +104,39 @@ class PydanticAIInstrumentor(BaseInstrumentor):
 
     def _enable_pydantic_ai_defaults(self, settings: Any) -> None:
         from pydantic_ai import Agent
+        import pydantic_ai.agent as agent_module
         from pydantic_ai.embeddings import Embedder
 
         self._previous_agent_instrument = Agent._instrument_default
         self._previous_embedder_instrument = Embedder._instrument_default
+        self._previous_auto_capability_types = getattr(
+            agent_module,
+            "_AUTO_INJECT_CAPABILITY_TYPES",
+            None,
+        )
+        if self._previous_auto_capability_types is not None:
+            auto_capability_types = self._previous_auto_capability_types
+            if LoongSuiteInstrumentationCapability not in auto_capability_types:
+                agent_module._AUTO_INJECT_CAPABILITY_TYPES = (
+                    *auto_capability_types,
+                    LoongSuiteInstrumentationCapability,
+                )
         Agent.instrument_all(settings)
         Embedder.instrument_all(settings)
 
     def _restore_pydantic_ai_defaults(self) -> None:
         try:
             from pydantic_ai import Agent
+            import pydantic_ai.agent as agent_module
             from pydantic_ai.embeddings import Embedder
 
             Agent.instrument_all(self._previous_agent_instrument or False)
             Embedder.instrument_all(self._previous_embedder_instrument or False)
+            if self._previous_auto_capability_types is not None:
+                agent_module._AUTO_INJECT_CAPABILITY_TYPES = (
+                    self._previous_auto_capability_types
+                )
         except Exception as exc:  # noqa: BLE001
             logger.debug("Failed to restore pydantic-ai instrumentation: %s", exc)
+        finally:
+            self._previous_auto_capability_types = None
