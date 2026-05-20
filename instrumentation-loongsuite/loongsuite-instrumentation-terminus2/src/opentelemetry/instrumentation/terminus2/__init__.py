@@ -34,6 +34,15 @@ LLM spans are intentionally **not** produced by this package. The underlying
 ``opentelemetry-instrumentation-litellm``; emitting another span here would
 duplicate that record.
 
+Token totals are NOT aggregated on the AGENT or ENTRY span. Upstream
+``Chat`` uses a local-tokenizer estimate that misses reasoning tokens,
+tool-call arg serialization, prompt-template wrapping, and anthropic-
+caching injections — and ``Terminus2._summarize`` issues bare
+``chat._model.call`` invocations that bypass ``Chat.chat`` entirely. Any
+agent-level total computed from those counters would be systematically
+wrong, so we omit it. Authoritative per-call token usage lives on each
+LLM child span produced by the litellm instrumentor.
+
 Patch targets (all monkey-patched via ``wrapt.wrap_function_wrapper``):
 
   P0  Terminus2.perform_task          → ENTRY span (application entry)
@@ -434,8 +443,8 @@ class _PerformTaskWrapper:
                 span.set_status(Status(StatusCode.ERROR))
                 raise
 
-            input_tokens = getattr(result, "total_input_tokens", 0) or 0
-            output_tokens = getattr(result, "total_output_tokens", 0) or 0
+            # AgentResult.total_*_tokens is a local-tokenizer estimate —
+            # see docstring at top of module for why we don't surface it.
             failure_mode = getattr(result, "failure_mode", None)
             failure_mode_str = str(
                 getattr(failure_mode, "value", failure_mode)
@@ -444,8 +453,6 @@ class _PerformTaskWrapper:
 
             output_summary = {
                 "failure_mode": failure_mode_str,
-                "total_input_tokens": input_tokens,
-                "total_output_tokens": output_tokens,
                 "marker_count": len(markers),
             }
             try:
@@ -498,7 +505,6 @@ class _RunAgentLoopWrapper:
         # _run_agent_loop signature:
         #   (initial_prompt, session, chat, logging_dir=None,
         #    original_instruction="")
-        chat = args[2] if len(args) > 2 else kwargs.get("chat")
         original_instruction = (
             args[4] if len(args) > 4 else kwargs.get("original_instruction", "")
         )
@@ -544,24 +550,15 @@ class _RunAgentLoopWrapper:
 
             _end_current_step(finish_reason="loop_end")
 
-            # Aggregate token usage from the Chat object — captured here so
-            # the totals reflect the full loop, including the bare
-            # ``chat._model.call`` invoked inside ``_summarize``.
-            # ``Chat.total_*_tokens`` returns cumulative counters that
-            # survive context unwinding.
-            if chat is not None:
-                input_tokens = getattr(chat, "total_input_tokens", 0) or 0
-                output_tokens = getattr(chat, "total_output_tokens", 0) or 0
-                span.set_attribute(
-                    LLMAttributes.GEN_AI_USAGE_INPUT_TOKENS, input_tokens
-                )
-                span.set_attribute(
-                    LLMAttributes.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens
-                )
-                span.set_attribute(
-                    LLMAttributes.GEN_AI_USAGE_TOTAL_TOKENS,
-                    input_tokens + output_tokens,
-                )
+            # Per-call token usage is recorded on each litellm child span by
+            # ``opentelemetry-instrumentation-litellm`` (provider-reported
+            # ``response.usage``). We deliberately do NOT aggregate a total
+            # on the AGENT span: ``Chat.total_*_tokens`` uses a local
+            # tokenizer estimate (misses reasoning tokens, tool args,
+            # prompt-template wrapping, anthropic-caching) and the bare
+            # ``chat._model.call`` in ``_summarize`` bypasses ``Chat.chat``
+            # entirely — any aggregate computed from those counters would
+            # be systematically wrong.
 
             span.set_attribute(
                 "terminus2.react.rounds", _react_round_counter.get()
