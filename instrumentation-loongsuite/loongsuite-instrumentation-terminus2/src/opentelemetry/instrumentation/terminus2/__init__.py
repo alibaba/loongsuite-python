@@ -508,6 +508,7 @@ class _RunAgentLoopWrapper:
         original_instruction = (
             args[4] if len(args) > 4 else kwargs.get("original_instruction", "")
         )
+        chat = args[2] if len(args) > 2 else kwargs.get("chat")
 
         with self._tracer.start_as_current_span(
             f"invoke_agent {_AGENT_NAME}",
@@ -560,9 +561,38 @@ class _RunAgentLoopWrapper:
             # entirely — any aggregate computed from those counters would
             # be systematically wrong.
 
+            rounds = _react_round_counter.get()
+            span.set_attribute("terminus2.react.rounds", rounds)
+
+            # AGENT output: ``_run_agent_loop`` returns ``None``, so synthesize
+            # an output message from the final state of the chat history (the
+            # last ``assistant`` entry — the agent's terminal action/response)
+            # plus loop-exit context. Without this the AGENT span has only
+            # input, which is what the user sees as "no output".
+            pending_completion = bool(getattr(instance, "_pending_completion", False))
+            final_assistant_text = ""
+            messages = list(getattr(chat, "_messages", []) or [])
+            for msg in reversed(messages):
+                if isinstance(msg, dict) and msg.get("role") == "assistant":
+                    content = msg.get("content")
+                    if content is not None:
+                        final_assistant_text = str(content)
+                    break
+
+            output_summary = {
+                "react_rounds": rounds,
+                "pending_completion": pending_completion,
+                "final_assistant_message": final_assistant_text,
+            }
+            try:
+                output_value = json.dumps(output_summary, ensure_ascii=False)
+            except Exception:
+                output_value = str(output_summary)
             span.set_attribute(
-                "terminus2.react.rounds", _react_round_counter.get()
+                _GEN_AI_OUTPUT_MESSAGES,
+                _text_messages_json("assistant", output_value),
             )
+            span.set_attribute("terminus2.pending_completion", pending_completion)
 
             span.set_status(Status(StatusCode.OK))
             return result
