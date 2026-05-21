@@ -66,17 +66,6 @@ from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from wrapt import wrap_function_wrapper
 
-from aliyun.semconv.trace_v2 import (
-    CommonAttributes,
-    GenAiOperationName,
-    GenAiSpanKind,
-    GenAiToolType,
-    LLMAttributes,
-    ToolAttributes,
-)
-
-from aliyun.sdk.extension.arms.self_monitor.self_monitor_decorator import hook_advice
-
 from opentelemetry.instrumentation.terminus2.package import _instruments
 
 logger = logging.getLogger(__name__)
@@ -87,23 +76,37 @@ _AGENT_NAME = "terminus-2"
 _TERMINAL_TOOL_NAME = "terminal"
 _TERMINAL_TOOL_DESCRIPTION = "Send keystrokes to a tmux terminal session"
 
-# Spec-defined tool I/O attribute keys (not yet exposed as constants in
-# aliyun.semconv.trace_v2.ToolAttributes; see gen-ai.md §Tool).
+# ── GenAI semantic-convention attribute keys ────────────────────────────────
+# Strings inlined to avoid taking a hard dependency on private aliyun packages
+# that aren't published to PyPI (aliyun.semconv.trace_v2,
+# aliyun.sdk.extension.arms.*). Values track the ARMS gen-ai semconv.
+_GEN_AI_SPAN_KIND = "gen_ai.span.kind"
+_GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+_GEN_AI_FRAMEWORK = "gen_ai.framework"
+_GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+_GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
+_GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+_GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
+_GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
 _GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
 _GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
-
-# Message content attributes. These are not exposed by
-# aliyun.semconv.trace_v2.CommonAttributes in all supported versions.
 _GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
 _GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 
-# ── Span kind / operation values not present in trace_v2 enums ───────────────
+# ── Span kind / operation / tool-type values ────────────────────────────────
 _SPAN_KIND_ENTRY = "ENTRY"
+_SPAN_KIND_AGENT = "AGENT"
+_SPAN_KIND_TOOL = "TOOL"
 _SPAN_KIND_STEP = "STEP"
+_SPAN_KIND_TASK = "TASK"
+_SPAN_KIND_CHAIN = "CHAIN"
 _OP_ENTER = "enter"
+_OP_INVOKE_AGENT = "invoke_agent"
+_OP_EXECUTE_TOOL = "execute_tool"
 _OP_REACT = "react"
 _OP_RUN_TASK = "run_task"
 _OP_TASK = "task"
+_TOOL_TYPE_EXTENSION = "extension"
 
 # ── ReAct extension attributes (阿里云扩展规范) ──────────────────────────────
 _GEN_AI_REACT_ROUND = "gen_ai.react.round"
@@ -143,10 +146,6 @@ def _text_messages_json(role: str, content: Any) -> str:
     except Exception:
         return str([message])
 
-
-def _semconv_value(value: Any) -> Any:
-    """Return enum.value when present, otherwise the value itself."""
-    return getattr(value, "value", value)
 
 # ── ReAct step lifecycle tracked via contextvars ────────────────────────────
 # A STEP span stays open across `_handle_llm_interaction` ⇒ `_execute_commands`
@@ -408,11 +407,6 @@ class _PerformTaskWrapper:
     def __init__(self, tracer):
         self._tracer = tracer
 
-    @hook_advice(
-        instrumentation_name="terminus2",
-        advice_method="perform_task",
-        throw_exception=True,
-    )
     def __call__(self, wrapped, instance, args, kwargs):
         model_name = getattr(instance, "_model_name", "unknown")
         instruction = args[0] if args else kwargs.get("instruction", "")
@@ -421,12 +415,12 @@ class _PerformTaskWrapper:
             "enter_ai_application_system",
             kind=SpanKind.SERVER,
         ) as span:
-            span.set_attribute(CommonAttributes.GEN_AI_SPAN_KIND, _SPAN_KIND_ENTRY)
-            span.set_attribute(CommonAttributes.GEN_AI_OPERATION_NAME, _OP_ENTER)
-            span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
-            span.set_attribute(LLMAttributes.GEN_AI_REQUEST_MODEL, model_name)
+            span.set_attribute(_GEN_AI_SPAN_KIND, _SPAN_KIND_ENTRY)
+            span.set_attribute(_GEN_AI_OPERATION_NAME, _OP_ENTER)
+            span.set_attribute(_GEN_AI_FRAMEWORK, _FRAMEWORK)
+            span.set_attribute(_GEN_AI_REQUEST_MODEL, model_name)
             span.set_attribute(
-                LLMAttributes.GEN_AI_PROVIDER_NAME,
+                _GEN_AI_PROVIDER_NAME,
                 _infer_provider_name(model_name),
             )
 
@@ -489,11 +483,6 @@ class _RunAgentLoopWrapper:
     def __init__(self, tracer):
         self._tracer = tracer
 
-    @hook_advice(
-        instrumentation_name="terminus2",
-        advice_method="run_agent_loop",
-        throw_exception=True,
-    )
     def __call__(self, wrapped, instance, args, kwargs):
         # Reset per-loop ReAct state
         _react_round_counter.set(0)
@@ -515,22 +504,22 @@ class _RunAgentLoopWrapper:
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND,
-                _semconv_value(GenAiSpanKind.AGENT),
+                _GEN_AI_SPAN_KIND,
+                _SPAN_KIND_AGENT,
             )
             span.set_attribute(
-                CommonAttributes.GEN_AI_OPERATION_NAME,
-                _semconv_value(GenAiOperationName.INVOKE_AGENT),
+                _GEN_AI_OPERATION_NAME,
+                _OP_INVOKE_AGENT,
             )
-            span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
+            span.set_attribute(_GEN_AI_FRAMEWORK, _FRAMEWORK)
             span.set_attribute("gen_ai.agent.name", _AGENT_NAME)
             span.set_attribute(
                 "gen_ai.agent.description",
                 "Terminus-2 terminal-bench agent (ReAct loop over a tmux session)",
             )
-            span.set_attribute(LLMAttributes.GEN_AI_REQUEST_MODEL, model_name)
+            span.set_attribute(_GEN_AI_REQUEST_MODEL, model_name)
             span.set_attribute(
-                LLMAttributes.GEN_AI_PROVIDER_NAME,
+                _GEN_AI_PROVIDER_NAME,
                 _infer_provider_name(model_name),
             )
             span.set_attribute("terminus2.parser", parser_name)
@@ -612,11 +601,6 @@ class _ExecuteCommandsWrapper:
     def __init__(self, tracer):
         self._tracer = tracer
 
-    @hook_advice(
-        instrumentation_name="terminus2",
-        advice_method="execute_commands",
-        throw_exception=True,
-    )
     def __call__(self, wrapped, instance, args, kwargs):
         commands = args[0] if args else kwargs.get("commands", [])
 
@@ -625,21 +609,21 @@ class _ExecuteCommandsWrapper:
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND,
-                _semconv_value(GenAiSpanKind.TOOL),
+                _GEN_AI_SPAN_KIND,
+                _SPAN_KIND_TOOL,
             )
             span.set_attribute(
-                CommonAttributes.GEN_AI_OPERATION_NAME,
-                _semconv_value(GenAiOperationName.EXECUTE_TOOL),
+                _GEN_AI_OPERATION_NAME,
+                _OP_EXECUTE_TOOL,
             )
-            span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
-            span.set_attribute(ToolAttributes.GEN_AI_TOOL_NAME, _TERMINAL_TOOL_NAME)
+            span.set_attribute(_GEN_AI_FRAMEWORK, _FRAMEWORK)
+            span.set_attribute(_GEN_AI_TOOL_NAME, _TERMINAL_TOOL_NAME)
             span.set_attribute(
-                ToolAttributes.GEN_AI_TOOL_DESCRIPTION, _TERMINAL_TOOL_DESCRIPTION
+                _GEN_AI_TOOL_DESCRIPTION, _TERMINAL_TOOL_DESCRIPTION
             )
             span.set_attribute(
-                ToolAttributes.GEN_AI_TOOL_TYPE,
-                _semconv_value(GenAiToolType.EXTENSION),
+                _GEN_AI_TOOL_TYPE,
+                _TOOL_TYPE_EXTENSION,
             )
             span.set_attribute("terminus2.commands.count", len(commands))
 
@@ -682,11 +666,6 @@ class _HandleLLMInteractionWrapper:
     def __init__(self, tracer):
         self._tracer = tracer
 
-    @hook_advice(
-        instrumentation_name="terminus2",
-        advice_method="handle_llm_interaction",
-        throw_exception=True,
-    )
     def __call__(self, wrapped, instance, args, kwargs):
         # Close previous STEP first (if any)
         _end_current_step(finish_reason="next_round")
@@ -698,9 +677,9 @@ class _HandleLLMInteractionWrapper:
             "react step",
             kind=SpanKind.INTERNAL,
         )
-        step_span.set_attribute(CommonAttributes.GEN_AI_SPAN_KIND, _SPAN_KIND_STEP)
-        step_span.set_attribute(CommonAttributes.GEN_AI_OPERATION_NAME, _OP_REACT)
-        step_span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
+        step_span.set_attribute(_GEN_AI_SPAN_KIND, _SPAN_KIND_STEP)
+        step_span.set_attribute(_GEN_AI_OPERATION_NAME, _OP_REACT)
+        step_span.set_attribute(_GEN_AI_FRAMEWORK, _FRAMEWORK)
         step_span.set_attribute(_GEN_AI_REACT_ROUND, round_num)
 
         ctx = trace_api.set_span_in_context(step_span)
@@ -742,11 +721,6 @@ class _ParseResponseWrapper:
         self._tracer = tracer
         self._parser_type = parser_type
 
-    @hook_advice(
-        instrumentation_name="terminus2",
-        advice_method="parse_response",
-        throw_exception=True,
-    )
     def __call__(self, wrapped, instance, args, kwargs):
         # parse_response signature: (self, response: str)
         response_text = args[0] if args else kwargs.get("response", "")
@@ -756,11 +730,11 @@ class _ParseResponseWrapper:
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND,
-                _semconv_value(GenAiSpanKind.TASK),
+                _GEN_AI_SPAN_KIND,
+                _SPAN_KIND_TASK,
             )
-            span.set_attribute(CommonAttributes.GEN_AI_OPERATION_NAME, _OP_RUN_TASK)
-            span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
+            span.set_attribute(_GEN_AI_OPERATION_NAME, _OP_RUN_TASK)
+            span.set_attribute(_GEN_AI_FRAMEWORK, _FRAMEWORK)
             span.set_attribute("terminus2.parser", self._parser_type)
 
             if response_text is not None:
@@ -825,22 +799,17 @@ class _SummarizeWrapper:
     def __init__(self, tracer):
         self._tracer = tracer
 
-    @hook_advice(
-        instrumentation_name="terminus2",
-        advice_method="summarize",
-        throw_exception=True,
-    )
     def __call__(self, wrapped, instance, args, kwargs):
         with self._tracer.start_as_current_span(
             "chain summarize",
             kind=SpanKind.INTERNAL,
         ) as span:
             span.set_attribute(
-                CommonAttributes.GEN_AI_SPAN_KIND,
-                _semconv_value(GenAiSpanKind.CHAIN),
+                _GEN_AI_SPAN_KIND,
+                _SPAN_KIND_CHAIN,
             )
-            span.set_attribute(CommonAttributes.GEN_AI_OPERATION_NAME, _OP_TASK)
-            span.set_attribute(CommonAttributes.GEN_AI_FRAMEWORK, _FRAMEWORK)
+            span.set_attribute(_GEN_AI_OPERATION_NAME, _OP_TASK)
+            span.set_attribute(_GEN_AI_FRAMEWORK, _FRAMEWORK)
 
             try:
                 result = wrapped(*args, **kwargs)
