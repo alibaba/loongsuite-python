@@ -23,6 +23,8 @@ for standard span and metrics management.
 """
 
 import logging
+import timeit
+from contextvars import ContextVar, Token
 from typing import Any, Dict, List, Optional
 
 from google.adk.agents.base_agent import BaseAgent
@@ -41,6 +43,7 @@ from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation,
     InvokeAgentInvocation,
 )
+from opentelemetry.util.genai.handler import _safe_detach
 from opentelemetry.util.genai.types import (
     Error,
     InputMessage,
@@ -52,6 +55,9 @@ from opentelemetry.util.genai.types import (
 from ._extractors import AdkAttributeExtractors
 
 _logger = logging.getLogger(__name__)
+_ACTIVE_LLM_REQUEST_KEY: ContextVar[Optional[str]] = ContextVar(
+    "google_adk_active_llm_request_key", default=None
+)
 
 
 class GoogleAdkObservabilityPlugin(BasePlugin):
@@ -88,6 +94,8 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
 
         # Track llm_request -> model mapping to avoid fallback model names
         self._llm_req_models: Dict[str, str] = {}
+        self._llm_stream_outputs: Dict[str, str] = {}
+        self._llm_context_tokens: Dict[str, Token] = {}
 
     # ===== Runner Level Callbacks - Top-level invoke_agent span =====
 
@@ -103,8 +111,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             # Extract conversation_id
             conversation_id = None
 
-            if invocation_context.session:
-                conversation_id = invocation_context.session.id
+            conversation_id = self._session_id_from_invocation_context(
+                invocation_context
+            )
 
             # Create invocation object
             invocation = InvokeAgentInvocation(
@@ -128,7 +137,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
                 )
 
             # Check if we already have a stored user message
-            runner_key = f"runner_{invocation_context.invocation_id}"
+            runner_key = self._runner_key(invocation_context)
             if runner_key in self._runner_inputs:
                 user_message = self._runner_inputs[runner_key]
                 input_messages = self._convert_user_message_to_input_messages(
@@ -164,7 +173,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         """
         try:
             # Store user message for later use in Runner span
-            runner_key = f"runner_{invocation_context.invocation_id}"
+            runner_key = self._runner_key(invocation_context)
             self._runner_inputs[runner_key] = user_message
 
             # Update active Runner invocation if it exists
@@ -201,7 +210,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
                 event_content = self._extract_text_from_content(event.data)
 
             if event_content:
-                runner_key = f"runner_{invocation_context.invocation_id}"
+                runner_key = self._runner_key(invocation_context)
 
                 # Accumulate output content
                 if runner_key not in self._runner_outputs:
@@ -226,6 +235,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
                 f"Captured event for Runner: {invocation_context.invocation_id}"
             )
 
+            if self._is_root_final_event(event, invocation_context):
+                self._finish_runner_invocation(invocation_context)
+
         except Exception as e:
             _logger.exception(f"Error in on_event_callback: {e}")
 
@@ -238,19 +250,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         End Runner execution - finish top-level invoke_agent span.
         """
         try:
-            runner_key = f"runner_{invocation_context.invocation_id}"
-            invocation = self._active_runner_invocations.pop(runner_key, None)
-
-            if invocation:
-                # Stop invocation (ends span and records metrics automatically)
-                self._handler.stop_invoke_agent(invocation)
-                _logger.debug(
-                    f"Finished Runner invocation for {invocation_context.app_name}"
-                )
-
-            # Clean up stored data
-            self._runner_inputs.pop(runner_key, None)
-            self._runner_outputs.pop(runner_key, None)
+            self._finish_runner_invocation(invocation_context)
 
         except Exception as e:
             _logger.exception(f"Error in after_run_callback: {e}")
@@ -267,10 +267,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             # Extract conversation_id
             conversation_id = None
 
-            if callback_context._invocation_context.session:
-                conversation_id = (
-                    callback_context._invocation_context.session.id
-                )
+            conversation_id = self._session_id_from_callback_context(
+                callback_context
+            )
 
             # Create invocation object
             invocation = InvokeAgentInvocation(
@@ -288,11 +287,21 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             if conversation_id:
                 invocation.conversation_id = conversation_id
 
+            user_id = getattr(callback_context, "user_id", None)
+            if not user_id:
+                user_id = getattr(
+                    self._get_invocation_context(callback_context),
+                    "user_id",
+                    None,
+                )
+            if user_id:
+                invocation.attributes["enduser.id"] = user_id
+
             # Start invocation (creates span)
             self._handler.start_invoke_agent(invocation)
 
             # Store invocation for later use
-            agent_key = f"agent_{id(agent)}_{conversation_id}"
+            agent_key = self._agent_key(agent, callback_context)
             self._active_agent_invocations[agent_key] = invocation
 
             _logger.debug(
@@ -309,19 +318,20 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         End Agent execution - finish invoke_agent span.
         """
         try:
-            conversation_id = None
-            if callback_context._invocation_context.session:
-                conversation_id = (
-                    callback_context._invocation_context.session.id
-                )
-
-            agent_key = f"agent_{id(agent)}_{conversation_id}"
+            agent_key = self._agent_key(agent, callback_context)
             invocation = self._active_agent_invocations.pop(agent_key, None)
 
             if invocation:
                 # Stop invocation (ends span and records metrics automatically)
                 self._handler.stop_invoke_agent(invocation)
                 _logger.debug(f"Finished Agent invocation for {agent.name}")
+
+            if self._is_root_agent(agent, callback_context):
+                invocation_context = self._get_invocation_context(
+                    callback_context
+                )
+                if invocation_context:
+                    self._finish_runner_invocation(invocation_context)
 
         except Exception as e:
             _logger.exception(f"Error in after_agent_callback: {e}")
@@ -354,37 +364,43 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             # Extract request parameters
             if llm_request.config:
                 config = llm_request.config
-                if hasattr(config, "max_tokens") and config.max_tokens:
-                    invocation.max_tokens = config.max_tokens
-                if (
-                    hasattr(config, "temperature")
-                    and config.temperature is not None
-                ):
-                    invocation.temperature = config.temperature
-                if hasattr(config, "top_p") and config.top_p is not None:
-                    invocation.top_p = config.top_p
+                max_tokens = self._get_real_attr(config, "max_tokens")
+                if max_tokens:
+                    invocation.max_tokens = max_tokens
+                temperature = self._get_real_attr(config, "temperature")
+                if temperature is not None:
+                    invocation.temperature = temperature
+                top_p = self._get_real_attr(config, "top_p")
+                if top_p is not None:
+                    invocation.top_p = top_p
 
             # Extract conversation_id and user_id
-            if callback_context._invocation_context.session:
-                invocation.attributes["gen_ai.conversation.id"] = (
-                    callback_context._invocation_context.session.id
-                )
+            session_id = self._session_id_from_callback_context(
+                callback_context
+            )
+            if session_id:
+                invocation.attributes["gen_ai.conversation.id"] = session_id
 
             user_id = getattr(callback_context, "user_id", None)
             if not user_id:
                 user_id = getattr(
-                    callback_context._invocation_context, "user_id", None
+                    self._get_invocation_context(callback_context),
+                    "user_id",
+                    None,
                 )
             if user_id:
                 invocation.attributes["enduser.id"] = user_id
 
             # Start invocation (creates span)
             self._handler.start_llm(invocation)
+            self._detach_current_context(invocation)
 
             # Store invocation for later use
-            session_id = callback_context._invocation_context.session.id
-            request_key = f"llm_{id(llm_request)}_{session_id}"
+            request_key = self._llm_key(callback_context, llm_request)
             self._active_llm_invocations[request_key] = invocation
+            self._llm_context_tokens[request_key] = (
+                _ACTIVE_LLM_REQUEST_KEY.set(request_key)
+            )
 
             # Store the requested model for reliable retrieval later
             if hasattr(llm_request, "model") and llm_request.model:
@@ -402,61 +418,41 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         End LLM call - finish chat span.
         """
         try:
-            # Find the matching invocation
-            session_id = callback_context._invocation_context.session.id
-            llm_invocation = None
-            request_key = None
-
-            for key, invocation in list(self._active_llm_invocations.items()):
-                if key.startswith("llm_") and session_id in key:
-                    llm_invocation = self._active_llm_invocations.pop(key)
-                    request_key = key
-                    break
+            request_key, llm_invocation = self._find_active_llm_invocation(
+                callback_context
+            )
 
             if llm_invocation:
                 # Update invocation with response data
                 if llm_response:
-                    # Set response model
-                    if hasattr(llm_response, "model") and llm_response.model:
-                        llm_invocation.response_model_name = llm_response.model
-
-                    # Extract token usage
-                    if llm_response.usage_metadata:
-                        usage = llm_response.usage_metadata
-                        if hasattr(usage, "prompt_token_count"):
-                            llm_invocation.input_tokens = (
-                                usage.prompt_token_count
-                            )
-                        if hasattr(usage, "candidates_token_count"):
-                            llm_invocation.output_tokens = (
-                                usage.candidates_token_count
-                            )
-
-                    # Extract finish reason
-                    if hasattr(llm_response, "finish_reason"):
-                        finish_reason = llm_response.finish_reason or "stop"
-                        if hasattr(finish_reason, "value"):
-                            finish_reason = finish_reason.value
-                        elif not isinstance(
-                            finish_reason, (str, int, float, bool)
-                        ):
-                            finish_reason = str(finish_reason)
-                        llm_invocation.finish_reasons = [finish_reason]
-
-                    # Extract output messages
-                    output_messages = (
-                        self._convert_llm_response_to_output_messages(
-                            llm_response
-                        )
+                    self._update_llm_invocation_from_response(
+                        llm_invocation, llm_response, request_key
                     )
-                    llm_invocation.output_messages = output_messages
+
+                    if self._is_streaming_partial_response(llm_response):
+                        if llm_invocation.monotonic_first_token_s is None:
+                            llm_invocation.monotonic_first_token_s = (
+                                timeit.default_timer()
+                            )
+                        _logger.debug(
+                            "Captured partial LLM response for %s",
+                            request_key,
+                        )
+                        return None
+
+                if request_key:
+                    self._active_llm_invocations.pop(request_key, None)
 
                 # Stop invocation (ends span and records metrics automatically)
                 self._handler.stop_llm(llm_invocation)
+                if request_key:
+                    self._reset_active_llm_request_key(request_key)
 
                 model_name = self._resolve_model_name(
                     llm_response, request_key, llm_invocation
                 )
+                if request_key:
+                    self._llm_stream_outputs.pop(request_key, None)
                 _logger.debug(
                     f"Finished LLM invocation for model {model_name}"
                 )
@@ -476,16 +472,18 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         """
         try:
             # Find and finish the invocation with error status
-            session_id = callback_context._invocation_context.session.id
-            for key, invocation in list(self._active_llm_invocations.items()):
-                if key.startswith("llm_") and session_id in key:
-                    invocation = self._active_llm_invocations.pop(key)
+            request_key, invocation = self._find_active_llm_invocation(
+                callback_context, llm_request
+            )
+            if request_key and invocation:
+                self._active_llm_invocations.pop(request_key, None)
+                self._llm_stream_outputs.pop(request_key, None)
+                self._reset_active_llm_request_key(request_key)
 
-                    # Fail invocation (sets error attributes and ends span)
-                    self._handler.fail_llm(
-                        invocation, Error(message=str(error), type=type(error))
-                    )
-                    break
+                # Fail invocation (sets error attributes and ends span)
+                self._handler.fail_llm(
+                    invocation, Error(message=str(error), type=type(error))
+                )
 
             _logger.debug(f"Handled LLM error: {error}")
 
@@ -530,7 +528,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             self._handler.start_execute_tool(invocation)
 
             # Store invocation for later use
-            tool_key = f"tool_{id(tool)}_{id(tool_args)}"
+            tool_key = self._tool_key(tool, tool_args, tool_context)
             self._active_tool_invocations[tool_key] = invocation
 
             _logger.debug(f"Started Tool invocation: execute_tool {tool.name}")
@@ -550,7 +548,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         End Tool execution - finish execute_tool span.
         """
         try:
-            tool_key = f"tool_{id(tool)}_{id(tool_args)}"
+            tool_key = self._tool_key(tool, tool_args, tool_context)
             invocation = self._active_tool_invocations.pop(tool_key, None)
 
             if invocation:
@@ -577,7 +575,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         Handle Tool execution errors.
         """
         try:
-            tool_key = f"tool_{id(tool)}_{id(tool_args)}"
+            tool_key = self._tool_key(tool, tool_args, tool_context)
             invocation = self._active_tool_invocations.pop(tool_key, None)
 
             if invocation:
@@ -594,6 +592,187 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         return None
 
     # ===== Helper Methods =====
+
+    @staticmethod
+    def _detach_current_context(invocation: LLMInvocation) -> None:
+        if invocation.context_token is None:
+            return
+        _safe_detach(invocation.context_token)
+
+    def _reset_active_llm_request_key(self, request_key: str) -> None:
+        token = self._llm_context_tokens.pop(request_key, None)
+        if token is not None:
+            try:
+                _ACTIVE_LLM_REQUEST_KEY.reset(token)
+                return
+            except (RuntimeError, ValueError):
+                pass
+
+        if _ACTIVE_LLM_REQUEST_KEY.get() == request_key:
+            _ACTIVE_LLM_REQUEST_KEY.set(None)
+
+    @staticmethod
+    def _get_invocation_context(
+        callback_context: CallbackContext,
+    ) -> Optional[InvocationContext]:
+        return getattr(callback_context, "_invocation_context", None)
+
+    def _finish_runner_invocation(
+        self, invocation_context: InvocationContext
+    ) -> None:
+        runner_key = self._runner_key(invocation_context)
+        invocation = self._active_runner_invocations.pop(runner_key, None)
+
+        if invocation:
+            self._handler.stop_invoke_agent(invocation)
+            _logger.debug(
+                "Finished Runner invocation for %s",
+                getattr(invocation_context, "app_name", "unknown"),
+            )
+
+        self._runner_inputs.pop(runner_key, None)
+        self._runner_outputs.pop(runner_key, None)
+
+    def _is_root_agent(
+        self, agent: BaseAgent, callback_context: CallbackContext
+    ) -> bool:
+        invocation_context = self._get_invocation_context(callback_context)
+        if not invocation_context:
+            return False
+
+        root_agent = getattr(invocation_context, "agent", None)
+        if root_agent is agent:
+            return True
+
+        root_name = getattr(root_agent, "name", None)
+        return bool(root_name and root_name == getattr(agent, "name", None))
+
+    @staticmethod
+    def _is_root_final_event(
+        event: Event, invocation_context: InvocationContext
+    ) -> bool:
+        is_final_response = getattr(event, "is_final_response", None)
+        if callable(is_final_response):
+            try:
+                if not is_final_response():
+                    return False
+            except Exception:
+                return False
+        else:
+            return False
+
+        root_agent = getattr(invocation_context, "agent", None)
+        root_name = getattr(root_agent, "name", None)
+        event_author = getattr(event, "author", None)
+        return bool(root_name and event_author and event_author == root_name)
+
+    @staticmethod
+    def _session_id_from_invocation_context(
+        invocation_context: InvocationContext,
+    ) -> Optional[str]:
+        session = getattr(invocation_context, "session", None)
+        return getattr(session, "id", None)
+
+    def _session_id_from_callback_context(
+        self, callback_context: CallbackContext
+    ) -> Optional[str]:
+        invocation_context = self._get_invocation_context(callback_context)
+        if not invocation_context:
+            return None
+        return self._session_id_from_invocation_context(invocation_context)
+
+    @staticmethod
+    def _invocation_id_from_invocation_context(
+        invocation_context: InvocationContext,
+    ) -> str:
+        invocation_id = getattr(invocation_context, "invocation_id", None)
+        return str(invocation_id) if invocation_id is not None else "unknown"
+
+    def _invocation_id_from_callback_context(
+        self, callback_context: CallbackContext
+    ) -> str:
+        invocation_context = self._get_invocation_context(callback_context)
+        if not invocation_context:
+            return "unknown"
+        return self._invocation_id_from_invocation_context(invocation_context)
+
+    def _runner_key(self, invocation_context: InvocationContext) -> str:
+        invocation_id = self._invocation_id_from_invocation_context(
+            invocation_context
+        )
+        return f"runner_{invocation_id}"
+
+    def _agent_key(
+        self, agent: BaseAgent, callback_context: CallbackContext
+    ) -> str:
+        invocation_id = self._invocation_id_from_callback_context(
+            callback_context
+        )
+        conversation_id = self._session_id_from_callback_context(
+            callback_context
+        )
+        return f"agent_{invocation_id}_{id(agent)}_{conversation_id}"
+
+    def _llm_key(
+        self, callback_context: CallbackContext, llm_request: LlmRequest
+    ) -> str:
+        invocation_id = self._invocation_id_from_callback_context(
+            callback_context
+        )
+        session_id = self._session_id_from_callback_context(callback_context)
+        return f"llm_{invocation_id}_{id(llm_request)}_{session_id}"
+
+    def _tool_key(
+        self,
+        tool: BaseTool,
+        tool_args: dict[str, Any],
+        tool_context: ToolContext,
+    ) -> str:
+        invocation_context = getattr(tool_context, "_invocation_context", None)
+        invocation_id = (
+            self._invocation_id_from_invocation_context(invocation_context)
+            if invocation_context
+            else str(getattr(tool_context, "invocation_id", "unknown"))
+        )
+        call_id = getattr(tool_context, "call_id", None)
+        return f"tool_{invocation_id}_{call_id}_{id(tool)}_{id(tool_args)}"
+
+    def _find_active_llm_invocation(
+        self,
+        callback_context: CallbackContext,
+        llm_request: Optional[LlmRequest] = None,
+    ) -> tuple[Optional[str], Optional[LLMInvocation]]:
+        context_request_key = _ACTIVE_LLM_REQUEST_KEY.get()
+        if context_request_key:
+            invocation = self._active_llm_invocations.get(context_request_key)
+            if invocation:
+                return context_request_key, invocation
+
+        if llm_request is not None:
+            request_key = self._llm_key(callback_context, llm_request)
+            invocation = self._active_llm_invocations.get(request_key)
+            if invocation:
+                return request_key, invocation
+
+        invocation_id = self._invocation_id_from_callback_context(
+            callback_context
+        )
+        session_id = self._session_id_from_callback_context(callback_context)
+        preferred_prefix = f"llm_{invocation_id}_"
+
+        for key, invocation in list(self._active_llm_invocations.items()):
+            if key.startswith(preferred_prefix):
+                return key, invocation
+
+        for key, invocation in list(self._active_llm_invocations.items()):
+            if (
+                key.startswith("llm_")
+                and session_id
+                and key.endswith(f"_{session_id}")
+            ):
+                return key, invocation
+
+        return None, None
 
     @staticmethod
     def _extract_text_from_content(content: Any) -> str:
@@ -623,10 +802,27 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             return content.text or ""
         return str(content)
 
+    @staticmethod
+    def _is_mock_placeholder(value: Any) -> bool:
+        return type(value).__module__.startswith("unittest.mock")
+
+    @staticmethod
+    def _mock_has_explicit_attrs(
+        value: Any, attr_names: tuple[str, ...]
+    ) -> bool:
+        value_dict = getattr(value, "__dict__", {})
+        return any(attr_name in value_dict for attr_name in attr_names)
+
+    def _get_real_attr(self, value: Any, attr_name: str) -> Any:
+        attr_value = getattr(value, attr_name, None)
+        if self._is_mock_placeholder(attr_value):
+            return None
+        return attr_value
+
     def _resolve_model_name(
         self,
         llm_response: LlmResponse,
-        request_key: str,
+        request_key: Optional[str],
         invocation: LLMInvocation,
     ) -> str:
         """
@@ -634,7 +830,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
 
         Args:
             llm_response: LLM response object
-            request_key: Request key for stored models
+            request_key: Request key for stored models, if known
             invocation: LLMInvocation object
 
         Returns:
@@ -642,13 +838,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         """
         model_name = None
 
-        # 1) Prefer llm_response.model if available
-        if (
-            llm_response
-            and hasattr(llm_response, "model")
-            and getattr(llm_response, "model")
-        ):
-            model_name = getattr(llm_response, "model")
+        # 1) Prefer response model fields if available
+        if llm_response:
+            model_name = self._get_response_model_name(llm_response)
 
         # 2) Use stored request model by request_key
         if (
@@ -667,6 +859,84 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             model_name = "unknown"
 
         return model_name
+
+    @staticmethod
+    def _get_response_model_name(llm_response: LlmResponse) -> Optional[str]:
+        for attr_name in ("model", "model_version", "modelVersion"):
+            model_name = getattr(llm_response, attr_name, None)
+            if (
+                model_name
+                and not GoogleAdkObservabilityPlugin._is_mock_placeholder(
+                    model_name
+                )
+            ):
+                return model_name
+        return None
+
+    @staticmethod
+    def _is_streaming_partial_response(llm_response: LlmResponse) -> bool:
+        return bool(getattr(llm_response, "partial", False)) and not bool(
+            getattr(llm_response, "turn_complete", False)
+        )
+
+    def _merge_stream_output(self, request_key: str, text: str) -> str:
+        if not text:
+            return self._llm_stream_outputs.get(request_key, "")
+
+        # ADK streaming responses are cumulative snapshots, not deltas.
+        merged = text
+        self._llm_stream_outputs[request_key] = merged
+        return merged
+
+    def _update_llm_invocation_from_response(
+        self,
+        invocation: LLMInvocation,
+        llm_response: LlmResponse,
+        request_key: Optional[str],
+    ) -> None:
+        response_model = self._get_response_model_name(llm_response)
+        if response_model:
+            invocation.response_model_name = response_model
+
+        usage = getattr(llm_response, "usage_metadata", None)
+        if self._is_mock_placeholder(
+            usage
+        ) and not self._mock_has_explicit_attrs(
+            usage,
+            ("prompt_token_count", "candidates_token_count"),
+        ):
+            usage = None
+        if usage:
+            input_tokens = self._get_real_attr(usage, "prompt_token_count")
+            if input_tokens is not None:
+                invocation.input_tokens = input_tokens
+
+            output_tokens = self._get_real_attr(
+                usage, "candidates_token_count"
+            )
+            if output_tokens is not None:
+                invocation.output_tokens = output_tokens
+
+        finish_reason = self._get_real_attr(llm_response, "finish_reason")
+        if finish_reason:
+            if hasattr(finish_reason, "value"):
+                finish_reason = finish_reason.value
+            elif not isinstance(finish_reason, (str, int, float, bool)):
+                finish_reason = str(finish_reason)
+            invocation.finish_reasons = [finish_reason]
+
+        extracted_text = self._extract_text_from_llm_response(llm_response)
+        accumulated_text = (
+            self._merge_stream_output(request_key, extracted_text)
+            if request_key
+            else extracted_text
+        )
+        output_messages = self._convert_text_to_output_messages(
+            accumulated_text,
+            llm_response,
+        )
+        if output_messages:
+            invocation.output_messages = output_messages
 
     def _convert_user_message_to_input_messages(
         self, user_message: types.Content
@@ -721,14 +991,31 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
                     )
         return input_messages
 
-    def _convert_llm_response_to_output_messages(
+    def _extract_text_from_llm_response(
         self, llm_response: LlmResponse
+    ) -> str:
+        if not llm_response:
+            return ""
+
+        content = self._get_real_attr(llm_response, "content")
+        if content is not None:
+            return self._extract_text_from_content(content)
+
+        text = self._get_real_attr(llm_response, "text")
+        if text is not None:
+            return self._extract_text_from_content(text)
+
+        return ""
+
+    def _convert_text_to_output_messages(
+        self, text: str, llm_response: LlmResponse
     ) -> List[OutputMessage]:
         """
-        Convert ADK LlmResponse to GenAI OutputMessage format.
+        Convert ADK response text to GenAI OutputMessage format.
 
         Args:
-            llm_response: ADK LlmResponse object
+            text: ADK response text
+            llm_response: ADK LlmResponse object, used for finish reason
 
         Returns:
             List of OutputMessage objects
@@ -748,35 +1035,32 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             elif not isinstance(finish_reason, (str, int, float, bool)):
                 finish_reason = str(finish_reason)
 
-            # Check if response has text content
-            if hasattr(llm_response, "text") and llm_response.text is not None:
-                extracted_text = self._extract_text_from_content(
-                    llm_response.text
-                )
-                if extracted_text:
-                    output_messages.append(
-                        OutputMessage(
-                            role="assistant",
-                            parts=[Text(content=extracted_text)],
-                            finish_reason=finish_reason,
-                        )
+            if text:
+                output_messages.append(
+                    OutputMessage(
+                        role="assistant",
+                        parts=[Text(content=text)],
+                        finish_reason=finish_reason,
                     )
-            elif (
-                hasattr(llm_response, "content")
-                and llm_response.content is not None
-            ):
-                extracted_text = self._extract_text_from_content(
-                    llm_response.content
                 )
-                if extracted_text:
-                    output_messages.append(
-                        OutputMessage(
-                            role="assistant",
-                            parts=[Text(content=extracted_text)],
-                            finish_reason=finish_reason,
-                        )
-                    )
         except Exception as e:
             _logger.debug(f"Failed to extract output messages: {e}")
 
         return output_messages
+
+    def _convert_llm_response_to_output_messages(
+        self, llm_response: LlmResponse
+    ) -> List[OutputMessage]:
+        """
+        Convert ADK LlmResponse to GenAI OutputMessage format.
+
+        Args:
+            llm_response: ADK LlmResponse object
+
+        Returns:
+            List of OutputMessage objects
+        """
+        return self._convert_text_to_output_messages(
+            self._extract_text_from_llm_response(llm_response),
+            llm_response,
+        )

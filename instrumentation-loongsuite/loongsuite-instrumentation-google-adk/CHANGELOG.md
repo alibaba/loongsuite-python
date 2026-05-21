@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Route Google ADK `AGENT`, `LLM`, and `TOOL` spans through
+  `opentelemetry-util-genai`, emitting current GenAI attributes such as
+  `gen_ai.input.messages`, `gen_ai.output.messages`,
+  `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`,
+  `gen_ai.span.kind`, and `gen_ai.provider.name=google_adk`.
+  ([#199](https://github.com/alibaba/loongsuite-python-agent/pull/199))
+
+### Fixed
+
+- Keep Google ADK streaming model spans open until the final response and
+  protect same-session concurrent invocations from cross-finishing spans.
+- Ensure Google ADK spans include LoongSuite `gen_ai.span.kind` values such as
+  `AGENT`.
+
 ## Version 0.5.0 (2026-05-11)
 
 There are no changelog entries for this release.
