@@ -36,6 +36,7 @@ from ._attributes import (
     GRAPH_ORIGINAL_METHODS_ATTR,
     GRAPH_REGISTRY_ATTR,
     GRAPH_VERSION_ATTR,
+    LANGGRAPH_REACT_AGENT_METADATA_KEY,
     SPAN_KIND_ENTRY,
 )
 from ._utils import (
@@ -45,6 +46,7 @@ from ._utils import (
     detect_deepagents_version,
     entry_attributes,
     extract_subagent_registry,
+    inject_langgraph_react_metadata,
     input_messages_from_value,
     input_value_from_call,
     output_messages_from_value,
@@ -181,6 +183,7 @@ def _mark_graph(
     version = detect_deepagents_version(metadata)
     with suppress(Exception):
         setattr(graph, GRAPH_ATTR, True)
+        setattr(graph, LANGGRAPH_REACT_AGENT_METADATA_KEY, True)
         setattr(graph, GRAPH_METADATA_ATTR, metadata)
         setattr(graph, GRAPH_REGISTRY_ATTR, registry)
         if version:
@@ -350,6 +353,7 @@ def _call_sync_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
     try:
         result = original(*args, **kwargs)
     except Exception as exc:
@@ -371,6 +375,7 @@ async def _call_async_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
     try:
         result = await original(*args, **kwargs)
     except Exception as exc:
@@ -392,6 +397,7 @@ def _call_stream_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
     last_chunk = None
     try:
         for chunk in original(*args, **kwargs):
@@ -415,6 +421,7 @@ async def _call_astream_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
     last_chunk = None
     try:
         async for chunk in original(*args, **kwargs):

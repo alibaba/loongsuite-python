@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from opentelemetry.util.genai.extended_types import RetrievalDocument
@@ -115,21 +116,18 @@ def _extract_tool_definitions(run: Any) -> list[FunctionToolDefinition]:
     tool_definitions: list[FunctionToolDefinition] = []
     tools: list[Any] = []
 
-    params = _extract_invocation_params(run)
-    if params and "tools" in params:
-        raw = params["tools"]
-        if isinstance(raw, list):
-            tools = raw
-        elif hasattr(raw, "__iter__") and not isinstance(raw, (str, dict)):
-            tools = list(raw)
-
-    if not tools:
-        inputs = getattr(run, "inputs", None) or {}
-        raw = inputs.get("tools")
-        if isinstance(raw, list):
-            tools = raw
-        elif hasattr(raw, "__iter__") and not isinstance(raw, (str, dict)):
-            tools = list(raw)
+    for source in (
+        _extract_invocation_params(run),
+        getattr(run, "inputs", None) or {},
+        getattr(run, "extra", None) or {},
+        getattr(run, "serialized", None) or {},
+    ):
+        for raw in _iter_tool_definition_values(source):
+            tools = _coerce_tool_list(raw)
+            if tools:
+                break
+        if tools:
+            break
 
     for tool in tools:
         if isinstance(tool, FunctionToolDefinition):
@@ -167,6 +165,73 @@ def _extract_tool_definitions(run: Any) -> list[FunctionToolDefinition]:
             )
 
     return tool_definitions
+
+
+def _iter_tool_definition_values(
+    value: Any,
+    *,
+    _depth: int = 0,
+    _seen: set[int] | None = None,
+):
+    if _depth > 4 or value is None:
+        return
+    if _seen is None:
+        _seen = set()
+    value_id = id(value)
+    if value_id in _seen:
+        return
+    _seen.add(value_id)
+
+    if isinstance(value, Mapping):
+        for key in ("tools", "functions"):
+            if key in value:
+                yield value[key]
+        for key in (
+            "kwargs",
+            "model_kwargs",
+            "invocation_params",
+            "extra_body",
+            "config",
+            "configurable",
+            "metadata",
+            "bound",
+        ):
+            if key in value:
+                yield from _iter_tool_definition_values(
+                    value[key],
+                    _depth=_depth + 1,
+                    _seen=_seen,
+                )
+        return
+
+    for attr in (
+        "tools",
+        "functions",
+        "kwargs",
+        "model_kwargs",
+        "invocation_params",
+        "extra_body",
+    ):
+        if hasattr(value, attr):
+            yield from _iter_tool_definition_values(
+                getattr(value, attr),
+                _depth=_depth + 1,
+                _seen=_seen,
+            )
+
+
+def _coerce_tool_list(raw: Any) -> list[Any]:
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, tuple):
+        return list(raw)
+    if isinstance(raw, Mapping):
+        if "function" in raw or "name" in raw:
+            return [raw]
+        return []
+    if hasattr(raw, "__iter__") and not isinstance(raw, (str, bytes)):
+        return list(raw)
+    return []
 
 
 # ---------------------------------------------------------------------------

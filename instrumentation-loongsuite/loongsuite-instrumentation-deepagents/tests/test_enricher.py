@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from opentelemetry.instrumentation.deepagents.internal import _enricher
 from opentelemetry.instrumentation.deepagents.internal._enricher import (
     DeepAgentsEnricherCallbackHandler,
 )
@@ -60,3 +61,41 @@ def test_enricher_marks_task_tool_as_agent_tool(
     [span] = span_exporter.get_finished_spans()
     assert span.attributes["gen_ai.tool.name"] == "task"
     assert span.attributes["gen_ai.tool.type"] == "agent"
+
+
+def test_enricher_targets_loongsuite_run_span_and_uses_registry_fallback(
+    tracer_provider,
+    span_exporter,
+    monkeypatch,
+):
+    handler = DeepAgentsEnricherCallbackHandler()
+    tracer = tracer_provider.get_tracer(__name__)
+    run_id = uuid4()
+    token = set_current_subagent_registry({"researcher": "Research agent"})
+    run_span = tracer.start_span("invoke_agent researcher")
+
+    monkeypatch.setattr(
+        _enricher,
+        "_span_for_run",
+        lambda seen_run_id: run_span if seen_run_id == run_id else None,
+    )
+
+    with tracer.start_as_current_span("current chain"):
+        handler.on_chain_start(
+            {},
+            {},
+            run_id=run_id,
+            metadata={
+                "ls_integration": "deepagents",
+                "versions": {"deepagents": "0.6.2"},
+                "lc_agent_name": "researcher",
+            },
+        )
+
+    run_span.end()
+    reset_current_subagent_registry(token)
+    spans = {span.name: span for span in span_exporter.get_finished_spans()}
+    run_attributes = spans["invoke_agent researcher"].attributes
+    assert run_attributes["gen_ai.agent.type"] == "subagent"
+    assert run_attributes["gen_ai.agent.description"] == "Research agent"
+    assert "gen_ai.agent.type" not in spans["current chain"].attributes

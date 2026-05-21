@@ -211,6 +211,51 @@ class TestExtractToolDefinitions:
         assert len(result) == 1
         assert result[0].name == "calculator"
 
+    def test_from_nested_invocation_params_kwargs(self):
+        """Tools nested under kwargs are used by LangChain v1 wrap_model_call."""
+        run = _FakeRun(
+            extra={
+                "invocation_params": {
+                    "kwargs": {
+                        "tools": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "task",
+                                    "description": "Invoke subagent",
+                                    "parameters": {"type": "object"},
+                                },
+                            },
+                        ]
+                    }
+                }
+            }
+        )
+        result = _extract_tool_definitions(run)
+        assert len(result) == 1
+        assert result[0].name == "task"
+
+    def test_from_nested_model_kwargs(self):
+        """Tools nested under model_kwargs are discovered as a fallback."""
+        run = _FakeRun(
+            extra={
+                "invocation_params": {
+                    "model_kwargs": {
+                        "tools": [
+                            {
+                                "name": "write_file",
+                                "description": "Write a file",
+                                "parameters": {"type": "object"},
+                            },
+                        ]
+                    }
+                }
+            }
+        )
+        result = _extract_tool_definitions(run)
+        assert len(result) == 1
+        assert result[0].name == "write_file"
+
     def test_empty_when_no_tools(self):
         run = _FakeRun(extra={}, inputs={})
         assert _extract_tool_definitions(run) == []

@@ -24,6 +24,11 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
 )
 
+try:
+    from langchain_core.runnables.config import ensure_config as _ensure_config
+except ModuleNotFoundError:
+    _ensure_config = None  # type: ignore[assignment]
+
 from ._attributes import (
     ENTRY_PARENT_KINDS,
     FRAMEWORK_NAME,
@@ -33,6 +38,7 @@ from ._attributes import (
     GEN_AI_OPERATION_NAME,
     GEN_AI_SPAN_KIND,
     GRAPH_METADATA_ATTR,
+    LANGGRAPH_REACT_AGENT_METADATA_KEY,
     METADATA_DEEPAGENTS_VERSION,
     METADATA_LC_AGENT_NAME,
     METADATA_LS_INTEGRATION,
@@ -198,6 +204,40 @@ def config_from_call(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Any:
     if len(args) > 1:
         return args[1]
     return kwargs.get("config")
+
+
+def config_with_langgraph_react_metadata(config: Any) -> Any:
+    if _ensure_config is None:
+        ensured = config or {}
+    else:
+        try:
+            ensured = _ensure_config(config)
+        except Exception:  # noqa: BLE001
+            ensured = config or {}
+
+    if not isinstance(ensured, Mapping):
+        return ensured
+
+    updated = dict(ensured)
+    metadata = dict(obj_get(updated, "metadata", {}) or {})
+    metadata.setdefault(LANGGRAPH_REACT_AGENT_METADATA_KEY, True)
+    updated["metadata"] = metadata
+    return updated
+
+
+def inject_langgraph_react_metadata(
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    updated_kwargs = dict(kwargs)
+    if len(args) > 1:
+        config = config_with_langgraph_react_metadata(args[1])
+        return (args[0], config) + args[2:], updated_kwargs
+
+    updated_kwargs["config"] = config_with_langgraph_react_metadata(
+        updated_kwargs.get("config")
+    )
+    return args, updated_kwargs
 
 
 def session_id_from_config(config: Any) -> str | None:

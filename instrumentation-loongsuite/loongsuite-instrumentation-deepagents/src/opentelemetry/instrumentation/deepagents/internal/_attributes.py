@@ -73,6 +73,7 @@ GRAPH_METADATA_ATTR = "_loongsuite_deepagents_metadata"
 GRAPH_REGISTRY_ATTR = "_loongsuite_deepagents_subagent_registry"
 GRAPH_ORIGINAL_METHODS_ATTR = "_loongsuite_deepagents_original_methods"
 GRAPH_METHODS_WRAPPED_ATTR = "_loongsuite_deepagents_methods_wrapped"
+LANGGRAPH_REACT_AGENT_METADATA_KEY = "_loongsuite_react_agent"
 
 CREATE_DEEP_AGENT_MODULE = "deepagents.graph"
 CREATE_DEEP_AGENT_NAME = "create_deep_agent"

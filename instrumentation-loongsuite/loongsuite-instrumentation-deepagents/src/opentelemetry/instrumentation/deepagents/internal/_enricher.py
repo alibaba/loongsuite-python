@@ -66,8 +66,8 @@ class DeepAgentsEnricherCallbackHandler(BaseCallbackHandler):  # type: ignore[mi
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        del serialized, inputs, run_id, parent_run_id, tags, kwargs
-        self._enrich_agent_or_chain(metadata or {})
+        del serialized, inputs, parent_run_id, tags, kwargs
+        self._enrich_agent_or_chain(metadata or {}, run_id=run_id)
 
     async def on_chain_start_async(
         self,
@@ -80,8 +80,8 @@ class DeepAgentsEnricherCallbackHandler(BaseCallbackHandler):  # type: ignore[mi
         metadata: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any:
-        del serialized, inputs, run_id, parent_run_id, tags, kwargs
-        self._enrich_agent_or_chain(metadata or {})
+        del serialized, inputs, parent_run_id, tags, kwargs
+        self._enrich_agent_or_chain(metadata or {}, run_id=run_id)
 
     def on_tool_start(
         self,
@@ -111,11 +111,16 @@ class DeepAgentsEnricherCallbackHandler(BaseCallbackHandler):  # type: ignore[mi
         del input_str, run_id, parent_run_id, tags, metadata
         self._enrich_tool(serialized, kwargs)
 
-    def _enrich_agent_or_chain(self, metadata: Mapping[str, Any]) -> None:
+    def _enrich_agent_or_chain(
+        self,
+        metadata: Mapping[str, Any],
+        *,
+        run_id: Any,
+    ) -> None:
         if obj_get(metadata, METADATA_LS_INTEGRATION) != FRAMEWORK_NAME:
             return
 
-        current_span = trace.get_current_span()
+        current_span = _span_for_run(run_id) or trace.get_current_span()
         safe_set_attribute(current_span, GEN_AI_FRAMEWORK, FRAMEWORK_NAME)
         version = _version_from_metadata(metadata)
         if version:
@@ -125,7 +130,7 @@ class DeepAgentsEnricherCallbackHandler(BaseCallbackHandler):  # type: ignore[mi
         if agent_name:
             safe_set_attribute(current_span, GEN_AI_AGENT_NAME, str(agent_name))
 
-        if obj_get(metadata, METADATA_LS_AGENT_TYPE) == SUBAGENT_TYPE:
+        if _is_subagent_metadata(metadata, agent_name):
             safe_set_attribute(current_span, GEN_AI_AGENT_TYPE, SUBAGENT_TYPE)
             description = current_subagent_registry().get(str(agent_name))
             if description:
@@ -213,3 +218,22 @@ def _version_from_metadata(metadata: Mapping[str, Any]) -> str | None:
     versions = obj_get(metadata, METADATA_VERSIONS, {})
     version = obj_get(versions, METADATA_DEEPAGENTS_VERSION)
     return str(version) if version else None
+
+
+def _is_subagent_metadata(
+    metadata: Mapping[str, Any],
+    agent_name: Any,
+) -> bool:
+    if obj_get(metadata, METADATA_LS_AGENT_TYPE) == SUBAGENT_TYPE:
+        return True
+    return bool(agent_name and str(agent_name) in current_subagent_registry())
+
+
+def _span_for_run(run_id: Any) -> Any:
+    try:
+        from opentelemetry.instrumentation.langchain.internal._tracer import (  # noqa: PLC0415
+            get_otel_span_for_run,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    return get_otel_span_for_run(run_id)

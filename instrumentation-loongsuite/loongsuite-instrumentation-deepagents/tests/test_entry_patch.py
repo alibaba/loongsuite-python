@@ -21,6 +21,7 @@ from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 class FakeGraph:
     def __init__(self, name: str = "supervisor") -> None:
         self.name = name
+        self.last_config = None
         self.config = {
             "metadata": {
                 "ls_integration": "deepagents",
@@ -30,20 +31,20 @@ class FakeGraph:
         }
 
     def invoke(self, value, config=None):
-        del config
+        self.last_config = config
         return {"messages": [*value["messages"], {"role": "assistant", "content": "done"}]}
 
     async def ainvoke(self, value, config=None):
-        del config
+        self.last_config = config
         return {"messages": [*value["messages"], {"role": "assistant", "content": "done"}]}
 
     def stream(self, value, config=None):
-        del config
+        self.last_config = config
         yield {"messages": [*value["messages"], {"role": "assistant", "content": "part"}]}
         yield {"messages": [*value["messages"], {"role": "assistant", "content": "done"}]}
 
     async def astream(self, value, config=None):
-        del config
+        self.last_config = config
         yield {"messages": [*value["messages"], {"role": "assistant", "content": "done"}]}
 
 
@@ -96,6 +97,8 @@ def test_invoke_creates_one_deepagents_entry_span(
     )
 
     assert result["messages"][-1]["content"] == "done"
+    assert getattr(graph, "_loongsuite_react_agent") is True
+    assert graph.last_config["metadata"]["_loongsuite_react_agent"] is True
     [entry_span] = _entry_spans(span_exporter)
     attributes = entry_span.attributes
     assert attributes["gen_ai.operation.name"] == "invoke"
