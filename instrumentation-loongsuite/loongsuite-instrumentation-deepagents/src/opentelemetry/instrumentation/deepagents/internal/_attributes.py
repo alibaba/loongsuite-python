@@ -62,6 +62,7 @@ METADATA_LS_AGENT_TYPE = "ls_agent_type"
 METADATA_LC_AGENT_NAME = "lc_agent_name"
 METADATA_VERSIONS = "versions"
 METADATA_DEEPAGENTS_VERSION = "deepagents"
+METADATA_SUBAGENT_DESCRIPTION = "loongsuite_deepagents_subagent_description"
 
 SUBAGENT_TYPE = "subagent"
 TASK_TOOL_NAME = "task"
@@ -77,6 +78,8 @@ LANGGRAPH_REACT_AGENT_METADATA_KEY = "_loongsuite_react_agent"
 
 CREATE_DEEP_AGENT_MODULE = "deepagents.graph"
 CREATE_DEEP_AGENT_NAME = "create_deep_agent"
+BUILD_TASK_TOOL_MODULE = "deepagents.middleware.subagents"
+BUILD_TASK_TOOL_NAME = "_build_task_tool"
 
 METRIC_CALLS_COUNT = "genai_calls_count"
 METRIC_CALLS_DURATION_SECONDS = "genai_calls_duration_seconds"

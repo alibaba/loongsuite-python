@@ -32,9 +32,13 @@ class _FakeRun:
     """Minimal stub that looks like a langchain Run for unit tests."""
 
     def __init__(self, name: str, **kwargs):
+        self.id = kwargs.get("id", uuid4())
         self.name = name
         self.parent_run_id = kwargs.get("parent_run_id")
         self.metadata = kwargs.get("metadata", {})
+        self.inputs = kwargs.get("inputs", {})
+        self.outputs = kwargs.get("outputs", {})
+        self.extra = kwargs.get("extra", {})
 
 
 class TestAgentDetection:
@@ -119,3 +123,137 @@ def test_deepagents_subagent_falls_back_to_active_task_tool_run(
         tool_span.end()
 
     assert get_current_span(context) is tool_span
+
+
+def test_deepagents_subagent_falls_back_to_latest_task_tool_when_parent_differs(
+    tracer_provider,
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(handler, tracer_provider=tracer_provider)
+    otel_tracer = tracer_provider.get_tracer(__name__)
+
+    tool_span = otel_tracer.start_span("execute_tool task")
+    try:
+        tracer._runs[uuid4()] = _RunData(
+            run_kind="tool",
+            span=tool_span,
+            context=set_span_in_context(tool_span),
+            parent_run_id=uuid4(),
+            tool_name="task",
+        )
+        run = _FakeRun(
+            "LangGraph",
+            parent_run_id=uuid4(),
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_agent_name": "researcher",
+                "ls_agent_type": "subagent",
+            },
+        )
+
+        context = tracer._get_parent_context(run)
+    finally:
+        tool_span.end()
+
+    assert get_current_span(context) is tool_span
+
+
+def test_start_agent_writes_deepagents_framework_attributes(
+    tracer_provider,
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(handler, tracer_provider=tracer_provider)
+    run = _FakeRun(
+        "LangGraph",
+        metadata={
+            "_loongsuite_react_agent": True,
+            "ls_integration": "deepagents",
+            "versions": {"deepagents": "0.6.3"},
+            "lc_agent_name": "deep_agent",
+        },
+    )
+
+    tracer._start_agent(run)
+    try:
+        span = tracer._runs[run.id].span
+        attributes = span.attributes
+    finally:
+        tracer._runs.pop(run.id).span.end()
+
+    assert attributes["gen_ai.framework"] == "deepagents"
+    assert attributes["gen_ai.framework.version"] == "0.6.3"
+    assert attributes["gen_ai.agent.name"] == "deep_agent"
+
+
+def test_start_agent_writes_deepagents_subagent_attributes(
+    tracer_provider,
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(handler, tracer_provider=tracer_provider)
+    run = _FakeRun(
+        "LangGraph",
+        metadata={
+            "_loongsuite_react_agent": True,
+            "ls_integration": "deepagents",
+            "versions": {"deepagents": "0.6.3"},
+            "lc_agent_name": "country-researcher",
+            "ls_agent_type": "subagent",
+            "loongsuite_deepagents_subagent_description": (
+                "Research country facts"
+            ),
+        },
+    )
+
+    tracer._start_agent(run)
+    try:
+        span = tracer._runs[run.id].span
+        attributes = span.attributes
+    finally:
+        tracer._runs.pop(run.id).span.end()
+
+    assert attributes["gen_ai.framework"] == "deepagents"
+    assert attributes["gen_ai.framework.version"] == "0.6.3"
+    assert attributes["gen_ai.agent.name"] == "country-researcher"
+    assert attributes["gen_ai.agent.type"] == "subagent"
+    assert (
+        attributes["gen_ai.agent.description"]
+        == "Research country facts"
+    )
+
+
+def test_langgraph_router_treats_deepagents_subagent_root_as_agent(
+    tracer_provider,
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(handler, tracer_provider=tracer_provider)
+    parent_run_id = uuid4()
+    tracer._runs[parent_run_id] = _RunData(
+        run_kind="chain",
+        inside_langgraph_react=True,
+    )
+    run = _FakeRun(
+        "country-researcher",
+        parent_run_id=parent_run_id,
+        metadata={
+            "_loongsuite_react_agent": True,
+            "ls_integration": "deepagents",
+            "versions": {"deepagents": "0.6.3"},
+            "lc_agent_name": "country-researcher",
+            "ls_agent_type": "subagent",
+            "loongsuite_deepagents_subagent_description": (
+                "Research country facts"
+            ),
+        },
+    )
+
+    tracer._on_chain_start(run)
+    try:
+        run_data = tracer._runs[run.id]
+        attributes = run_data.span.attributes
+    finally:
+        tracer._runs.pop(run.id).span.end()
+        tracer._runs.pop(parent_run_id)
+
+    assert run_data.run_kind == "agent"
+    assert attributes["gen_ai.framework"] == "deepagents"
+    assert attributes["gen_ai.agent.type"] == "subagent"

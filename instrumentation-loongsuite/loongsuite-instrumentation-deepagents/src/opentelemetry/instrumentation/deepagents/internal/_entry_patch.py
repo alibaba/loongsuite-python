@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import suppress
 from importlib import import_module
 from typing import Any, Callable
@@ -22,6 +22,8 @@ from opentelemetry.util.genai.extended_types import EntryInvocation
 from opentelemetry.util.genai.types import Error
 
 from ._attributes import (
+    BUILD_TASK_TOOL_MODULE,
+    BUILD_TASK_TOOL_NAME,
     CREATE_DEEP_AGENT_MODULE,
     CREATE_DEEP_AGENT_NAME,
     FRAMEWORK_NAME,
@@ -37,11 +39,15 @@ from ._attributes import (
     GRAPH_REGISTRY_ATTR,
     GRAPH_VERSION_ATTR,
     LANGGRAPH_REACT_AGENT_METADATA_KEY,
+    METADATA_LS_AGENT_TYPE,
+    METADATA_SUBAGENT_DESCRIPTION,
     SPAN_KIND_ENTRY,
+    SUBAGENT_TYPE,
 )
 from ._utils import (
     active_span_is_entry_or_agent,
     config_from_call,
+    config_with_langgraph_react_metadata,
     create_graph_metadata,
     detect_deepagents_version,
     entry_attributes,
@@ -65,6 +71,7 @@ _TOP_LEVEL_MODULE = "deepagents"
 _MISSING = object()
 _top_level_original: Any = _MISSING
 _top_level_patched = False
+_is_subagent_task_patched = False
 
 
 def instrument_entry_patch(handler: ExtendedTelemetryHandler) -> None:
@@ -94,6 +101,7 @@ def instrument_entry_patch(handler: ExtendedTelemetryHandler) -> None:
         )
         return
     _sync_top_level_create_deep_agent()
+    _instrument_subagent_task_tool()
     _is_entry_patched = True
 
 
@@ -111,6 +119,7 @@ def uninstrument_entry_patch() -> None:
     with suppress(Exception):
         module = import_module(CREATE_DEEP_AGENT_MODULE)
         unwrap(module, CREATE_DEEP_AGENT_NAME)
+    _uninstrument_subagent_task_tool()
     _restore_top_level_create_deep_agent()
     _is_entry_patched = False
 
@@ -173,6 +182,134 @@ def _create_deep_agent_wrapper(
     _mark_graph(graph, metadata, registry)
     _wrap_graph_methods(graph, metadata, registry)
     return graph
+
+
+def _instrument_subagent_task_tool() -> None:
+    """Patch deepagents subagent task construction to mark nested graphs."""
+    global _is_subagent_task_patched  # noqa: PLW0603
+    if _is_subagent_task_patched:
+        return
+    try:
+        wrap_function_wrapper(
+            BUILD_TASK_TOOL_MODULE,
+            BUILD_TASK_TOOL_NAME,
+            _build_task_tool_wrapper,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name == "deepagents" or exc.name == BUILD_TASK_TOOL_MODULE:
+            _logger.debug(
+                "deepagents subagent middleware is not installed; "
+                "SubAgent task patch skipped."
+            )
+            return
+        raise
+    except AttributeError:
+        _logger.debug(
+            "%s.%s not found; SubAgent task patch skipped.",
+            BUILD_TASK_TOOL_MODULE,
+            BUILD_TASK_TOOL_NAME,
+        )
+        return
+    _is_subagent_task_patched = True
+
+
+def _uninstrument_subagent_task_tool() -> None:
+    global _is_subagent_task_patched  # noqa: PLW0603
+    if not _is_subagent_task_patched:
+        return
+    with suppress(Exception):
+        module = import_module(BUILD_TASK_TOOL_MODULE)
+        unwrap(module, BUILD_TASK_TOOL_NAME)
+    _is_subagent_task_patched = False
+
+
+def _build_task_tool_wrapper(
+    wrapped: Callable[..., Any],
+    _instance: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    _mark_subagent_specs(_subagent_specs_from_call(args, kwargs))
+    return wrapped(*args, **kwargs)
+
+
+def _subagent_specs_from_call(
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+) -> Any:
+    if args:
+        return args[0]
+    return kwargs.get("subagents")
+
+
+def _mark_subagent_specs(subagents: Any) -> None:
+    for spec in subagents or ():
+        try:
+            name = spec.get("name") if isinstance(spec, dict) else None
+            description = (
+                spec.get("description") if isinstance(spec, dict) else None
+            )
+            runnable = spec.get("runnable") if isinstance(spec, dict) else None
+            if not name or runnable is None:
+                continue
+            spec["runnable"] = _mark_subagent_runnable(
+                runnable,
+                name=str(name),
+                description=str(description) if description else None,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.debug("Failed to mark deepagents SubAgent graph", exc_info=True)
+
+
+def _mark_subagent_runnable(
+    runnable: Any,
+    *,
+    name: str,
+    description: str | None,
+) -> Any:
+    metadata = create_graph_metadata(runnable, name=name)
+    metadata.setdefault(METADATA_LS_AGENT_TYPE, SUBAGENT_TYPE)
+    metadata.setdefault(LANGGRAPH_REACT_AGENT_METADATA_KEY, True)
+    if description:
+        metadata.setdefault(METADATA_SUBAGENT_DESCRIPTION, description)
+
+    registry = {name: description} if description else {}
+    _mark_graph(runnable, metadata, registry)
+    proxy = _SubagentRunnableProxy(runnable, metadata)
+    _mark_graph(proxy, metadata, registry)
+    return proxy
+
+
+class _SubagentRunnableProxy:
+    """Proxy that injects deepagents metadata before nested SubAgent calls."""
+
+    __slots__ = ("_metadata", "_runnable")
+
+    def __init__(self, runnable: Any, metadata: Mapping[str, Any]) -> None:
+        self._runnable = runnable
+        self._metadata = dict(metadata)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runnable, name)
+
+    def invoke(self, value: Any, config: Any = None, **kwargs: Any) -> Any:
+        return self._runnable.invoke(
+            value,
+            config_with_langgraph_react_metadata(config, self._metadata),
+            **kwargs,
+        )
+
+    async def ainvoke(
+        self,
+        value: Any,
+        config: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        return await self._runnable.ainvoke(
+            value,
+            config_with_langgraph_react_metadata(config, self._metadata),
+            **kwargs,
+        )
 
 
 def _mark_graph(
@@ -353,7 +490,7 @@ def _call_sync_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
-    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs, metadata)
     try:
         result = original(*args, **kwargs)
     except Exception as exc:
@@ -375,7 +512,7 @@ async def _call_async_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
-    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs, metadata)
     try:
         result = await original(*args, **kwargs)
     except Exception as exc:
@@ -397,7 +534,7 @@ def _call_stream_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
-    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs, metadata)
     last_chunk = None
     try:
         for chunk in original(*args, **kwargs):
@@ -421,7 +558,7 @@ async def _call_astream_with_entry(
     invocation, token = _start_entry(
         graph, method_name, metadata, registry, args, kwargs
     )
-    args, kwargs = inject_langgraph_react_metadata(args, kwargs)
+    args, kwargs = inject_langgraph_react_metadata(args, kwargs, metadata)
     last_chunk = None
     try:
         async for chunk in original(*args, **kwargs):

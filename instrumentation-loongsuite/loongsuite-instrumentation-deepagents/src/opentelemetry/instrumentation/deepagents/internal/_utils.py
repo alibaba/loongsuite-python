@@ -41,7 +41,9 @@ from ._attributes import (
     LANGGRAPH_REACT_AGENT_METADATA_KEY,
     METADATA_DEEPAGENTS_VERSION,
     METADATA_LC_AGENT_NAME,
+    METADATA_LS_AGENT_TYPE,
     METADATA_LS_INTEGRATION,
+    METADATA_SUBAGENT_DESCRIPTION,
     METADATA_VERSIONS,
     SPAN_KIND_ENTRY,
 )
@@ -206,7 +208,38 @@ def config_from_call(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Any:
     return kwargs.get("config")
 
 
-def config_with_langgraph_react_metadata(config: Any) -> Any:
+def _merge_deepagents_metadata(
+    target: dict[str, Any],
+    source: Mapping[str, Any] | None,
+) -> None:
+    if not source:
+        return
+    for key, value in source.items():
+        if key == METADATA_VERSIONS and isinstance(value, Mapping):
+            versions = dict(obj_get(target, METADATA_VERSIONS, {}) or {})
+            for version_key, version_value in value.items():
+                versions.setdefault(version_key, version_value)
+            if versions:
+                target[METADATA_VERSIONS] = versions
+            continue
+        if key == METADATA_SUBAGENT_DESCRIPTION and value:
+            target[key] = value
+            continue
+        if key in {
+            METADATA_LS_INTEGRATION,
+            METADATA_LS_AGENT_TYPE,
+            METADATA_LC_AGENT_NAME,
+            METADATA_SUBAGENT_DESCRIPTION,
+        }:
+            target[key] = value
+            continue
+        target.setdefault(key, value)
+
+
+def config_with_langgraph_react_metadata(
+    config: Any,
+    metadata: Mapping[str, Any] | None = None,
+) -> Any:
     if _ensure_config is None:
         ensured = config or {}
     else:
@@ -219,23 +252,26 @@ def config_with_langgraph_react_metadata(config: Any) -> Any:
         return ensured
 
     updated = dict(ensured)
-    metadata = dict(obj_get(updated, "metadata", {}) or {})
-    metadata.setdefault(LANGGRAPH_REACT_AGENT_METADATA_KEY, True)
-    updated["metadata"] = metadata
+    updated_metadata = dict(obj_get(updated, "metadata", {}) or {})
+    _merge_deepagents_metadata(updated_metadata, metadata)
+    updated_metadata.setdefault(LANGGRAPH_REACT_AGENT_METADATA_KEY, True)
+    updated["metadata"] = updated_metadata
     return updated
 
 
 def inject_langgraph_react_metadata(
     args: tuple[Any, ...],
     kwargs: Mapping[str, Any],
+    metadata: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     updated_kwargs = dict(kwargs)
     if len(args) > 1:
-        config = config_with_langgraph_react_metadata(args[1])
+        config = config_with_langgraph_react_metadata(args[1], metadata)
         return (args[0], config) + args[2:], updated_kwargs
 
     updated_kwargs["config"] = config_with_langgraph_react_metadata(
-        updated_kwargs.get("config")
+        updated_kwargs.get("config"),
+        metadata,
     )
     return args, updated_kwargs
 

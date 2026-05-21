@@ -106,6 +106,20 @@ from opentelemetry.util.genai.utils import (
 
 logger = logging.getLogger(__name__)
 _TRACER_INSTANCES: WeakSet["LoongsuiteTracer"] = WeakSet()
+_DEEPAGENTS_FRAMEWORK_NAME = "deepagents"
+_DEEPAGENTS_METADATA_INTEGRATION = "ls_integration"
+_DEEPAGENTS_METADATA_VERSIONS = "versions"
+_DEEPAGENTS_METADATA_AGENT_NAME = "lc_agent_name"
+_DEEPAGENTS_METADATA_AGENT_TYPE = "ls_agent_type"
+_DEEPAGENTS_METADATA_SUBAGENT_DESCRIPTION = (
+    "loongsuite_deepagents_subagent_description"
+)
+_DEEPAGENTS_SUBAGENT_TYPE = "subagent"
+_GEN_AI_FRAMEWORK = "gen_ai.framework"
+_GEN_AI_FRAMEWORK_VERSION = "gen_ai.framework.version"
+_GEN_AI_AGENT_NAME = "gen_ai.agent.name"
+_GEN_AI_AGENT_TYPE = "gen_ai.agent.type"
+_GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
 
 # ---------------------------------------------------------------------------
 # _RunData — per-run bookkeeping
@@ -233,14 +247,17 @@ class LoongsuiteTracer(BaseTracer):
         parent_id = getattr(run, "parent_run_id", None)
         with self._lock:
             run_data = list(self._runs.values())
+        latest_task_context: Context | None = None
         for rd in reversed(run_data):
             if rd.run_kind != "tool" or rd.tool_name != "task":
                 continue
+            if latest_task_context is None:
+                latest_task_context = rd.context
             if parent_id is not None and rd.parent_run_id != parent_id:
                 continue
             if rd.context is not None:
                 return rd.context
-        return None
+        return latest_task_context
 
     # ------------------------------------------------------------------
     # _start_trace / _end_trace
@@ -382,6 +399,10 @@ class LoongsuiteTracer(BaseTracer):
         * **Otherwise** → top-level graph → create Agent span.
         """
         parent_id = getattr(run, "parent_run_id", None)
+        if _is_deepagents_subagent_root(run):
+            self._start_agent(run)
+            return
+
         with self._lock:
             parent_rd = self._runs.get(parent_id) if parent_id else None
 
@@ -454,6 +475,7 @@ class LoongsuiteTracer(BaseTracer):
             input_messages=input_messages,
         )
         self._handler.start_invoke_agent(invocation, context=parent_ctx)
+        _enrich_deepagents_agent_span(invocation.span, run)
         rd = _RunData(
             run_kind="agent",
             span=invocation.span,
@@ -864,6 +886,55 @@ def _is_deepagents_subagent_candidate(run: Run) -> bool:
         metadata.get("ls_integration") == "deepagents"
         and _is_task_tool_span(get_current_span())
     )
+
+
+def _enrich_deepagents_agent_span(span: Span | None, run: Run) -> None:
+    """Write deepagents attributes when LangGraph metadata marks an agent run."""
+    if span is None:
+        return
+    metadata = getattr(run, "metadata", None) or {}
+    if not isinstance(metadata, Mapping):
+        return
+    if not _is_deepagents_metadata(metadata):
+        return
+
+    span.set_attribute(_GEN_AI_FRAMEWORK, _DEEPAGENTS_FRAMEWORK_NAME)
+    versions = metadata.get(_DEEPAGENTS_METADATA_VERSIONS)
+    if isinstance(versions, Mapping):
+        version = versions.get(_DEEPAGENTS_FRAMEWORK_NAME)
+        if version:
+            span.set_attribute(_GEN_AI_FRAMEWORK_VERSION, str(version))
+
+    agent_name = metadata.get(_DEEPAGENTS_METADATA_AGENT_NAME)
+    if agent_name:
+        span.set_attribute(_GEN_AI_AGENT_NAME, str(agent_name))
+
+    agent_type = metadata.get(_DEEPAGENTS_METADATA_AGENT_TYPE)
+    if agent_type:
+        span.set_attribute(_GEN_AI_AGENT_TYPE, str(agent_type))
+
+    description = metadata.get(_DEEPAGENTS_METADATA_SUBAGENT_DESCRIPTION)
+    if description:
+        span.set_attribute(_GEN_AI_AGENT_DESCRIPTION, str(description))
+
+
+def _is_deepagents_metadata(metadata: Mapping[str, Any]) -> bool:
+    if metadata.get(_DEEPAGENTS_METADATA_INTEGRATION) == _DEEPAGENTS_FRAMEWORK_NAME:
+        return True
+    if metadata.get(_DEEPAGENTS_METADATA_AGENT_TYPE) == _DEEPAGENTS_SUBAGENT_TYPE:
+        return True
+    versions = metadata.get(_DEEPAGENTS_METADATA_VERSIONS)
+    return isinstance(versions, Mapping) and _DEEPAGENTS_FRAMEWORK_NAME in versions
+
+
+def _is_deepagents_subagent_root(run: Run) -> bool:
+    metadata = getattr(run, "metadata", None) or {}
+    if not isinstance(metadata, Mapping):
+        return False
+    if metadata.get(_DEEPAGENTS_METADATA_AGENT_TYPE) != _DEEPAGENTS_SUBAGENT_TYPE:
+        return False
+    agent_name = metadata.get(_DEEPAGENTS_METADATA_AGENT_NAME)
+    return bool(agent_name and getattr(run, "name", None) == agent_name)
 
 
 # ---------------------------------------------------------------------------
