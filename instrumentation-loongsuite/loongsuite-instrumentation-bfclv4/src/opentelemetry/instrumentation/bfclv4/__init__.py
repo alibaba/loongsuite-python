@@ -159,15 +159,17 @@ class BFCLv4Instrumentor(BaseInstrumentor):
         # ``execute_multi_turn_func_call`` is re-exported via ``from ... import``
         # in several BFCL modules, so wrapping just the source module misses
         # the call sites that use the local binding. We wrap each known
-        # re-export site as well to guarantee the TOOL span is always emitted.
+        # *inference-time* re-export site as well to guarantee the TOOL span
+        # is always emitted under the ENTRY/AGENT/STEP hierarchy.
+        #
+        # Why not multi_turn_checker: that module also re-exports the same
+        # symbol but is invoked by the evaluator, which runs *after* inference
+        # outside of any ENTRY/AGENT/STEP context. Wrapping it produces orphan
+        # TOOL spans rooted at trace level for every ground-truth call replay.
         tool_targets = [
             (_EXECUTE_TOOL_MODULE, _EXECUTE_TOOL_NAME),
             (
                 "bfcl_eval.model_handler.base_handler",
-                _EXECUTE_TOOL_NAME,
-            ),
-            (
-                "bfcl_eval.eval_checker.multi_turn_eval.multi_turn_checker",
                 _EXECUTE_TOOL_NAME,
             ),
         ]
