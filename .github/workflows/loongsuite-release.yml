@@ -1,6 +1,8 @@
 # LoongSuite Release Workflow
 #
-# This workflow handles the complete LoongSuite release process:
+# This workflow handles the complete LoongSuite release process and an optional
+# PyPI dev-bootstrap mode for creating newly added project names before a formal
+# release:
 #
 # 1. Create release/{version} branch from main
 # 2. Build packages (bootstrap_gen.py, PyPI wheels, GitHub Release tar.gz)
@@ -14,11 +16,14 @@
 # run locally for the same workflow.
 #
 # Trigger:
-# - workflow_dispatch: Manual trigger with version inputs
+# - workflow_dispatch: Manual trigger with mode and version inputs
 # - push tags: Automatic trigger on v* tags
 #
 # PyPI / Test PyPI configuration:
-# - Production PyPI: Set PYPI_API_TOKEN secret, or configure OIDC trusted publishing on pypi.org
+# - Production PyPI: Set PYPI_API_TOKEN secret.
+# - OIDC Trusted Publishing can be used instead, but new PyPI project names then
+#   require Pending Publishers configured with workflow=loongsuite-release.yml
+#   and environment=pypi.
 # - Test PyPI: Set TEST_PYPI_TOKEN secret (pypi-xxx from https://test.pypi.org/manage/account/token/)
 # - Use publish_target: testpypi to publish to Test PyPI instead of production
 #
@@ -27,38 +32,58 @@
 #
 name: LoongSuite Release
 
-run-name: "LoongSuite Release ${{ github.event.inputs.loongsuite_version || github.ref_name }}"
+# If this workflow is used with PyPI OIDC Trusted Publishing, Pending Publishers
+# are configured with this workflow filename. Renaming this file breaks those
+# publishers.
+run-name: "LoongSuite ${{ github.event.inputs.mode || 'release' }}"
 
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: 'release: full release; dev-bootstrap-new-projects: publish name-reservation dev wheels for missing PyPI projects'
+        type: choice
+        options:
+          - release
+          - dev-bootstrap-new-projects
+        default: release
       loongsuite_version:
-        description: 'LoongSuite version (e.g., 0.1.0) - for loongsuite-* packages'
+        description: 'LoongSuite release/base version (e.g., 0.6.0). Dev bootstrap derives a unique .dev version.'
         required: true
       upstream_version:
-        description: 'Upstream OTel version (e.g., 0.60b1) - for opentelemetry-* packages in bootstrap_gen.py'
-        required: true
+        description: 'Release mode: upstream OTel version (e.g., 0.60b1). Ignored when mode=dev-bootstrap-new-projects.'
+        required: false
       skip_pypi:
-        description: 'Skip PyPI publish (for testing)'
+        description: 'Release mode only: skip PyPI publish (ignored when mode=dev-bootstrap-new-projects)'
         type: boolean
         default: false
       publish_target:
-        description: 'Publish target: pypi or testpypi'
+        description: 'Release mode only: publish target (ignored when mode=dev-bootstrap-new-projects)'
         type: choice
         options:
           - pypi
           - testpypi
         default: pypi
+      dry_run:
+        description: 'Dev bootstrap only: preview missing PyPI projects without publishing (ignored in release mode)'
+        type: boolean
+        default: true
   push:
     tags:
       - 'v*'
 
+concurrency:
+  group: loongsuite-release-${{ github.event.inputs.mode || 'release' }}
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: '3.11'
+  DEFAULT_UPSTREAM_VERSION: '0.60b1'
 
 jobs:
-  # Build all packages, create release branch, archive changelogs
+  # Release-mode build: create release branch, build packages, and archive changelogs.
   build:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.mode == 'release' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -72,14 +97,17 @@ jobs:
 
       - name: Set versions from tag or input
         id: version
+        env:
+          INPUT_LOONGSUITE_VERSION: ${{ github.event.inputs.loongsuite_version }}
+          INPUT_UPSTREAM_VERSION: ${{ github.event.inputs.upstream_version }}
         run: |
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref_type }}" == "tag" ]]; then
             tag="${GITHUB_REF#refs/tags/}"
             loongsuite_version="${tag#v}"
-            upstream_version="${UPSTREAM_VERSION:-0.60b1}"
+            upstream_version="${INPUT_UPSTREAM_VERSION:-$DEFAULT_UPSTREAM_VERSION}"
           else
-            loongsuite_version="${{ github.event.inputs.loongsuite_version }}"
-            upstream_version="${{ github.event.inputs.upstream_version }}"
+            loongsuite_version="$INPUT_LOONGSUITE_VERSION"
+            upstream_version="$INPUT_UPSTREAM_VERSION"
           fi
 
           if [[ -z "$loongsuite_version" ]]; then
@@ -91,8 +119,8 @@ jobs:
             exit 1
           fi
 
-          echo "loongsuite_version=$loongsuite_version" >> $GITHUB_OUTPUT
-          echo "upstream_version=$upstream_version" >> $GITHUB_OUTPUT
+          echo "loongsuite_version=$loongsuite_version" >> "$GITHUB_OUTPUT"
+          echo "upstream_version=$upstream_version" >> "$GITHUB_OUTPUT"
 
           echo "LoongSuite version: $loongsuite_version"
           echo "Upstream version: $upstream_version"
@@ -107,10 +135,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Run release script
+        env:
+          LOONGSUITE_VERSION: ${{ steps.version.outputs.loongsuite_version }}
+          UPSTREAM_VERSION: ${{ steps.version.outputs.upstream_version }}
         run: |
           ./scripts/loongsuite/loongsuite_release.sh \
-            --loongsuite-version ${{ steps.version.outputs.loongsuite_version }} \
-            --upstream-version ${{ steps.version.outputs.upstream_version }} \
+            --loongsuite-version "$LOONGSUITE_VERSION" \
+            --upstream-version "$UPSTREAM_VERSION" \
             --skip-install \
             --skip-github-release \
             --skip-post-release-pr
@@ -133,18 +164,95 @@ jobs:
             dist/loongsuite-python-agent-*.tar.gz
             dist/release-notes.md
 
+  # Build dev wheels only for LoongSuite distributions whose PyPI projects do not exist yet.
+  dev-bootstrap-build:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'dev-bootstrap-new-projects' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      dev_version: ${{ steps.version.outputs.dev_version }}
+      has_new_projects: ${{ steps.select.outputs.has_new_projects }}
+      missing_distributions: ${{ steps.select.outputs.missing_distributions }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate selected ref
+        run: |
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "ERROR: dev-bootstrap-new-projects must be run from main after the plugin PR is merged."
+            echo "Selected ref: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install build dependencies
+        run: python -m pip install -r pkg-requirements.txt
+
+      - name: Set dev version
+        id: version
+        env:
+          BASE_VERSION: ${{ github.event.inputs.loongsuite_version }}
+        run: |
+          if [[ -z "$BASE_VERSION" ]]; then
+            echo "ERROR: loongsuite_version is required"
+            exit 1
+          fi
+          dev_number=$((GITHUB_RUN_NUMBER * 100 + GITHUB_RUN_ATTEMPT))
+          dev_version="${BASE_VERSION}.dev${dev_number}"
+          echo "dev_version=$dev_version" >> "$GITHUB_OUTPUT"
+          echo "Using dev bootstrap version: $dev_version"
+
+      - name: Build PyPI wheels
+        env:
+          DEV_VERSION: ${{ steps.version.outputs.dev_version }}
+        run: |
+          rm -rf dist dist-pypi
+          mkdir -p dist-pypi
+          # Name-reservation wheels pin LoongSuite packages to this run's dev
+          # version; they are not intended as installable release candidates.
+          python scripts/loongsuite/build_loongsuite_package.py \
+            --build-pypi \
+            --version "$DEV_VERSION" \
+            --util-genai-version "$DEV_VERSION" \
+            --dist-dir dist-pypi
+
+      - name: Keep only missing PyPI projects
+        id: select
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          args=(--dist-dir dist-pypi)
+          if [[ "$DRY_RUN" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          python scripts/loongsuite/select_new_pypi_projects.py "${args[@]}"
+
+      - name: Upload dev PyPI artifacts
+        if: ${{ steps.select.outputs.has_new_projects == 'true' && !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-pypi-packages
+          path: dist-pypi/*.whl
+          if-no-files-found: error
+
   # Publish to production PyPI
   publish-pypi:
     needs: build
     runs-on: ubuntu-latest
     if: |
-      (github.event_name != 'workflow_dispatch' || !inputs.skip_pypi) &&
-      (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_target != 'testpypi')
+      github.event_name != 'workflow_dispatch' ||
+      (
+        github.event.inputs.mode == 'release' &&
+        !inputs.skip_pypi &&
+        github.event.inputs.publish_target != 'testpypi'
+      )
     environment:
       name: pypi
       url: https://pypi.org/project/loongsuite-distro/
-    permissions:
-      id-token: write
     steps:
       - name: Download PyPI artifacts
         uses: actions/download-artifact@v4
@@ -155,13 +263,36 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          username: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+  # Publish dev wheels that create newly added PyPI project names before a formal release.
+  publish-dev-bootstrap-pypi:
+    needs: dev-bootstrap-build
+    runs-on: ubuntu-latest
+    if: ${{ needs.dev-bootstrap-build.outputs.has_new_projects == 'true' && !inputs.dry_run }}
+    environment:
+      name: pypi
+    steps:
+      - name: Download dev PyPI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dev-pypi-packages
+          path: dist/
+
+      - name: Publish dev bootstrap wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          username: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
 
   # Publish to Test PyPI (for testing before production)
   publish-testpypi:
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_pypi && inputs.publish_target == 'testpypi' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'release' && !inputs.skip_pypi && inputs.publish_target == 'testpypi' }}
     steps:
       - name: Download PyPI artifacts
         uses: actions/download-artifact@v4
@@ -181,6 +312,7 @@ jobs:
   github-release:
     needs: build
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.mode == 'release' }}
     permissions:
       contents: write
     steps:
@@ -193,8 +325,8 @@ jobs:
       - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.loongsuite_version }}
         run: |
-          VERSION="${{ needs.build.outputs.loongsuite_version }}"
           gh release create "v${VERSION}" \
             --title "loongsuite-python-agent ${VERSION}" \
             --notes-file dist/release-notes.md \
@@ -204,6 +336,7 @@ jobs:
   post-release-pr:
     needs: build
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.mode == 'release' }}
     permissions:
       contents: write
       pull-requests: write
@@ -225,8 +358,8 @@ jobs:
       - name: Create post-release branch and PR
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.loongsuite_version }}
         run: |
-          VERSION="${{ needs.build.outputs.loongsuite_version }}"
           BRANCH="post-release/${VERSION}"
           TODAY=$(date -u +%Y-%m-%d)
 

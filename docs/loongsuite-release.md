@@ -449,6 +449,7 @@ Dry Run 模式**不会**创建分支、归档 changelog、提交代码或创建 
 1. 进入 GitHub 仓库 → **Actions** → **LoongSuite Release**
 2. 点击 **Run workflow**
 3. 填写参数：
+   - `mode`: `release`
    - `loongsuite_version`: `0.1.0`
    - `upstream_version`: `0.60b1`
    - `skip_pypi`: 测试时可勾选
@@ -456,7 +457,35 @@ Dry Run 模式**不会**创建分支、归档 changelog、提交代码或创建 
 
 CI 工作流会调用同一个脚本完成构建和分支管理，然后在独立 job 中发布 PyPI、创建 GitHub Release，并自动创建 post-release PR 到 main。
 
-#### 方式 3: Tag 触发
+#### 方式 3: 新 PyPI 项目 Dev Bootstrap
+
+当新插件合入 `main` 后，可以先创建正式 PyPI 项目名，避免正式 release 时一次性首次创建过多项目触发 PyPI 限流。
+
+1. 确认新插件目录在 `instrumentation-loongsuite/` 下，且没有被 `loongsuite_pypi_manifest.py` 或 `loongsuite-build-config.json` 跳过。
+2. 确认 GitHub Actions 中的 `PYPI_API_TOKEN` 有权限上传并创建新的 PyPI project。API Token 发布模式不需要为每个新项目提前配置 Pending Publisher；只有改用 OIDC Trusted Publishing 时才需要在 PyPI 为新项目添加 Pending Publisher。
+3. 进入 GitHub 仓库 → **Actions** → **LoongSuite Release** → **Run workflow**，并选择 `main` 分支：
+   - `mode`: `dev-bootstrap-new-projects`
+   - `loongsuite_version`: 下一个正式版本号，例如 `0.6.0`
+   - `upstream_version`: 该模式下不参与发布决策，可留空
+   - `skip_pypi`、`publish_target` 在该模式下不参与发布决策
+   - `dry_run`: 首次建议保持 `true`，只在确认 Actions summary 中的 missing projects 后改为 `false` 再执行上传
+4. 工作流会构建唯一 dev 版本：`<base>.dev<N>`，其中 `N = github.run_number * 100 + github.run_attempt`，因此同一次 workflow rerun 也不会复用版本号。随后查询 `https://pypi.org/pypi/<distribution>/json`，只保留 PyPI 上还不存在的项目对应 wheel；`dry_run=false` 时才上传。
+
+该模式不会创建 release 分支，不会创建 GitHub Release，也不会创建 post-release PR。如果所有 PyPI 项目都已存在，publish job 会自动跳过。这个 dev wheel 只用于预创建正式 PyPI 项目名；因为依赖版本会指向同一个临时 dev 版本，默认不保证 `pip install ==<dev_version>` 可用，正式安装验证仍以后续正式 release 为准。
+
+`publish-dev-bootstrap-pypi` job 仍使用 GitHub Environment `pypi`。如果团队希望上传前有人工确认，请在 GitHub Settings → Environments → `pypi` 中配置 required reviewers；如果不配置 required reviewers，流程上的确认点就是先用默认 `dry_run=true` 查看 Actions summary，再手动重跑并改为 `dry_run=false`。
+
+本地可以先 dry-run 筛选逻辑：
+
+```bash
+rm -rf dist-pypi
+python scripts/loongsuite/build_loongsuite_package.py \
+  --build-pypi --version 0.6.0.dev0 --dist-dir dist-pypi
+python scripts/loongsuite/select_new_pypi_projects.py \
+  --dist-dir dist-pypi --dry-run
+```
+
+#### 方式 4: Tag 触发
 
 ```bash
 git tag v0.1.0
@@ -474,19 +503,21 @@ git push origin v0.1.0
 | GitHub Release | 脚本内 `gh release create`（可 skip） | 独立 job |
 | PyPI publish | 不执行（本地不做） | 独立 job 通过 OIDC/Token |
 | Post-release PR | 脚本内创建 PR（需 `gh` CLI） | 独立 job，自动创建 |
+| 新 PyPI 项目 dev-bootstrap | 不执行 | `mode=dev-bootstrap-new-projects` 独立执行，仅构建和上传缺失项目名的 dev wheel |
 
 #### PyPI / Test PyPI 发布配置
 
-**发布到生产 PyPI（二选一）：**
+**发布到生产 PyPI：**
 
-1. **API Token**：在 GitHub 仓库 Settings → Secrets → Actions 中添加：
-   - `PYPI_API_TOKEN`：从 [pypi.org/manage/account/token/](https://pypi.org/manage/account/token/) 创建
+1. **API Token（当前 workflow 使用）**：在 GitHub 仓库 Settings → Secrets → Actions 中添加：
+   - `PYPI_API_TOKEN`：从 [pypi.org/manage/account/token/](https://pypi.org/manage/account/token/) 创建。使用 API Token 发布时，首次上传新 distribution 会创建对应 PyPI project，不需要 Pending Publisher。
 
-2. **OIDC Trusted Publishing**（推荐）：
+2. **OIDC Trusted Publishing（可选替代方案）**：
    - PyPI 项目设置 → Publishing → Add a new pending publisher
    - Owner: `alibaba`，Repository: `loongsuite-python-agent`
    - Workflow: `loongsuite-release.yml`，Environment: `pypi`
    - 在 GitHub 仓库中创建 Environment `pypi`（Settings → Environments）
+   - 如果用 OIDC 创建新 project，需要为每个新 project 配置 Pending Publisher。
 
 **发布到 Test PyPI（测试用）：**
 
@@ -497,6 +528,7 @@ git push origin v0.1.0
 **重要说明：**
 
 - `dist-pypi/` 中的 `loongsuite_util_genai-*.whl`、`loongsuite_distro-*.whl` 以及 `loongsuite_instrumentation_*.whl`（`instrumentation-loongsuite` 中当前参与 PyPI 构建的插件；`agno` / `mcp` / `dify` 暂排除）会上传到 PyPI；每个新插件首次发布前需在 PyPI 上完成项目/Trusted Publisher 配置
+- 新插件可以先通过 `mode=dev-bootstrap-new-projects` 发布唯一 dev 版本来创建正式 PyPI 项目名；正式 release 后续只上传正式版本
 - `loongsuite-python-agent-*.tar.gz` 仅用于 GitHub Release，**禁止**上传到 PyPI
 
 ### 5.4 Post-Release PR
