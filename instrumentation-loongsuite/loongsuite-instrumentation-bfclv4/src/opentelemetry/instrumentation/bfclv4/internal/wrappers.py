@@ -35,7 +35,7 @@ import os
 import sys
 import time
 from contextvars import ContextVar
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from opentelemetry.instrumentation.bfclv4.internal.attributes import (
     BFCL_NUM_THREADS,
@@ -84,6 +84,8 @@ from opentelemetry.util.genai.extended_types import (
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
+    InputMessage,
+    OutputMessage,
     Text,
 )
 
@@ -171,6 +173,134 @@ def _message_dict(role: str, content: Any) -> dict:
 
 def _system_instruction_dict(content: Any) -> dict:
     return {"type": "text", "content": truncate_text(_safe_str(content))}
+
+
+class _BFCLCapturedError(RuntimeError):
+    """Synthetic exception that surfaces BFCL-captured error strings on spans.
+
+    BFCL's outer ``multi_threaded_inference`` swallows real exceptions and
+    converts them into ``"Error during inference: ..."`` strings; the same
+    happens for tool execution errors. We wrap those strings in this class so
+    that ``span.record_exception`` produces a real exception event with the
+    error message visible to span consumers.
+    """
+
+
+def _record_span_error(
+    span: Any,
+    error_text: str,
+    *,
+    exc_type: type = _BFCLCapturedError,
+    attributes: Optional[Dict[str, Any]] = None,
+) -> None:
+    if span is None:
+        return
+    try:
+        if not span.is_recording():
+            return
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        from opentelemetry.trace import Status, StatusCode
+    except Exception:  # noqa: BLE001
+        return
+    exc = exc_type(error_text)
+    try:
+        span.record_exception(exc, attributes=attributes or None)
+    except Exception:  # noqa: BLE001
+        logger.debug("bfclv4: record_exception failed", exc_info=True)
+    try:
+        span.set_status(Status(StatusCode.ERROR, error_text[:200]))
+    except Exception:  # noqa: BLE001
+        logger.debug("bfclv4: set_status ERROR failed", exc_info=True)
+
+
+def _normalise_role(value: Any, default: str) -> str:
+    if value in (None, "", [], {}):
+        return default
+    role = str(value)
+    return role or default
+
+
+def _normalise_message_dict(item: Any, *, default_role: str) -> Optional[dict]:
+    """Convert a single BFCL message-like value to ``{role, parts:[{type,content}]}``.
+
+    Returns ``None`` for empty values so callers can skip them.
+    """
+    if item in (None, "", [], {}):
+        return None
+    if isinstance(item, dict):
+        role = _normalise_role(item.get("role"), default_role)
+        content = item.get("content")
+        if content in (None, "", [], {}):
+            extras = {
+                k: v
+                for k, v in item.items()
+                if k not in {"role", "name", "tool_call_id"}
+            }
+            content = extras if extras else None
+        if content in (None, "", [], {}):
+            return None
+        text = truncate_text(_safe_str(content))
+        return {"role": role, "parts": [{"type": "text", "content": text}]}
+    text = truncate_text(_safe_str(item))
+    return {"role": default_role, "parts": [{"type": "text", "content": text}]}
+
+
+def _flatten_messages(value: Any, default_role: str = "user") -> List[dict]:
+    """Flatten arbitrary BFCL question/answer structures into a list of message dicts.
+
+    BFCL stores multi-turn questions as ``[[{...}, {...}], [{...}]]`` (list of
+    turns, each turn a list of role/content dicts). Single-turn entries are
+    ``[{...}]`` or even a bare dict/string. We flatten everything one level so
+    each role/content pair becomes its own ``{role, parts:[{type,content}]}``
+    message — avoiding the previous behaviour where the whole nested list was
+    JSON-stringified into a single message's ``content`` field.
+    """
+    messages: List[dict] = []
+    if value in (None, "", [], {}):
+        return messages
+    if isinstance(value, dict):
+        msg = _normalise_message_dict(value, default_role=default_role)
+        if msg is not None:
+            messages.append(msg)
+        return messages
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            messages.extend(_flatten_messages(item, default_role))
+        return messages
+    msg = _normalise_message_dict(value, default_role=default_role)
+    if msg is not None:
+        messages.append(msg)
+    return messages
+
+
+def _messages_to_input(messages: List[dict]) -> List[InputMessage]:
+    result: List[InputMessage] = []
+    for msg in messages:
+        parts = [Text(content=p.get("content", "")) for p in msg.get("parts", [])]
+        if not parts:
+            continue
+        result.append(InputMessage(role=msg.get("role", "user"), parts=parts))
+    return result
+
+
+def _messages_to_output(
+    messages: List[dict], finish_reason: str = "stop"
+) -> List[OutputMessage]:
+    result: List[OutputMessage] = []
+    for msg in messages:
+        parts = [Text(content=p.get("content", "")) for p in msg.get("parts", [])]
+        if not parts:
+            continue
+        result.append(
+            OutputMessage(
+                role=msg.get("role", "assistant"),
+                parts=parts,
+                finish_reason=finish_reason,
+            )
+        )
+    return result
 
 
 def _test_entry_to_messages(test_entry: Any):
@@ -378,10 +508,10 @@ def _normalise_tool_arguments(arguments: Any) -> Any:
 def _extract_questions_from_cases(cases: Any) -> list:
     if not isinstance(cases, (list, tuple)):
         return []
-    messages = []
+    messages: list = []
     for case in cases[:10]:
         if isinstance(case, dict) and case.get("question") is not None:
-            messages.append(_message_dict("user", case.get("question")))
+            messages.extend(_flatten_messages(case.get("question"), "user"))
     return messages
 
 
@@ -600,7 +730,7 @@ class GenerateResultsWrapper:
         entry_inv = EntryInvocation(session_id=session_id)
         entry_input_messages = _extract_questions_from_cases(test_cases_total)
         entry_system_instructions = _extract_tool_defs_from_cases(test_cases_total)
-        entry_inv.input_messages = to_text_input("user", _safe_str(entry_input_messages))
+        entry_inv.input_messages = _messages_to_input(entry_input_messages)
         handler = get_extended_telemetry_handler()
 
         attributes = {GEN_AI_FRAMEWORK: FRAMEWORK_NAME}
@@ -635,7 +765,18 @@ class GenerateResultsWrapper:
                             )
                     _set_json_span_attr(inv.span, GEN_AI_INPUT_MESSAGES_ATTR, entry_input_messages)
                     _set_json_span_attr(inv.span, GEN_AI_SYSTEM_INSTRUCTIONS_ATTR, entry_system_instructions)
-                result = wrapped(*args, **kwargs)
+                try:
+                    result = wrapped(*args, **kwargs)
+                except Exception as exc:
+                    if inv.span is not None and inv.span.is_recording():
+                        try:
+                            inv.span.record_exception(exc)
+                        except Exception:  # noqa: BLE001
+                            logger.debug(
+                                "bfclv4 ENTRY: record_exception failed",
+                                exc_info=True,
+                            )
+                    raise
                 if inv.span is not None and inv.span.is_recording():
                     _set_json_span_attr(
                         inv.span,
@@ -734,24 +875,45 @@ class BaseHandlerInferenceWrapper:
                 # content-capture mode, which makes K8s semantic validation opaque.
                 question = test_entry.get("question")
                 functions = test_entry.get("function")
-                if question is not None:
-                    inv.input_messages = to_text_input(
-                        "user", truncate_text(_safe_str(question))
-                    )
+                input_messages_dicts = _flatten_messages(question, "user")
+                if input_messages_dicts:
+                    inv.input_messages = _messages_to_input(input_messages_dicts)
                 if functions is not None:
-                    inv.system_instruction = to_text_input(
+                    system_inputs = to_text_input(
                         "system", truncate_text(_safe_str(functions))
-                    )[0].parts if to_text_input("system", truncate_text(_safe_str(functions))) else []
+                    )
+                    inv.system_instruction = (
+                        system_inputs[0].parts if system_inputs else []
+                    )
                 if inv.span is not None and inv.span.is_recording():
-                    _set_json_span_attr(inv.span, GEN_AI_INPUT_MESSAGES_ATTR, [_message_dict("user", question)])
-                    _set_json_span_attr(inv.span, GEN_AI_SYSTEM_INSTRUCTIONS_ATTR, [_system_instruction_dict(functions)])
+                    if input_messages_dicts:
+                        _set_json_span_attr(
+                            inv.span,
+                            GEN_AI_INPUT_MESSAGES_ATTR,
+                            input_messages_dicts,
+                        )
+                    if functions is not None:
+                        _set_json_span_attr(
+                            inv.span,
+                            GEN_AI_SYSTEM_INSTRUCTIONS_ATTR,
+                            [_system_instruction_dict(functions)],
+                        )
                 # Run the original inference call.
                 try:
                     result = wrapped(*args, **kwargs)
                 except Exception as exc:
-                    # The CM will mark the span as failed; we leave it to
-                    # the handler/CM to call ``fail_invoke_agent``.
-                    raise exc
+                    # The CM will mark the span as failed; record the
+                    # exception explicitly so the traceback/message is visible
+                    # on the span (util-genai's fail path only sets status).
+                    if inv.span is not None and inv.span.is_recording():
+                        try:
+                            inv.span.record_exception(exc)
+                        except Exception:  # noqa: BLE001
+                            logger.debug(
+                                "bfclv4 AGENT: record_exception failed",
+                                exc_info=True,
+                            )
+                    raise
 
                 # Detect BFCL's own captured error path (no exception raised
                 # but the returned result is the error string).
@@ -767,20 +929,12 @@ class BaseHandlerInferenceWrapper:
                 if (
                     isinstance(result_payload, str)
                     and result_payload.startswith(_BFCL_INFERENCE_ERROR_PREFIX)
-                    and inv.span is not None
-                    and inv.span.is_recording()
                 ):
-                    try:
-                        from opentelemetry.trace import Status, StatusCode
-
-                        inv.span.set_status(
-                            Status(StatusCode.ERROR, result_payload[:200])
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.debug(
-                            "bfclv4 AGENT: failed to set ERROR status",
-                            exc_info=True,
-                        )
+                    _record_span_error(
+                        inv.span,
+                        result_payload,
+                        attributes={"bfcl.error.captured": True},
+                    )
 
                 if isinstance(metadata_payload, dict):
                     input_tokens = _flatten_tokens(
@@ -795,12 +949,22 @@ class BaseHandlerInferenceWrapper:
                         inv.output_tokens = output_tokens
 
                 if result_payload is not None:
-                    inv.output_messages = to_text_output(
-                        "assistant",
-                        truncate_text(_safe_str(result_payload)),
+                    output_messages_dicts = _flatten_messages(
+                        result_payload, "assistant"
+                    )
+                    if not output_messages_dicts:
+                        output_messages_dicts = [
+                            _message_dict("assistant", result_payload)
+                        ]
+                    inv.output_messages = _messages_to_output(
+                        output_messages_dicts
                     )
                     if inv.span is not None and inv.span.is_recording():
-                        _set_json_span_attr(inv.span, GEN_AI_OUTPUT_MESSAGES_ATTR, [_message_dict("assistant", result_payload)])
+                        _set_json_span_attr(
+                            inv.span,
+                            GEN_AI_OUTPUT_MESSAGES_ATTR,
+                            output_messages_dicts,
+                        )
 
                 synthetic_tool_count = _emit_synthetic_tool_spans(
                     result_payload,
@@ -1156,20 +1320,14 @@ class ExecuteFuncCallWrapper:
                         if isinstance(execution_result, str) and execution_result.startswith(
                             "Error during execution:"
                         ):
-                            try:
-                                from opentelemetry.trace import (
-                                    Status,
-                                    StatusCode,
-                                )
-
-                                span.set_status(
-                                    Status(
-                                        StatusCode.ERROR,
-                                        execution_result[:200],
-                                    )
-                                )
-                            except Exception:  # noqa: BLE001
-                                pass
+                            _record_span_error(
+                                span,
+                                execution_result,
+                                attributes={
+                                    "bfcl.tool.error.captured": True,
+                                    BFCL_TOOL_INDEX: index,
+                                },
+                            )
                         # Approximate latency by sleeping the budgeted slice
                         # would distort BFCL execution; we instead rely on
                         # span start/end (currently both wall-clock-now).
