@@ -87,6 +87,10 @@ def test_v0_full_span_tree(instrumented_v0):
     assert e.name == "enter openhands"
     assert e.attributes.get("gen_ai.framework") == "openhands"
     assert e.attributes.get("gen_ai.session.id") == "sid-test"
+    # ENTRY span no longer carries OpenInference input.value/output.value;
+    # the same payload lives on gen_ai.input.messages / gen_ai.output.messages.
+    assert "input.value" not in e.attributes
+    assert "output.value" not in e.attributes
 
     assert a.name.startswith("invoke_agent ")
     assert a.attributes.get("gen_ai.agent.name") == "CodeActAgent"

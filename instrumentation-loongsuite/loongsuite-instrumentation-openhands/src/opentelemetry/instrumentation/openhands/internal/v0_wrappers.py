@@ -36,15 +36,15 @@ correct parent-child links.
 I/O capture
 -----------
 
-ENTRY / STEP spans set:
+STEP spans set:
 
 * ``input.value`` and ``output.value`` (OpenInference convention)
 * ``input.mime_type`` / ``output.mime_type``
 * ``gen_ai.input.messages`` / ``gen_ai.output.messages`` where the GenAI
   semconv applies (LLM-style messages + assistant tool calls)
 
-AGENT spans set GenAI message attributes without OpenInference
-``input.value`` / ``output.value`` mirrors.
+ENTRY and AGENT spans set GenAI message attributes only — they never
+emit OpenInference ``input.value`` / ``output.value`` mirrors.
 
 TOOL spans set ``gen_ai.tool.call.arguments`` (always, including ``"{}"``
 when empty) and ``gen_ai.tool.call.result`` for observations. They do
@@ -624,20 +624,15 @@ class RunControllerWrapper:
         preview = maybe_preview(input_text)
         if preview:
             span.set_attribute(OH_INITIAL_MESSAGE_PREVIEW, preview)
-        captured_input = (
-            maybe_to_json_str({"role": "user", "content": input_text})
-            if input_text
-            else ""
-        )
-        if captured_input:
+        if input_text:
             entry_input_messages = _entry_input_messages_from_initial(
                 initial_user_action
             )
-            _set_io(
-                span,
-                input_value=captured_input,
-                input_messages=entry_input_messages,
-            )
+            if entry_input_messages:
+                _set_io(
+                    span,
+                    input_messages=entry_input_messages,
+                )
 
         ctx = set_span_in_context(span)
         token = otel_context.attach(ctx)
@@ -651,28 +646,20 @@ class RunControllerWrapper:
                 span.set_status(Status(StatusCode.ERROR, type(exc).__qualname__))
                 raise
             try:
-                final_state_repr = _final_state_to_output(result)
                 entry_input_messages, entry_output_messages = _entry_io_from_state(
                     result
                 )
-                if final_state_repr:
+                if entry_input_messages or entry_output_messages:
                     _set_io(
                         span,
-                        output_value=final_state_repr,
                         input_messages=entry_input_messages,
                         output_messages=entry_output_messages,
                     )
-                    agent_state = safe_get_attr(result, "agent_state")
-                    if agent_state is not None:
-                        span.set_attribute(
-                            OH_AGENT_STATE,
-                            safe_get_attr(agent_state, "value") or safe_str(agent_state),
-                        )
-                elif entry_input_messages or entry_output_messages:
-                    _set_io(
-                        span,
-                        input_messages=entry_input_messages,
-                        output_messages=entry_output_messages,
+                agent_state = safe_get_attr(result, "agent_state")
+                if agent_state is not None:
+                    span.set_attribute(
+                        OH_AGENT_STATE,
+                        safe_get_attr(agent_state, "value") or safe_str(agent_state),
                     )
             except Exception:
                 pass
@@ -792,7 +779,6 @@ class RunAgentUntilDoneWrapper:
                 if entry_input_messages:
                     _set_io(
                         fallback_entry_span,
-                        input_value=entry_input_messages,
                         input_messages=entry_input_messages,
                     )
             except Exception:
@@ -966,18 +952,10 @@ class RunAgentUntilDoneWrapper:
             if fallback_entry_span is not None:
                 try:
                     state = safe_get_attr(controller, "state")
-                    output_repr = _final_state_to_output(state)
                     entry_input_messages, entry_output_messages = _entry_io_from_state(
                         state
                     )
-                    if output_repr:
-                        _set_io(
-                            fallback_entry_span,
-                            output_value=output_repr,
-                            input_messages=entry_input_messages,
-                            output_messages=entry_output_messages,
-                        )
-                    elif entry_input_messages or entry_output_messages:
+                    if entry_input_messages or entry_output_messages:
                         _set_io(
                             fallback_entry_span,
                             input_messages=entry_input_messages,
@@ -1992,7 +1970,6 @@ def _open_entry_and_agent_for_controller(
             if entry_input_messages:
                 _set_io(
                     entry,
-                    input_value=entry_input_messages,
                     input_messages=entry_input_messages,
                 )
         except Exception as exc:
@@ -2289,18 +2266,10 @@ def _close_entry_and_agent_for_controller(
             history = safe_get_attr(state, "history") or []
             if isinstance(history, list):
                 entry_span.set_attribute(OH_HISTORY_LENGTH, len(history))
-            output_repr = _final_state_to_output(state)
             entry_input_messages, entry_output_messages = _entry_io_from_state(
                 state
             )
-            if output_repr:
-                _set_io(
-                    entry_span,
-                    output_value=output_repr,
-                    input_messages=entry_input_messages,
-                    output_messages=entry_output_messages,
-                )
-            elif entry_input_messages or entry_output_messages:
+            if entry_input_messages or entry_output_messages:
                 _set_io(
                     entry_span,
                     input_messages=entry_input_messages,

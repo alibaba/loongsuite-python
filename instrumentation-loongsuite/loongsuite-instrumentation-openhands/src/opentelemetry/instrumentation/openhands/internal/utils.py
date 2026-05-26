@@ -81,8 +81,14 @@ def extract_uuid_str(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _to_jsonable(obj: Any, depth: int = 0, max_depth: int = 3) -> Any:
-    """Best-effort convert ``obj`` into something json.dumps can serialize."""
+def _to_jsonable(obj: Any, depth: int = 0, max_depth: int = 8) -> Any:
+    """Best-effort convert ``obj`` into something json.dumps can serialize.
+
+    ``max_depth`` is generous enough to keep the GenAI message schema
+    ``[{role, parts:[{type, ..., arguments:{...}}]}]`` fully expanded —
+    falling through to ``safe_str`` mid-structure produces
+    Python-repr-style single-quoted dict literals that aren't valid JSON.
+    """
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
     if depth >= max_depth:

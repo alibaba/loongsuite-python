@@ -222,12 +222,26 @@ def test_io_attributes_on_entry_agent_step(instrumented_v0):
     assert entry.attributes.get("gen_ai.framework") == "openhands"
     assert entry.attributes.get("gen_ai.system") == "openhands"
     assert entry.attributes.get("gen_ai.session.id") == "io-sid"
-    assert entry.attributes.get("input.value")
-    assert "do the thing" in entry.attributes.get("input.value")
+    # ENTRY no longer mirrors OpenInference input.value/output.value;
+    # the same payload is still available via gen_ai.input.messages.
+    assert "input.value" not in entry.attributes
+    assert "output.value" not in entry.attributes
+    assert entry.attributes.get("gen_ai.input.messages")
+    assert "do the thing" in entry.attributes.get("gen_ai.input.messages")
 
     # AGENT
-    assert agent.attributes.get("gen_ai.input.messages")
-    assert "do the thing" in agent.attributes.get("gen_ai.input.messages")
+    agent_input = agent.attributes.get("gen_ai.input.messages")
+    assert agent_input
+    assert "do the thing" in agent_input
+    # AGENT messages must be valid JSON (not Python repr with single quotes).
+    agent_msgs = json.loads(agent_input)
+    assert isinstance(agent_msgs, list) and agent_msgs
+    for msg in agent_msgs:
+        assert isinstance(msg, dict)
+        for part in msg.get("parts", []):
+            assert isinstance(part, dict), (
+                "AGENT message parts must be JSON objects, not stringified dicts"
+            )
     assert "gen_ai.system_instruction" not in agent.attributes
     assert "input.value" not in agent.attributes
     assert "output.value" not in agent.attributes
