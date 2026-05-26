@@ -60,9 +60,6 @@ _GENERATE_RESULTS_NAME = "generate_results"
 _BASE_HANDLER_MODULE = "bfcl_eval.model_handler.base_handler"
 _BASE_HANDLER_NAME = "BaseHandler.inference"
 
-_EXECUTE_TOOL_MODULE = (
-    "bfcl_eval.eval_checker.multi_turn_eval.multi_turn_utils"
-)
 _EXECUTE_TOOL_NAME = "execute_multi_turn_func_call"
 
 
@@ -156,18 +153,22 @@ class BFCLv4Instrumentor(BaseInstrumentor):
         self._instrument_handlers(helper)
 
         # 5) TOOL ------------------------------------------------------
-        # ``execute_multi_turn_func_call`` is re-exported via ``from ... import``
-        # in several BFCL modules, so wrapping just the source module misses
-        # the call sites that use the local binding. We wrap each known
-        # *inference-time* re-export site as well to guarantee the TOOL span
-        # is always emitted under the ENTRY/AGENT/STEP hierarchy.
+        # ``execute_multi_turn_func_call`` is imported into BFCL modules via
+        # ``from ... import``, which captures whatever the source module
+        # attribute points to at *that* import moment. We deliberately do NOT
+        # wrap the source module ``multi_turn_utils.execute_multi_turn_func_call``
+        # because ``multi_turn_checker.py`` is loaded lazily (only when
+        # ``bfcl evaluate`` runs, *after* our ``_instrument()`` has already
+        # replaced the source attribute) — wrapping the source would cause
+        # checker's local binding to capture our wrapper, producing orphan
+        # TOOL spans during ground-truth replay outside any ENTRY/AGENT/STEP.
         #
-        # Why not multi_turn_checker: that module also re-exports the same
-        # symbol but is invoked by the evaluator, which runs *after* inference
-        # outside of any ENTRY/AGENT/STEP context. Wrapping it produces orphan
-        # TOOL spans rooted at trace level for every ground-truth call replay.
+        # Instead we only wrap the inference-time re-export in ``base_handler``,
+        # which is the sole inference-path caller of the function. Its local
+        # binding was set when base_handler was imported (during step 2's
+        # BaseHandler.inference wrap), so re-wrapping the binding is the only
+        # way to intercept those calls.
         tool_targets = [
-            (_EXECUTE_TOOL_MODULE, _EXECUTE_TOOL_NAME),
             (
                 "bfcl_eval.model_handler.base_handler",
                 _EXECUTE_TOOL_NAME,
