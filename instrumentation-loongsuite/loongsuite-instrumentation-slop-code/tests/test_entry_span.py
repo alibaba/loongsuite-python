@@ -36,7 +36,7 @@ class TestEntrySpan:
         assert len(entry_spans) == 1
 
         span = entry_spans[0]
-        assert span.name == "slop-code.enter"
+        assert span.name == "enter_ai_application_system"
         assert span.attributes["gen_ai.system"] == "slop-code"
         assert span.attributes["gen_ai.operation.name"] == "enter"
         assert span.status.status_code == StatusCode.OK

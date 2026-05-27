@@ -27,15 +27,30 @@ class _EntryWrapper:
         self._tracer = tracer
 
     def __call__(self, wrapped, instance, args, kwargs):
+        attrs = {
+            gen_ai_attributes.GEN_AI_OPERATION_NAME: "enter",
+            gen_ai_attributes.GEN_AI_SYSTEM: SYSTEM_NAME,
+            gen_ai_extended_attributes.GEN_AI_SPAN_KIND: gen_ai_extended_attributes.GenAiSpanKindValues.ENTRY.value,
+            "gen_ai.framework": SYSTEM_NAME,
+        }
+
+        input_parts = []
+        problem_names = kwargs.get("problem_names") or kwargs.get("problem")
+        if problem_names:
+            names = list(problem_names) if not isinstance(problem_names, str) else [problem_names]
+            input_parts.append("problems: " + ", ".join(str(n) for n in names))
+        model_override = kwargs.get("model_override") or kwargs.get("model")
+        if model_override and isinstance(model_override, str):
+            input_parts.append("model: " + model_override)
+        if input_parts:
+            attrs["gen_ai.input.messages"] = genai_messages(
+                [{"role": "user", "content": "; ".join(input_parts)}]
+            )
+
         with self._tracer.start_as_current_span(
             name="enter_ai_application_system",
             kind=SpanKind.INTERNAL,
-            attributes={
-                gen_ai_attributes.GEN_AI_OPERATION_NAME: "enter",
-                gen_ai_attributes.GEN_AI_SYSTEM: SYSTEM_NAME,
-                gen_ai_extended_attributes.GEN_AI_SPAN_KIND: gen_ai_extended_attributes.GenAiSpanKindValues.ENTRY.value,
-                "gen_ai.framework": SYSTEM_NAME,
-            },
+            attributes=attrs,
         ) as span:
             try:
                 result = wrapped(*args, **kwargs)
@@ -64,7 +79,14 @@ class _RunnerEntryWrapper:
             "gen_ai.session.id": str(problem_name),
         }
         # Capture the benchmark problem prompt as the application input when available.
-        task = safe_get(problem, "prompt") or safe_get(problem, "statement") or safe_get(problem, "description")
+        task = (
+            safe_get(problem, "prompt")
+            or safe_get(problem, "statement")
+            or safe_get(problem, "description")
+        )
+        if not task:
+            run_spec = safe_get(instance, "run_spec")
+            task = safe_get(run_spec, "template") if run_spec is not None else None
         if task is not None:
             attrs["gen_ai.input.messages"] = genai_messages([{"role": "user", "content": str(task)}])
 
