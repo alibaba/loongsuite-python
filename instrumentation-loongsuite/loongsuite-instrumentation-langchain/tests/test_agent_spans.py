@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from opentelemetry.instrumentation.langchain.internal._tracer import (
     LoongsuiteTracer,
+    _is_deepagents_subagent_candidate,
     _RunData,
 )
 from opentelemetry.instrumentation.langchain.internal._utils import (
@@ -89,6 +90,91 @@ def test_deepagents_subagent_prefers_current_task_tool_parent(
         context = tracer._get_parent_context(run)
 
     assert get_current_span(context) is tool_span
+
+
+def test_deepagents_task_tool_parent_ignores_non_langgraph_runs(
+    tracer_provider,
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(handler, tracer_provider=tracer_provider)
+    otel_tracer = tracer_provider.get_tracer(__name__)
+
+    with otel_tracer.start_as_current_span("execute_tool task") as tool_span:
+        tool_span.set_attribute("gen_ai.span.kind", "TOOL")
+        tool_span.set_attribute("gen_ai.tool.name", "task")
+        run = _FakeRun(
+            "RetrievalQA",
+            parent_run_id=uuid4(),
+            metadata={
+                "ls_integration": "deepagents",
+                "lc_agent_name": "researcher",
+            },
+        )
+
+        context = tracer._get_parent_context(run)
+
+    assert context is None
+
+
+def test_parentless_chain_does_not_inherit_ambient_context(
+    tracer_provider,
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(handler, tracer_provider=tracer_provider)
+    otel_tracer = tracer_provider.get_tracer(__name__)
+
+    with otel_tracer.start_as_current_span("ambient") as ambient_span:
+        run = _FakeRun("RetrievalQA")
+
+        tracer._on_chain_start(run)
+        try:
+            span = tracer._runs[run.id].span
+            assert span.parent is None
+            assert span.context.trace_id != ambient_span.context.trace_id
+        finally:
+            tracer._on_chain_end(run)
+
+
+def test_parentless_handler_spans_do_not_inherit_ambient_context(
+    tracer_provider,
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(handler, tracer_provider=tracer_provider)
+    otel_tracer = tracer_provider.get_tracer(__name__)
+    cases = (
+        (tracer._handle_llm_start, _FakeRun("ChatOpenAI")),
+        (
+            tracer._start_agent,
+            _FakeRun("AgentExecutor", inputs={"input": "hello"}),
+        ),
+        (tracer._on_tool_start, _FakeRun("search", inputs={"input": "q"})),
+        (
+            tracer._on_retriever_start,
+            _FakeRun("retriever", inputs={"query": "q"}),
+        ),
+    )
+
+    for start, run in cases:
+        with otel_tracer.start_as_current_span("ambient") as ambient_span:
+            start(run)
+            try:
+                span = tracer._runs[run.id].span
+                assert span.parent is None
+                assert span.context.trace_id != ambient_span.context.trace_id
+            finally:
+                tracer._runs.pop(run.id).span.end()
+
+
+def test_deepagents_explicit_subagent_metadata_bypasses_langgraph_name():
+    run = _FakeRun(
+        "CustomAgent",
+        metadata={
+            "ls_integration": "deepagents",
+            "ls_agent_type": "subagent",
+        },
+    )
+
+    assert _is_deepagents_subagent_candidate(run)
 
 
 def test_deepagents_subagent_falls_back_to_active_task_tool_run(

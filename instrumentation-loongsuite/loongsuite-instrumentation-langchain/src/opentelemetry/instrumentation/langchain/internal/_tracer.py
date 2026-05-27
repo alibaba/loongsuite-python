@@ -120,6 +120,7 @@ _GEN_AI_FRAMEWORK_VERSION = "gen_ai.framework.version"
 _GEN_AI_AGENT_NAME = "gen_ai.agent.name"
 _GEN_AI_AGENT_TYPE = "gen_ai.agent.type"
 _GEN_AI_AGENT_DESCRIPTION = "gen_ai.agent.description"
+_LANGGRAPH_RUN_NAME = "LangGraph"
 
 # ---------------------------------------------------------------------------
 # _RunData — per-run bookkeeping
@@ -160,6 +161,11 @@ def _should_capture_chain_content() -> bool:
             exc_info=True,
         )
         return False
+
+
+def _span_start_context(parent_ctx: Context | None) -> Context:
+    """Use an empty context when no LangChain parent was resolved."""
+    return parent_ctx if parent_ctx is not None else Context()
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +332,10 @@ class LoongsuiteTracer(BaseTracer):
             tool_defs = _extract_tool_definitions(run)
             if tool_defs:
                 invocation.tool_definitions = tool_defs
-            self._handler.start_llm(invocation, context=parent_ctx)
+            self._handler.start_llm(
+                invocation,
+                context=_span_start_context(parent_ctx),
+            )
             rd = _RunData(
                 run_kind="llm",
                 span=invocation.span,
@@ -425,7 +434,7 @@ class LoongsuiteTracer(BaseTracer):
         over the generic default.
         """
         name = run.name or ""
-        if not _has_langgraph_react_metadata(run) or name != "LangGraph":
+        if not _has_langgraph_react_metadata(run) or name != _LANGGRAPH_RUN_NAME:
             return name
 
         parent_id = getattr(run, "parent_run_id", None)
@@ -474,7 +483,10 @@ class LoongsuiteTracer(BaseTracer):
             agent_name=agent_name,
             input_messages=input_messages,
         )
-        self._handler.start_invoke_agent(invocation, context=parent_ctx)
+        self._handler.start_invoke_agent(
+            invocation,
+            context=_span_start_context(parent_ctx),
+        )
         _enrich_deepagents_agent_span(invocation.span, run)
         rd = _RunData(
             run_kind="agent",
@@ -494,7 +506,7 @@ class LoongsuiteTracer(BaseTracer):
         span = self._tracer.start_span(
             name=f"chain {run.name}",
             kind=SpanKind.INTERNAL,
-            context=parent_ctx,
+            context=_span_start_context(parent_ctx),
         )
 
         span.set_attribute(GEN_AI_OPERATION_NAME, "chain")
@@ -640,7 +652,10 @@ class LoongsuiteTracer(BaseTracer):
                 tool_call_arguments=input_str,
                 tool_call_id=tool_call_id,
             )
-            self._handler.start_execute_tool(invocation, context=parent_ctx)
+            self._handler.start_execute_tool(
+                invocation,
+                context=_span_start_context(parent_ctx),
+            )
             rd = _RunData(
                 run_kind="tool",
                 span=invocation.span,
@@ -701,7 +716,10 @@ class LoongsuiteTracer(BaseTracer):
             query = inputs.get("query") or ""
 
             invocation = RetrievalInvocation(query=query)
-            self._handler.start_retrieval(invocation, context=parent_ctx)
+            self._handler.start_retrieval(
+                invocation,
+                context=_span_start_context(parent_ctx),
+            )
             rd = _RunData(
                 run_kind="retriever",
                 span=invocation.span,
@@ -877,11 +895,14 @@ def _is_task_tool_span(span: Span | None) -> bool:
 
 
 def _is_deepagents_subagent_candidate(run: Run) -> bool:
+    """Detect deepagents subagent roots, preserving explicit metadata first."""
     metadata = getattr(run, "metadata", None) or {}
     if not isinstance(metadata, Mapping):
         return False
     if metadata.get("ls_agent_type") == "subagent":
         return True
+    if getattr(run, "name", None) != _LANGGRAPH_RUN_NAME:
+        return False
     return (
         metadata.get("ls_integration") == "deepagents"
         and _is_task_tool_span(get_current_span())
