@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
 
 
@@ -17,4 +18,8 @@ OTEL_MINISWEAGENT_TASK_PREVIEW_MAX_LEN = _int_env(
 )
 OTEL_MINISWEAGENT_COMMAND_PREVIEW_MAX_LEN = _int_env(
     "OTEL_MINISWEAGENT_COMMAND_PREVIEW_MAX_LEN", "256"
+)
+
+ENTRY_SPAN_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_minisweagent_entry_active", default=False
 )

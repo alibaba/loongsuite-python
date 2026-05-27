@@ -8,6 +8,7 @@ from typing import Any
 
 from opentelemetry import context as context_api
 
+from opentelemetry.instrumentation.minisweagent.config import ENTRY_SPAN_ACTIVE
 from opentelemetry.instrumentation.minisweagent.internal.conversation import (
     apply_payload_to_entry_invocation,
     try_fill_entry_payload_from_mini_trajectory,
@@ -42,6 +43,7 @@ class _MiniTyperAppProxy:
 
         han = get_extended_telemetry_handler()
         entry_inv = EntryInvocation()
+        token = ENTRY_SPAN_ACTIVE.set(True)
         han.start_entry(entry_inv, context=context_api.get_current())
         try:
             result = self._inner(*args, **kwargs)
@@ -53,11 +55,11 @@ class _MiniTyperAppProxy:
             )
             raise
         except BaseException:
-            # Typer/Click commonly exits by raising SystemExit after the command
-            # callback has completed; the trajectory file is available here.
             self._hydrate_entry(entry_inv)
             han.stop_entry(entry_inv)
             raise
+        finally:
+            ENTRY_SPAN_ACTIVE.reset(token)
 
         self._hydrate_entry(entry_inv)
         han.stop_entry(entry_inv)
