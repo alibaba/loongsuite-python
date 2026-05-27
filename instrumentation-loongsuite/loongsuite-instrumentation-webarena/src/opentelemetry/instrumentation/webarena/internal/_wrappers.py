@@ -31,6 +31,7 @@ round.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from typing import Any, Callable
 
@@ -112,6 +113,70 @@ def _set_common_attrs(span: trace_api.Span, kind: str) -> None:
     span.set_attribute(GEN_AI_SPAN_KIND, kind)
     span.set_attribute(GEN_AI_FRAMEWORK, FRAMEWORK_NAME)
 
+
+def _json_dumps(value: Any) -> str:
+    """JSON-encode with best-effort fallback."""
+    try:
+        return json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        return str(value)
+
+
+# WebArena browser action types as tool definitions for gen_ai.tool.definitions
+_BROWSER_TOOL_DEFINITIONS = [
+    {"type": "function", "name": "click", "description": "Click on a web element by ID"},
+    {"type": "function", "name": "type", "description": "Type text into a web element"},
+    {"type": "function", "name": "hover", "description": "Hover over a web element"},
+    {"type": "function", "name": "scroll", "description": "Scroll the page up or down"},
+    {"type": "function", "name": "goto", "description": "Navigate to a URL"},
+    {"type": "function", "name": "go_back", "description": "Go back to the previous page"},
+    {"type": "function", "name": "go_forward", "description": "Go forward to the next page"},
+    {"type": "function", "name": "stop", "description": "Stop and return the answer"},
+]
+
+
+def _set_agent_content_attrs(
+    span: trace_api.Span,
+    instance: Any,
+    intent: str | None,
+    meta_data: dict[str, Any],
+) -> None:
+    """Set gen_ai.input.messages, gen_ai.system_instructions, gen_ai.tool.definitions on AGENT span."""
+    try:
+        # gen_ai.system_instructions — from PromptConstructor.instruction["intro"]
+        pc = getattr(instance, "prompt_constructor", None)
+        if pc is not None:
+            instruction = getattr(pc, "instruction", None)
+            if isinstance(instruction, dict):
+                intro = instruction.get("intro", "")
+                if intro:
+                    span.set_attribute(
+                        "gen_ai.system_instructions",
+                        _json_dumps([{"type": "text", "content": truncate_content(str(intro))}]),
+                    )
+
+        # gen_ai.input.messages — intent as user message
+        if intent:
+            previous = "None"
+            history = meta_data.get("action_history") if meta_data else None
+            if isinstance(history, list) and history:
+                previous = str(history[-1])
+            input_content = f"Task: {intent}\nPrevious action: {previous}"
+            span.set_attribute(
+                "gen_ai.input.messages",
+                _json_dumps([{
+                    "role": "user",
+                    "parts": [{"type": "text", "content": truncate_content(input_content)}],
+                }]),
+            )
+
+        # gen_ai.tool.definitions — browser action types
+        span.set_attribute(
+            "gen_ai.tool.definitions",
+            _json_dumps(_BROWSER_TOOL_DEFINITIONS),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +420,10 @@ class NextActionWrapper:
                     previous = str(history[-1])
             span.set_attribute(WEBARENA_PREVIOUS_ACTION, truncate(previous))
 
-            if intent and capture_message_content():
-                span.set_attribute("input.value", truncate_content(intent))
+            if capture_message_content():
+                if intent:
+                    span.set_attribute("input.value", truncate_content(intent))
+                _set_agent_content_attrs(span, instance, intent, meta_data)
 
             try:
                 action = wrapped(*args, **kwargs)
@@ -366,7 +433,6 @@ class NextActionWrapper:
                 span.set_attribute(
                     GEN_AI_REACT_FINISH_REASON, type(exc).__qualname__
                 )
-                # Tag STEP too, so the failing round is easy to spot.
                 step_span = state.get_step_span()
                 if step_span is not None:
                     try:
@@ -385,13 +451,21 @@ class NextActionWrapper:
             raw_pred = (
                 action.get("raw_prediction") if isinstance(action, dict) else None
             )
-            if raw_pred and capture_message_content():
-                span.set_attribute(
-                    "output.value", truncate_content(str(raw_pred))
-                )
+            if capture_message_content():
+                if raw_pred:
+                    span.set_attribute(
+                        "output.value", truncate_content(str(raw_pred))
+                    )
+                    span.set_attribute(
+                        "gen_ai.output.messages",
+                        _json_dumps([{
+                            "role": "assistant",
+                            "parts": [{"type": "text", "content": truncate_content(str(raw_pred))}],
+                            "finish_reason": "stop" if atype == "STOP" else "action",
+                        }]),
+                    )
 
             if atype == "NONE":
-                # PromptAgent fell through every retry of action parsing.
                 state.increment_parsing_failure()
 
             step_span = state.get_step_span()
@@ -481,6 +555,7 @@ class PromptConstructWrapper:
                 span.set_attribute(
                     "input.value", safe_json_dumps(input_summary)
                 )
+                span.set_attribute("input.mime_type", "application/json")
 
             try:
                 prompt = wrapped(*args, **kwargs)
@@ -522,6 +597,7 @@ class PromptConstructWrapper:
                 span.set_attribute(
                     "output.value", messages_to_input_value(prompt)
                 )
+                span.set_attribute("output.mime_type", "application/json")
             return prompt
 
 
@@ -717,6 +793,29 @@ class ConstructAgentWrapper:
             obs_type = getattr(ns_args, "observation_type", None)
             if obs_type:
                 span.set_attribute(WEBARENA_OBSERVATION_TYPE, str(obs_type))
+
+            if capture_message_content():
+                # gen_ai.system_instructions from instruction file
+                try:
+                    if instr_path:
+                        import pathlib  # noqa: PLC0415
+                        p = pathlib.Path(instr_path)
+                        if p.exists():
+                            with open(p, "r", encoding="utf-8") as f:
+                                instr_data = json.load(f)
+                            intro = instr_data.get("intro", "")
+                            if intro:
+                                span.set_attribute(
+                                    "gen_ai.system_instructions",
+                                    _json_dumps([{"type": "text", "content": truncate_content(str(intro))}]),
+                                )
+                except Exception:  # noqa: BLE001
+                    pass
+                # gen_ai.tool.definitions
+                span.set_attribute(
+                    "gen_ai.tool.definitions",
+                    _json_dumps(_BROWSER_TOOL_DEFINITIONS),
+                )
 
             try:
                 result = wrapped(*args, **kwargs)

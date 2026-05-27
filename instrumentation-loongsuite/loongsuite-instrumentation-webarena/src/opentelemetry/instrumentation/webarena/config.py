@@ -34,7 +34,12 @@ def capture_message_content() -> bool:
     """Whether to record prompt / completion / tool argument bodies.
 
     Honours the standard semantic-conventions opt-in flag.
+    Accepts SPAN_ONLY / SPAN_AND_EVENT / EVENT_ONLY as truthy values.
     """
-    return _bool_env(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", False
-    )
+    val = os.getenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT")
+    if val is None:
+        return False
+    return val.strip().upper() in {
+        "TRUE", "1", "YES", "ON",
+        "SPAN_ONLY", "SPAN_AND_EVENT", "EVENT_ONLY",
+    }
