@@ -271,3 +271,62 @@ def test_bool_env_parsing():
     # Not set — use default
     assert _bool_env("UNSET_TEST_VAR_XYZ", True) is True
     assert _bool_env("UNSET_TEST_VAR_XYZ", False) is False
+
+
+# ---------------------------------------------------------------------------
+# Instrument disabled — patch the module-level binding
+# Covers: __init__.py lines 152-154
+# ---------------------------------------------------------------------------
+
+
+def test_instrument_disabled_via_module_patch(tracer_provider):
+    """Patch the module-level OTEL_INSTRUMENTATION_OPENHANDS_ENABLED to False."""
+    import opentelemetry.instrumentation.openhands as oh_mod
+    from opentelemetry.instrumentation.openhands import OpenHandsInstrumentor
+
+    original = oh_mod.OTEL_INSTRUMENTATION_OPENHANDS_ENABLED
+    oh_mod.OTEL_INSTRUMENTATION_OPENHANDS_ENABLED = False
+    try:
+        inst = OpenHandsInstrumentor()
+        inst.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        # Should be a no-op — no wrapping applied
+    finally:
+        oh_mod.OTEL_INSTRUMENTATION_OPENHANDS_ENABLED = original
+        try:
+            inst.uninstrument()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# _safe_unwrap — setattr failure
+# Covers: __init__.py lines 141-142
+# ---------------------------------------------------------------------------
+
+
+def test_safe_unwrap_setattr_error():
+    """When setattr on the parent fails, _safe_unwrap swallows the error."""
+    from opentelemetry.instrumentation.openhands import _safe_unwrap
+
+    mod_name = "_test_safe_unwrap_setattr_err"
+    mod = types.ModuleType(mod_name)
+
+    original_fn = lambda: None  # noqa: E731
+    wrapped_fn = lambda: None  # noqa: E731
+    wrapped_fn.__wrapped__ = original_fn
+
+    class ReadOnlyContainer:
+        """A container where setattr raises."""
+        func = wrapped_fn
+
+        def __setattr__(self, name, value):
+            raise AttributeError("read-only")
+
+    container = ReadOnlyContainer()
+    mod.container = container  # type: ignore[attr-defined]
+    sys.modules[mod_name] = mod
+    try:
+        # Should not raise despite setattr failure
+        _safe_unwrap(mod_name, "container.func")
+    finally:
+        del sys.modules[mod_name]

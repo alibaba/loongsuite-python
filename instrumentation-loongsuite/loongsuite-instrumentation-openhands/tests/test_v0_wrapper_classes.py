@@ -3173,3 +3173,812 @@ def test_extract_model_config_llms_broken_model():
         llm = type("LLM", (), {"model": "rescue"})()
 
     assert _extract_model_from_config(Config()) == "rescue"
+
+
+# ---------------------------------------------------------------------------
+# _action_event_to_parts — invalid JSON in arguments
+# Covers: lines 396-397
+# ---------------------------------------------------------------------------
+
+
+def test_action_event_to_parts_invalid_json_args():
+    """When tool_call arguments is invalid JSON string, falls back to {"raw": ...}."""
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _action_event_to_parts,
+    )
+
+    class _Fn:
+        def __init__(self):
+            self.name = "execute_bash"
+            self.arguments = "not-valid-json{{{{"
+
+    class _TC:
+        def __init__(self):
+            self.id = "tc1"
+            self.function = _Fn()
+
+    class _Msg:
+        def __init__(self):
+            self.tool_calls = [_TC()]
+
+    class _Choice:
+        def __init__(self):
+            self.message = _Msg()
+
+    class _ModelResp:
+        def __init__(self):
+            self.choices = [_Choice()]
+
+    class _TCM:
+        function_name = "execute_bash"
+        tool_call_id = "tc1"
+        model_response = _ModelResp()
+
+    class _Event:
+        thought = "thinking"
+        action = "run"
+        tool_call_metadata = _TCM()
+
+    parts = _action_event_to_parts(_Event())
+    # Should have text part + tool_call part
+    assert len(parts) >= 2
+    tool_call_part = [p for p in parts if p.get("type") == "tool_call"][0]
+    # arguments should contain {"raw": "not-valid-json{{{{"} since JSON parse failed
+    assert "raw" in tool_call_part["arguments"]
+    assert "not-valid-json" in tool_call_part["arguments"]["raw"]
+
+
+# ---------------------------------------------------------------------------
+# _action_event_to_parts — message with no tool_calls
+# Covers: line 372 (continue)
+# ---------------------------------------------------------------------------
+
+
+def test_action_event_to_parts_no_tool_calls_in_choice():
+    """When choice message has no tool_calls, the loop continues."""
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _action_event_to_parts,
+    )
+
+    class _Msg:
+        def __init__(self):
+            self.tool_calls = None  # No tool_calls
+
+    class _Choice:
+        def __init__(self):
+            self.message = _Msg()
+
+    class _ModelResp:
+        def __init__(self):
+            self.choices = [_Choice()]
+
+    class _TCM:
+        function_name = "bash"
+        tool_call_id = "tc1"
+        model_response = _ModelResp()
+
+    class _Event:
+        thought = None
+        action = "run"
+        tool_call_metadata = _TCM()
+        command = "ls"
+
+    parts = _action_event_to_parts(_Event())
+    # Should still produce a tool_call part from fallback (command field)
+    assert len(parts) >= 1
+    tool_parts = [p for p in parts if p.get("type") == "tool_call"]
+    assert len(tool_parts) >= 1
+    # Should have used the fallback args from event attributes
+    assert tool_parts[0]["arguments"].get("command") == "ls"
+
+
+# ---------------------------------------------------------------------------
+# _tool_call_arguments — model_response with no tool_calls
+# Covers: lines 1764-1765
+# ---------------------------------------------------------------------------
+
+
+def test_tool_call_arguments_no_tool_calls_in_model_response():
+    """When model_response choices have no tool_calls, falls back to action fields."""
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _tool_call_arguments,
+    )
+
+    class _Msg:
+        tool_calls = None
+
+    class _Choice:
+        message = _Msg()
+
+    class _ModelResp:
+        choices = [_Choice()]
+
+    class _TCM:
+        arguments = None
+        tool_call_id = "tc1"
+        model_response = _ModelResp()
+        function_name = "bash"
+
+    class _Action:
+        tool_call_metadata = _TCM()
+        action = "run"
+        command = "ls -la"
+        code = None
+        path = None
+        url = None
+        content = None
+        task_list = None
+        old_str = None
+        new_str = None
+        file_text = None
+
+    result = _tool_call_arguments(_Action())
+    # Falls back to harvesting fields from the action
+    assert result.get("command") == "ls -la"
+
+
+# ---------------------------------------------------------------------------
+# _extract_model_from_config — llm fallback also raises
+# Covers: lines 205-206
+# ---------------------------------------------------------------------------
+
+
+def test_extract_model_config_llm_fallback_also_raises():
+    """When both llms and llm paths raise, returns empty string."""
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _extract_model_from_config,
+    )
+
+    class Config:
+        @property
+        def llms(self):
+            raise RuntimeError("llms broken")
+
+        @property
+        def llm(self):
+            raise RuntimeError("llm broken")
+
+    assert _extract_model_from_config(Config()) == ""
+
+
+# ---------------------------------------------------------------------------
+# _coerce_tool_arguments — invalid JSON string
+# Covers: lines in _coerce_tool_arguments
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_tool_arguments_invalid_json():
+    """Invalid JSON string → {"raw": string}."""
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _coerce_tool_arguments,
+    )
+
+    result = _coerce_tool_arguments("not{valid}json")
+    assert result == {"raw": "not{valid}json"}
+
+
+def test_coerce_tool_arguments_json_non_dict():
+    """Valid JSON that parses to non-dict → {"value": parsed}."""
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _coerce_tool_arguments,
+    )
+
+    result = _coerce_tool_arguments("[1, 2, 3]")
+    assert result == {"value": [1, 2, 3]}
+
+
+def test_coerce_tool_arguments_non_string_non_dict():
+    """Non-string non-dict value → {"value": value}."""
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _coerce_tool_arguments,
+    )
+
+    result = _coerce_tool_arguments(42)
+    assert result == {"value": 42}
+
+
+# ---------------------------------------------------------------------------
+# _observation_to_result — various observation fields
+# Covers: lines in _observation_to_result
+# ---------------------------------------------------------------------------
+
+
+def test_observation_to_result_none():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _observation_to_result,
+    )
+    assert _observation_to_result(None) == {}
+
+
+def test_observation_to_result_with_fields():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _observation_to_result,
+    )
+
+    class Obs:
+        content = "output text"
+        exit_code = 0
+        error = None
+        interpreter_details = None
+        command = "ls"
+        stdout = None
+        stderr = None
+        url = None
+        screenshot = None
+        outputs = None
+
+    result = _observation_to_result(Obs())
+    assert result["content"] == "output text"
+    assert result["exit_code"] == 0
+    assert result["command"] == "ls"
+    assert "error" not in result
+
+
+# ---------------------------------------------------------------------------
+# _is_real_tool_call — internal action types
+# Covers: _is_real_tool_call paths
+# ---------------------------------------------------------------------------
+
+
+def test_is_real_tool_call_internal():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _is_real_tool_call,
+    )
+
+    class MsgAction:
+        action = "message"
+        tool_call_metadata = type("TCM", (), {"function_name": "test"})()
+
+    # Internal action with tool_call_metadata should still be dropped
+    assert _is_real_tool_call(MsgAction()) is False
+
+
+def test_is_real_tool_call_no_action_type():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _is_real_tool_call,
+    )
+
+    class NoAction:
+        action = None
+        tool_call_metadata = None
+
+    assert _is_real_tool_call(NoAction()) is False
+
+
+def test_is_real_tool_call_unknown_type_without_tcm():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _is_real_tool_call,
+    )
+
+    class UnknownAction:
+        action = "custom_action_xyz"
+        tool_call_metadata = None
+
+    # Not in INTERNAL or TOOL_KIND_TO_NAME → False
+    assert _is_real_tool_call(UnknownAction()) is False
+
+
+def test_is_real_tool_call_with_tool_call_metadata():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _is_real_tool_call,
+    )
+
+    class RealAction:
+        action = "custom_xyz"
+        tool_call_metadata = type("TCM", (), {"function_name": "test"})()
+
+    assert _is_real_tool_call(RealAction()) is True
+
+
+# ---------------------------------------------------------------------------
+# _action_type_value — enum-like and prefix stripping
+# Covers: _action_type_value paths
+# ---------------------------------------------------------------------------
+
+
+def test_action_type_value_enum_like():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _action_type_value,
+    )
+
+    class EnumLike:
+        value = "run"
+
+    class Action:
+        action = EnumLike()
+
+    assert _action_type_value(Action()) == "run"
+
+
+def test_action_type_value_actiontype_prefix():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _action_type_value,
+    )
+
+    class Action:
+        action = "ActionType.MESSAGE"
+
+    assert _action_type_value(Action()) == "message"
+
+
+def test_action_type_value_none():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _action_type_value,
+    )
+
+    class Action:
+        action = None
+
+    assert _action_type_value(Action()) == ""
+
+
+# ---------------------------------------------------------------------------
+# _first_preview_field — coverage for various fields
+# Covers: _first_preview_field paths
+# ---------------------------------------------------------------------------
+
+
+def test_first_preview_field_command():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _first_preview_field,
+    )
+
+    class Action:
+        command = "echo hello"
+        code = None
+        path = None
+        url = None
+        content = None
+
+    field, text = _first_preview_field(Action())
+    assert field == "command"
+    assert text == "echo hello"
+
+
+def test_first_preview_field_code():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _first_preview_field,
+    )
+
+    class Action:
+        command = None
+        code = "print('hi')"
+        path = None
+        url = None
+        content = None
+
+    field, text = _first_preview_field(Action())
+    assert field == "code"
+    assert text == "print('hi')"
+
+
+def test_first_preview_field_none():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _first_preview_field,
+    )
+
+    class Action:
+        command = None
+        code = None
+        path = None
+        url = None
+        content = None
+
+    result = _first_preview_field(Action())
+    assert result == ("", "")
+
+
+# ---------------------------------------------------------------------------
+# _final_state_to_output — various state fields
+# Covers: _final_state_to_output paths
+# ---------------------------------------------------------------------------
+
+
+def test_final_state_to_output_with_agent_finish():
+    import json
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _final_state_to_output,
+    )
+
+    class AgentFinishAction:
+        final_thought = "I'm done"
+        thought = "thought"
+        outputs = {"result": "success"}
+
+    class AgentState:
+        value = "finished"
+
+    class State:
+        agent_state = AgentState()
+        last_error = None
+        iteration = 5
+        history = [AgentFinishAction()]
+
+    result = _final_state_to_output(State())
+    parsed = json.loads(result)
+    assert parsed["agent_state"] == "finished"
+    assert parsed["iteration"] == "5"
+    assert "final_thought" in parsed
+    assert parsed["history_length"] == 1
+
+
+def test_final_state_to_output_with_error():
+    import json
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _final_state_to_output,
+    )
+
+    class AgentState:
+        value = "error"
+
+    class State:
+        agent_state = AgentState()
+        last_error = "something went wrong"
+        iteration = None
+        history = []
+
+    result = _final_state_to_output(State())
+    parsed = json.loads(result)
+    assert parsed["agent_state"] == "error"
+    assert parsed["last_error"] == "something went wrong"
+
+
+def test_final_state_to_output_none():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _final_state_to_output,
+    )
+    assert _final_state_to_output(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# _state_to_input_messages — various event types
+# Covers: _state_to_input_messages paths
+# ---------------------------------------------------------------------------
+
+
+def test_state_to_input_messages_observation_events():
+    import json
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _state_to_input_messages,
+    )
+
+    class CmdOutputObservation:
+        content = "output data"
+
+    class SomeAction:
+        thought = "doing stuff"
+        command = None
+        code = None
+
+    class State:
+        history = [SomeAction(), CmdOutputObservation()]
+
+    result = _state_to_input_messages(State())
+    parsed = json.loads(result)
+    assert len(parsed) == 2
+    assert parsed[0]["role"] == "assistant"
+    assert parsed[1]["role"] == "tool"
+
+
+def test_state_to_input_messages_message_action():
+    import json
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _state_to_input_messages,
+    )
+
+    class MessageAction:
+        source = "user"
+        content = "hello"
+        message = None
+
+    class State:
+        history = [MessageAction()]
+
+    result = _state_to_input_messages(State())
+    parsed = json.loads(result)
+    assert parsed[0]["role"] == "user"
+    assert parsed[0]["content"] == "hello"
+
+
+def test_state_to_input_messages_non_list():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _state_to_input_messages,
+    )
+
+    class State:
+        history = "not a list"
+
+    assert _state_to_input_messages(State()) == ""
+
+
+# ---------------------------------------------------------------------------
+# _agent_to_system_instructions — various paths
+# Covers: _agent_to_system_instructions callable path
+# ---------------------------------------------------------------------------
+
+
+def test_agent_to_system_instructions_via_method():
+    import json
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _agent_to_system_instructions,
+    )
+
+    class SystemMsg:
+        content = "You are a helpful assistant."
+
+    class Agent:
+        def get_system_message(self):
+            return SystemMsg()
+
+    class State:
+        history = []
+
+    result = _agent_to_system_instructions(Agent(), State())
+    assert len(result) == 1
+    assert result[0]["content"] == "You are a helpful assistant."
+
+
+def test_agent_to_system_instructions_via_history():
+    import json
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _agent_to_system_instructions,
+    )
+
+    class SystemMessageAction:
+        content = "System prompt from history"
+
+    class Agent:
+        pass
+
+    class State:
+        history = [SystemMessageAction()]
+
+    result = _agent_to_system_instructions(Agent(), State())
+    assert len(result) == 1
+    assert result[0]["content"] == "System prompt from history"
+
+
+# ---------------------------------------------------------------------------
+# Step wrapper - agent_ctx fallback from session context
+# Covers: line 1153
+# ---------------------------------------------------------------------------
+
+
+def test_step_agent_ctx_fallback_from_session(instrumented):
+    """When AGENT ctx attr is None but session has context, use session context."""
+    inst, exporter = instrumented
+    import openhands.controller.agent_controller as ctrl_mod
+    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    ctrl = ctrl_mod.AgentController(sid="ctx-fallback-sid")
+    # Ensure warmup consumed so next step creates new span
+    ctrl._otel_oh_step_consumed = True
+    # Clear the agent ctx attr but keep session context
+    agent_ctx = ctrl._otel_oh_agent_ctx
+    ctrl._otel_oh_agent_ctx = None
+    # Session context should still be available
+    session_context.store_context("ctx-fallback-sid", agent_ctx)
+
+    async def _go():
+        await ctrl._step()
+        await ctrl.close()
+
+    asyncio.run(_go())
+
+    steps = _spans_by_kind(exporter, "STEP")
+    assert len(steps) >= 2  # warmup + real
+
+
+# ---------------------------------------------------------------------------
+# _observation_event_to_parts
+# Covers: _observation_event_to_parts paths
+# ---------------------------------------------------------------------------
+
+
+def test_observation_event_to_parts_basic():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _observation_event_to_parts,
+    )
+
+    class CmdOutputObservation:
+        content = "hello world"
+        exit_code = 0
+        tool_call_metadata = None
+
+    parts = _observation_event_to_parts(CmdOutputObservation())
+    assert len(parts) >= 1
+    assert parts[0]["type"] == "tool_call_response"
+
+
+def test_observation_event_to_parts_with_tcm():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _observation_event_to_parts,
+    )
+
+    class _TCM:
+        tool_call_id = "tc-123"
+        function_name = "bash"
+
+    class CmdOutputObservation:
+        content = "output"
+        exit_code = 0
+        tool_call_metadata = _TCM()
+
+    parts = _observation_event_to_parts(CmdOutputObservation())
+    assert len(parts) >= 1
+    assert parts[0].get("id") == "tc-123"
+
+
+# ---------------------------------------------------------------------------
+# _history_to_input_messages_schema — SystemMessageAction is skipped
+# ---------------------------------------------------------------------------
+
+
+def test_history_to_input_messages_schema_system_msg_skipped():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _history_to_input_messages_schema,
+    )
+
+    class SystemMessageAction:
+        content = "system prompt"
+        source = "system"
+
+    class MessageAction:
+        source = "user"
+        content = "hello"
+
+    history = [SystemMessageAction(), MessageAction()]
+    result = _history_to_input_messages_schema(history)
+    # SystemMessageAction should be skipped
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+
+
+# ---------------------------------------------------------------------------
+# _history_to_input_messages_schema — consecutive same-role folding
+# ---------------------------------------------------------------------------
+
+
+def test_history_to_input_messages_schema_folding():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _history_to_input_messages_schema,
+    )
+
+    # Class names must end with "Action" for the code to detect them properly
+    CmdRunAction = type("CmdRunAction", (), {
+        "thought": "first thought",
+        "action": "run",
+        "tool_call_metadata": None,
+    })
+    CmdRunActionSecond = type("CmdRunAction", (), {
+        "thought": "second thought",
+        "action": "run",
+        "tool_call_metadata": None,
+    })
+
+    history = [CmdRunAction(), CmdRunActionSecond()]
+    result = _history_to_input_messages_schema(history)
+    # Both are assistant role, should be folded into one message with 2 parts
+    assert len(result) == 1
+    assert result[0]["role"] == "assistant"
+    assert len(result[0]["parts"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# _history_to_output_messages_schema — AgentFinishAction
+# ---------------------------------------------------------------------------
+
+
+def test_history_to_output_messages_schema_agent_finish():
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _history_to_output_messages_schema,
+    )
+
+    class AgentFinishAction:
+        final_thought = "All done"
+        thought = "wrapping up"
+        outputs = {"result": "success"}
+        action = "finish"
+
+    result = _history_to_output_messages_schema([AgentFinishAction()])
+    assert len(result) == 1
+    assert result[0]["role"] == "assistant"
+    assert result[0]["finish_reason"] == "stop"
+    parts = result[0]["parts"]
+    assert any("All done" in p.get("content", "") for p in parts)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle init with populated history
+# Covers: lines 1970-1974 (entry input messages in _open_entry_and_agent)
+# ---------------------------------------------------------------------------
+
+
+def test_init_wrapper_with_populated_history(instrumented):
+    """Init wrapper with state.history populated → entry_input_messages set."""
+    inst, exporter = instrumented
+    import openhands.controller.agent_controller as ctrl_mod
+
+    # Pre-populate history before creating controller
+    class MessageAction:
+        source = "user"
+        content = "solve this problem"
+        message = None
+
+    ctrl = ctrl_mod.AgentController(sid="pop-hist-sid")
+    # Add history items after init (simulating pre-populated state)
+    ctrl.state.history.append(MessageAction())
+
+    async def _go():
+        # Do a step to trigger the step wrapper which accesses state
+        await ctrl._step()
+        await ctrl.close()
+
+    asyncio.run(_go())
+
+    entries = _spans_by_kind(exporter, "ENTRY")
+    assert len(entries) >= 1
+    steps = _spans_by_kind(exporter, "STEP")
+    assert len(steps) >= 1
+
+
+# ---------------------------------------------------------------------------
+# _open_entry_and_agent_for_controller with history → entry_input_messages
+# Covers: lines 1970-1974
+# ---------------------------------------------------------------------------
+
+
+def test_open_entry_agent_with_history():
+    """When called directly with populated history, entry_input_messages is set."""
+    from opentelemetry.sdk.trace import TracerProvider as _TP
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SSP
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter as _IME,
+    )
+
+    from opentelemetry.instrumentation.openhands.internal import session_context
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _close_entry_and_agent_for_controller,
+        _open_entry_and_agent_for_controller,
+    )
+
+    session_context.clear_all()
+    prov = _TP()
+    exp = _IME()
+    prov.add_span_processor(_SSP(exp))
+    tracer = prov.get_tracer("test")
+
+    # Build controller with a populated history containing user message
+    MessageAction = type("MessageAction", (), {
+        "source": "user",
+        "content": "hello world",
+        "message": None,
+    })
+
+    ctrl = type("Ctrl", (), {
+        "id": "hist-entry-sid",
+        "agent": type("Agent", (), {
+            "name": "TestAgent",
+            "llm": type("LLM", (), {
+                "config": type("Cfg", (), {"model": "gpt-4"})(),
+                "model": None,
+            })(),
+            "tools": [],
+        })(),
+        "state": type("State", (), {
+            "agent_state": type("AS", (), {"value": "running"})(),
+            "history": [MessageAction()],
+        })(),
+        "is_delegate": False,
+    })()
+
+    _open_entry_and_agent_for_controller(tracer, ctrl)
+    _close_entry_and_agent_for_controller(ctrl)
+
+    spans = exp.get_finished_spans()
+    entries = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+    assert len(entries) == 1
+    # The ENTRY span should have input messages set
+    input_msgs = entries[0].attributes.get("gen_ai.input.messages", "")
+    assert "hello world" in input_msgs
+    session_context.clear_all()
