@@ -7,32 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Breaking
-
-- Align CrewAI GenAI span names with `opentelemetry-util-genai`
-  extended semantic conventions. `gen_ai.operation.name` now reports
-  `enter`, `invoke_agent`, or `execute_tool`; the CrewAI framework operation
-  is reported in `gen_ai.crewai.operation` instead.
-- Replace the legacy `gen_ai.system=crewai` attribute with
-  `gen_ai.provider.name=crewai`.
-- Use the current content-capture environment values:
-  `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental` and
-  `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY`.
-
-### Changed
-
-- Migrate CrewAI entry, task, agent, and tool spans to
-  `opentelemetry-util-genai` `ExtendedTelemetryHandler`.
-- Keep instrumentation post-processing failures from changing successful
-  CrewAI calls into user-visible errors, avoid duplicate nested agent spans,
-  and gate content-like CrewAI task and agent attributes behind util-genai
-  content capture controls.
-
-### Added
-
-- Add a real CrewAI smoke example covering sync, streaming, and concurrent
-  calls for local otel-gui and Robin/ARMS verification.
-
 ## Version 0.5.0 (2026-05-11)
 
 There are no changelog entries for this release.

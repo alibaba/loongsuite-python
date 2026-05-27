@@ -69,11 +69,9 @@ class TestPromptAndMemory(TestBase):
 
         os.environ["CREWAI_TRACING_ENABLED"] = "false"
         # Enable experimental mode and content capture for testing
-        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = (
-            "gen_ai_latest_experimental"
-        )
+        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai"
         os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
-            "SPAN_ONLY"
+            "span_only"
         )
 
         if _OpenTelemetrySemanticConventionStability:
@@ -147,7 +145,7 @@ class TestPromptAndMemory(TestBase):
         task_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "task.execute"
+            if s.attributes.get("gen_ai.operation.name") == "task.execute"
         ]
         llm_spans = [
             s

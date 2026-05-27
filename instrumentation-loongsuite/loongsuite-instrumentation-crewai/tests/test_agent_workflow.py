@@ -67,11 +67,9 @@ class TestAgentWorkflow(TestBase):
 
         os.environ["CREWAI_TRACING_ENABLED"] = "false"
         # Enable experimental mode and content capture for testing
-        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = (
-            "gen_ai_latest_experimental"
-        )
+        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai"
         os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
-            "SPAN_ONLY"
+            "span_only"
         )
 
         if _OpenTelemetrySemanticConventionStability:
@@ -171,12 +169,17 @@ class TestAgentWorkflow(TestBase):
         chain_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "crew.kickoff"
+            if s.attributes.get("gen_ai.operation.name") == "crew.kickoff"
         ]
         task_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "task.execute"
+            if s.attributes.get("gen_ai.operation.name") == "task.execute"
+        ]
+        agent_spans = [
+            s
+            for s in spans
+            if s.attributes.get("gen_ai.operation.name") == "agent.execute"
         ]
 
         # Verify span counts
@@ -188,21 +191,17 @@ class TestAgentWorkflow(TestBase):
             3,
             f"Expected at least 3 TASK spans, got {len(task_spans)}",
         )
+        self.assertGreaterEqual(
+            len(agent_spans),
+            3,
+            f"Expected at least 3 AGENT spans, got {len(agent_spans)}",
+        )
 
         # Verify CHAIN span has proper attributes
         chain_span = chain_spans[0]
+        self.assertEqual(chain_span.attributes.get("gen_ai.system"), "crewai")
         self.assertEqual(
-            chain_span.attributes.get("gen_ai.provider.name"), "crewai"
-        )
-        self.assertEqual(
-            chain_span.attributes.get("gen_ai.operation.name"), "enter"
-        )
-        self.assertEqual(
-            chain_span.attributes.get("gen_ai.span.kind"), "ENTRY"
-        )
-        self.assertEqual(
-            chain_span.attributes.get("gen_ai.crewai.operation"),
-            "crew.kickoff",
+            chain_span.attributes.get("gen_ai.operation.name"), "crew.kickoff"
         )
 
         # Verify result is captured in OpenTelemetry GenAI format
@@ -278,17 +277,17 @@ class TestAgentWorkflow(TestBase):
             len(trace_ids), 1, "All spans should share the same trace ID"
         )
 
-        task_spans = [
+        agent_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "task.execute"
+            if s.attributes.get("gen_ai.operation.name") == "agent.execute"
         ]
 
-        # Should have multiple task invoke spans for collaboration
+        # Should have multiple agent spans for collaboration
         self.assertGreaterEqual(
-            len(task_spans),
+            len(agent_spans),
             2,
-            f"Expected at least 2 TASK spans, got {len(task_spans)}",
+            f"Expected at least 2 AGENT spans, got {len(agent_spans)}",
         )
 
     def test_hierarchical_workflow(self):
@@ -353,7 +352,7 @@ class TestAgentWorkflow(TestBase):
         chain_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "crew.kickoff"
+            if s.attributes.get("gen_ai.operation.name") == "crew.kickoff"
         ]
 
         # Should have CHAIN span for hierarchical workflow

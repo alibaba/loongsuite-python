@@ -70,11 +70,9 @@ class TestStreamingLLMCalls(TestBase):
 
         os.environ["CREWAI_TRACING_ENABLED"] = "false"
         # Enable experimental mode and content capture for testing
-        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = (
-            "gen_ai_latest_experimental"
-        )
+        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai"
         os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
-            "SPAN_ONLY"
+            "span_only"
         )
 
         if _OpenTelemetrySemanticConventionStability:
@@ -108,9 +106,9 @@ class TestStreamingLLMCalls(TestBase):
         - Consumes streaming chunks
 
         Verification:
-        - Task invoke_agent spans reflect streaming configuration
+        - LLM/Agent spans reflect streaming configuration
         - Task span captures final output messages from stream
-        - Trace hierarchy (Crew -> Task) correctly maintained
+        - Trace hierarchy (Crew -> Task -> Agent) correctly maintained
         - Standard attributes (gen_ai.system, gen_ai.operation.name, etc.)
         """
         # Create Agent with streaming
@@ -145,17 +143,17 @@ class TestStreamingLLMCalls(TestBase):
         crew_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "crew.kickoff"
+            if s.attributes.get("gen_ai.operation.name") == "crew.kickoff"
         ]
         task_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "task.execute"
+            if s.attributes.get("gen_ai.operation.name") == "task.execute"
         ]
         agent_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.crewai.operation") == "agent.execute"
+            if s.attributes.get("gen_ai.operation.name") == "agent.execute"
         ]
 
         self.assertGreaterEqual(
@@ -164,13 +162,14 @@ class TestStreamingLLMCalls(TestBase):
         self.assertGreaterEqual(
             len(task_spans), 1, "Should capture task.execute"
         )
-        self.assertEqual(
-            len(agent_spans), 0, "Agent.execute_task should not duplicate Task"
+        self.assertGreaterEqual(
+            len(agent_spans), 1, "Should capture agent.execute"
         )
 
         # 2. Verify Span Hierarchy and Trace Continuity
         crew_span = crew_spans[0]
         task_span = task_spans[0]
+        agent_span = agent_spans[0]
 
         # All spans must share the same Trace ID
         trace_id = crew_span.context.trace_id
@@ -181,18 +180,21 @@ class TestStreamingLLMCalls(TestBase):
                 "Trace ID must be consistent across all spans",
             )
 
-        # Verify parent-child relationship (Crew -> Task)
+        # Verify parent-child relationship (Crew -> Task -> Agent)
         self.assertEqual(
             task_span.parent.span_id,
             crew_span.context.span_id,
             "Task should be child of Crew",
         )
+        self.assertEqual(
+            agent_span.parent.span_id,
+            task_span.context.span_id,
+            "Agent should be child of Task",
+        )
 
         # 3. Verify OpenTelemetry GenAI Attributes
-        for s in [crew_span, task_span]:
-            self.assertEqual(
-                s.attributes.get("gen_ai.provider.name"), "crewai"
-            )
+        for s in [crew_span, task_span, agent_span]:
+            self.assertEqual(s.attributes.get("gen_ai.system"), "crewai")
             self.assertIsNotNone(s.attributes.get("gen_ai.operation.name"))
 
         # 4. Verify Content Capture (JSON formatted messages)
@@ -288,10 +290,10 @@ class TestStreamingLLMCalls(TestBase):
             # 4. Verify Input Capture (even on failure)
             # Input messages might be empty for the top-level crew if no inputs were provided,
             # but task and agent spans should always have them.
-            crewai_op = span.attributes.get("gen_ai.crewai.operation")
-            if crewai_op in ["task.execute", "agent.execute"]:
+            op_name = span.attributes.get("gen_ai.operation.name")
+            if op_name in ["task.execute", "agent.execute"]:
                 input_messages = span.attributes.get("gen_ai.input.messages")
                 self.assertIsNotNone(
                     input_messages,
-                    f"Span {crewai_op} should capture inputs even on failure",
+                    f"Span {op_name} should capture inputs even on failure",
                 )
