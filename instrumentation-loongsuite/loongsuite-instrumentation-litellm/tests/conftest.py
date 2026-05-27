@@ -72,7 +72,7 @@ def environment():
     )
     # Allow capturing message content
     os.environ.setdefault(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "True"
     )
 
     litellm.telemetry = False
