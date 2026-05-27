@@ -421,8 +421,6 @@ class NextActionWrapper:
             span.set_attribute(WEBARENA_PREVIOUS_ACTION, truncate(previous))
 
             if capture_message_content():
-                if intent:
-                    span.set_attribute("input.value", truncate_content(intent))
                 _set_agent_content_attrs(span, instance, intent, meta_data)
 
             try:
@@ -453,9 +451,6 @@ class NextActionWrapper:
             )
             if capture_message_content():
                 if raw_pred:
-                    span.set_attribute(
-                        "output.value", truncate_content(str(raw_pred))
-                    )
                     span.set_attribute(
                         "gen_ai.output.messages",
                         _json_dumps([{
