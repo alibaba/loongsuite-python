@@ -44,7 +44,7 @@ class TestTaskSpan:
         assert len(task_spans) == 1
 
         span = task_spans[0]
-        assert span.name == "task.checkpoint_1"
+        assert span.name == "run_task checkpoint_1"
         assert span.attributes["gen_ai.system"] == "slop-code"
         assert span.attributes["gen_ai.span.kind"] == "TASK"
         assert span.attributes["slop_code.checkpoint.name"] == "checkpoint_1"

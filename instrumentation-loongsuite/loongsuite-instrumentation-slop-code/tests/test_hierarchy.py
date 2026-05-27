@@ -70,7 +70,11 @@ class TestSpanHierarchy:
             entry_mod.run_agent.__wrapped__ = original
 
     def test_workflow_is_parent_of_task(self, span_exporter, instrument):
-        """Workflow span should be parent of task span when called inline."""
+        """Task spans within a workflow should share the workflow's trace.
+
+        _TaskRunCheckpointWrapper creates ENTRY -> TASK nested spans.
+        So the hierarchy is: CHAIN -> ENTRY -> TASK.
+        """
         import slop_code.agent_runner.runner as runner_mod
         import slop_code.entrypoints.problem_runner.worker as worker_mod
 
@@ -104,15 +108,30 @@ class TestSpanHierarchy:
                 s for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "run_task"
             ]
+            # _TaskRunCheckpointWrapper creates an inner ENTRY span too
+            inner_entry_spans = [
+                s for s in spans
+                if s.attributes.get("gen_ai.operation.name") == "enter"
+            ]
 
             assert len(workflow_spans) == 1
             assert len(task_spans) == 1
+            assert len(inner_entry_spans) == 1
 
             workflow_span = workflow_spans[0]
+            inner_entry_span = inner_entry_spans[0]
             task_span = task_spans[0]
 
+            # All spans share the same trace
             assert task_span.context.trace_id == workflow_span.context.trace_id
+            assert inner_entry_span.context.trace_id == workflow_span.context.trace_id
+
+            # inner_entry is child of workflow
+            assert inner_entry_span.parent is not None
+            assert inner_entry_span.parent.span_id == workflow_span.context.span_id
+
+            # task is child of inner_entry
             assert task_span.parent is not None
-            assert task_span.parent.span_id == workflow_span.context.span_id
+            assert task_span.parent.span_id == inner_entry_span.context.span_id
         finally:
             worker_mod.run_agent_on_problem.__wrapped__ = original

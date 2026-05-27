@@ -52,7 +52,7 @@ class TestWorkflowSpan:
         assert len(workflow_spans) == 1
 
         span = workflow_spans[0]
-        assert span.name == "workflow.file_backup"
+        assert span.name == "chain file_backup"
         assert span.attributes["gen_ai.system"] == "slop-code"
         assert span.attributes["gen_ai.span.kind"] == "CHAIN"
         assert span.attributes["slop_code.problem.name"] == "file_backup"
@@ -115,3 +115,45 @@ class TestWorkflowSpan:
         span = workflow_spans[0]
         assert span.attributes["slop_code.problem.name"] == "test_problem"
         assert "gen_ai.request.model" not in span.attributes
+
+    def test_workflow_span_pass_policy_with_value(self, span_exporter, instrument):
+        """Workflow span should extract pass_policy.value from enum-like objects."""
+        import slop_code.entrypoints.problem_runner.worker as mod
+
+        config = MagicMock()
+        config.model_def = None
+        config.agent_config = None
+
+        class PolicyEnum:
+            def __init__(self):
+                self.value = "majority"
+
+        config.pass_policy = PolicyEnum()
+
+        mod.run_agent_on_problem(
+            MagicMock(), "policy_test", config, MagicMock(), "/tmp"
+        )
+
+        spans = span_exporter.get_finished_spans()
+        workflow_spans = [
+            s for s in spans
+            if s.attributes.get("gen_ai.operation.name") == "workflow"
+        ]
+        assert len(workflow_spans) == 1
+        assert workflow_spans[0].attributes["slop_code.pass_policy"] == "majority"
+
+    def test_workflow_span_none_config(self, span_exporter, instrument):
+        """Workflow span should handle None config entirely."""
+        import slop_code.entrypoints.problem_runner.worker as mod
+
+        mod.run_agent_on_problem(
+            MagicMock(), "no_config_problem", None, MagicMock(), "/tmp"
+        )
+
+        spans = span_exporter.get_finished_spans()
+        workflow_spans = [
+            s for s in spans
+            if s.attributes.get("gen_ai.operation.name") == "workflow"
+        ]
+        assert len(workflow_spans) == 1
+        assert workflow_spans[0].attributes["slop_code.problem.name"] == "no_config_problem"

@@ -26,7 +26,9 @@ def _spans_by_kind_attr(exporter, kind: str):
 @pytest.fixture
 def instrumented_v0(tracer_provider, stub_openhands_v0_modules):
     from opentelemetry.instrumentation.openhands import OpenHandsInstrumentor
+    from opentelemetry.instrumentation.openhands.internal import session_context
 
+    session_context.clear_all()
     inst = OpenHandsInstrumentor()
     inst.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
     try:
@@ -36,41 +38,26 @@ def instrumented_v0(tracer_provider, stub_openhands_v0_modules):
             inst.uninstrument()
         except Exception:
             pass
+        session_context.clear_all()
 
 
 def test_v0_full_span_tree(instrumented_v0):
     inst, exporter = instrumented_v0
 
     import openhands.controller.agent_controller as ctrl_mod
-    import openhands.core.loop as loop_mod
-    import openhands.core.main as main_mod
     import openhands.runtime.base as rt_base
 
     ctrl = ctrl_mod.AgentController()
     runtime = rt_base.Runtime()
     action = rt_base.Action(action_type="run", command="ls /")
 
-    async def _inner(controller, _runtime):
+    async def _scenario():
         for _ in range(2):
             await ctrl._step()
             runtime.run_action(action)
+        await ctrl.close()
 
-    loop_mod._test_inner_callback = _inner
-
-    async def _scenario():
-        # ENTRY span via run_controller wrapper
-        await main_mod.run_controller(
-            config=None,
-            initial_user_action=type("Msg", (), {"content": "hello"})(),
-            sid="sid-test",
-        )
-        # AGENT span via run_agent_until_done wrapper (which calls _inner)
-        await loop_mod.run_agent_until_done(ctrl, runtime, None, [])
-
-    try:
-        asyncio.run(_scenario())
-    finally:
-        loop_mod._test_inner_callback = None
+    asyncio.run(_scenario())
 
     entry = _spans_by_kind_attr(exporter, "ENTRY")
     agent = _spans_by_kind_attr(exporter, "AGENT")
@@ -106,8 +93,7 @@ def test_v0_full_span_tree(instrumented_v0):
         assert s.attributes.get("gen_ai.operation.name") == "react"
         assert s.attributes.get("gen_ai.react.round") in (1, 2)
 
-    # TOOL spans are siblings of STEP under AGENT (run_action is called after
-    # _step returns and is no longer in STEP context).
+    # TOOL spans carry the expected attributes.
     for t in tool:
         assert t.attributes.get("gen_ai.tool.name") == "bash"
         assert t.attributes.get("openhands.action.type") == "run"
@@ -125,6 +111,8 @@ def test_v0_step_round_increments_per_controller(instrumented_v0):
         await ctrl_a._step()
         await ctrl_a._step()
         await ctrl_b._step()
+        await ctrl_a.close()
+        await ctrl_b.close()
 
     asyncio.run(_go())
 
@@ -167,8 +155,8 @@ def test_v0_runtime_error_observation_marks_span(instrumented_v0):
     assert span.status.status_code.name == "ERROR"
 
 
-def test_v0_run_controller_cancelled_is_not_span_error(instrumented_v0):
-    """``asyncio.CancelledError`` (e.g. wait_for) must not mark ENTRY as ERROR."""
+def test_v0_run_controller_cancelled_marks_span_error(instrumented_v0):
+    """``asyncio.CancelledError`` is a BaseException and marks ENTRY as ERROR."""
     _, exporter = instrumented_v0
     import openhands.core.main as main_mod
 
@@ -187,5 +175,5 @@ def test_v0_run_controller_cancelled_is_not_span_error(instrumented_v0):
 
     entry = _spans_by_kind_attr(exporter, "ENTRY")
     assert len(entry) == 1
-    assert entry[0].status.status_code.name == "UNSET"
+    assert entry[0].status.status_code.name == "ERROR"
 

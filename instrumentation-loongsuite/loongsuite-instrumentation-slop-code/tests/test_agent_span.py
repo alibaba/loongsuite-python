@@ -106,3 +106,142 @@ class TestAgentSpan:
         finally:
             instrumentor.uninstrument()
             mod.Agent = OriginalAgent
+
+    def test_agent_span_with_messages_attr(self, span_exporter, tracer_provider):
+        """Agent with _messages should capture assistant output messages."""
+        import slop_code.agent_runner.agent as mod
+        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        class AgentWithMessages(mod.Agent):
+            def __init__(self, problem_name="test"):
+                super().__init__(problem_name)
+                self.system_template = None
+                self.system_prompt = "You are a helpful assistant"
+                self._messages = [
+                    {"role": "system", "content": "You are a helpful assistant"},
+                    {"role": "user", "content": "Fix the bug"},
+                    {"role": "assistant", "content": "I found the issue in line 42"},
+                ]
+
+        OriginalAgent = mod.Agent
+        mod.Agent = AgentWithMessages
+
+        instrumentor = SlopCodeInstrumentor()
+        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+
+        try:
+            agent = mod.Agent(problem_name="test_prob")
+            agent.run_checkpoint("task")
+
+            spans = span_exporter.get_finished_spans()
+            agent_spans = [
+                s for s in spans
+                if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
+            ]
+            assert len(agent_spans) == 1
+            span = agent_spans[0]
+
+            # Should capture output messages from _messages
+            assert "gen_ai.output.messages" in span.attributes
+            assert "line 42" in span.attributes["gen_ai.output.messages"]
+
+            # Should use system_prompt as fallback for system instructions
+            assert "gen_ai.system.instructions" in span.attributes
+            assert "helpful assistant" in span.attributes["gen_ai.system.instructions"]
+        finally:
+            instrumentor.uninstrument()
+            mod.Agent = OriginalAgent
+
+    def test_agent_span_with_steps_attr(self, span_exporter, tracer_provider):
+        """Agent with _steps should capture assistant output messages from steps."""
+        import slop_code.agent_runner.agent as mod
+        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        class StepRole:
+            def __init__(self, value):
+                self.value = value
+
+        class Step:
+            def __init__(self, role, content):
+                self.role = StepRole(role)
+                self.content = content
+
+        class AgentWithSteps(mod.Agent):
+            def __init__(self, problem_name="test"):
+                super().__init__(problem_name)
+                self.system_template = None
+                self.system_prompt = None
+                self._steps = [
+                    Step("system", "You are a system agent"),
+                    Step("user", "Solve the problem"),
+                    Step("assistant", "I will solve it now"),
+                ]
+                self._messages = []
+
+        OriginalAgent = mod.Agent
+        mod.Agent = AgentWithSteps
+
+        instrumentor = SlopCodeInstrumentor()
+        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+
+        try:
+            agent = mod.Agent(problem_name="test_prob")
+            agent.run_checkpoint("task")
+
+            spans = span_exporter.get_finished_spans()
+            agent_spans = [
+                s for s in spans
+                if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
+            ]
+            assert len(agent_spans) == 1
+            span = agent_spans[0]
+
+            # Should capture output from _steps
+            assert "gen_ai.output.messages" in span.attributes
+            assert "solve it now" in span.attributes["gen_ai.output.messages"]
+
+            # Should extract system prompt from _steps
+            assert "gen_ai.system.instructions" in span.attributes
+            assert "system agent" in span.attributes["gen_ai.system.instructions"]
+        finally:
+            instrumentor.uninstrument()
+            mod.Agent = OriginalAgent
+
+    def test_agent_span_system_from_messages(self, span_exporter, tracer_provider):
+        """Agent with _messages containing system role should extract system prompt."""
+        import slop_code.agent_runner.agent as mod
+        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        class AgentSysMsgs(mod.Agent):
+            def __init__(self, problem_name="test"):
+                super().__init__(problem_name)
+                self.system_template = None
+                self.system_prompt = None
+                self._steps = []
+                self._messages = [
+                    {"role": "system", "content": "System context from messages"},
+                    {"role": "user", "content": "Help me"},
+                ]
+
+        OriginalAgent = mod.Agent
+        mod.Agent = AgentSysMsgs
+
+        instrumentor = SlopCodeInstrumentor()
+        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+
+        try:
+            agent = mod.Agent(problem_name="test_prob")
+            agent.run_checkpoint("task")
+
+            spans = span_exporter.get_finished_spans()
+            agent_spans = [
+                s for s in spans
+                if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
+            ]
+            assert len(agent_spans) == 1
+            span = agent_spans[0]
+            assert "gen_ai.system.instructions" in span.attributes
+            assert "System context from messages" in span.attributes["gen_ai.system.instructions"]
+        finally:
+            instrumentor.uninstrument()
+            mod.Agent = OriginalAgent

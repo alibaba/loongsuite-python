@@ -72,6 +72,7 @@ def _run_one_tool_call(rt_base, ctrl_mod, loop_mod, main_mod):
             initial_user_action=MessageAction(),
             sid="tool-sid",
         )
+        await ctrl.close()
 
     try:
         asyncio.run(_scenario())
