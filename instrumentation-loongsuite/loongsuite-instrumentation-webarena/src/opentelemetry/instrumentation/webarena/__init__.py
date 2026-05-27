@@ -81,6 +81,7 @@ _PATCH_TARGETS = (
     ("browser_env.envs", "ScriptBrowserEnv.close", "_env_close_wrapper"),
     ("browser_env.envs", "ScriptBrowserEnv.step", "_env_step_wrapper"),
     ("agent.agent", "construct_agent", "_construct_agent_wrapper"),
+    ("agent", "construct_agent", "_construct_agent_wrapper"),
     ("agent.agent", "PromptAgent.next_action", "_next_action_wrapper"),
 )
 
