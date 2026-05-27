@@ -94,37 +94,18 @@ def test_all_spans_share_one_trace_id_across_threads(instrumented_v0):
     inst, exporter = instrumented_v0
 
     import openhands.controller.agent_controller as ctrl_mod
-    import openhands.core.loop as loop_mod
-    import openhands.core.main as main_mod
     import openhands.runtime.base as rt_base
 
     ctrl = ctrl_mod.AgentController(sid="bench-001")
     runtime = rt_base.Runtime(sid="bench-001")
     action = rt_base.Action(action_type="run", command="ls /")
 
-    async def _inner(_controller, _runtime):
+    async def _scenario():
         for _ in range(2):
             _drive_step_in_worker_thread(ctrl, runtime, action)
+        await ctrl.close()
 
-    loop_mod._test_inner_callback = _inner
-    main_mod._test_inner_args = (ctrl, runtime)
-
-    class MessageAction:
-        content = "say hi"
-        source = "user"
-
-    async def _scenario():
-        await main_mod.run_controller(
-            config=None,
-            initial_user_action=MessageAction(),
-            sid="bench-001",
-        )
-
-    try:
-        asyncio.run(_scenario())
-    finally:
-        loop_mod._test_inner_callback = None
-        main_mod._test_inner_args = None
+    asyncio.run(_scenario())
 
     spans = exporter.get_finished_spans()
     by_kind = {kind: _spans_by_kind_attr(exporter, kind) for kind in ("ENTRY", "AGENT", "STEP", "TOOL")}
@@ -145,12 +126,14 @@ def test_all_spans_share_one_trace_id_across_threads(instrumented_v0):
             f"has trace_id {s.context.trace_id} but expected {trace_id}"
         )
 
-    # Parent-child links: AGENT under ENTRY, STEP under AGENT, TOOL under AGENT
+    # Parent-child links: AGENT under ENTRY, STEP under AGENT
     assert agent.parent is not None and agent.parent.span_id == entry.context.span_id
     for s in by_kind["STEP"]:
         assert s.parent is not None and s.parent.span_id == agent.context.span_id
+    # TOOL spans are children of their respective STEP spans
+    step_span_ids = {s.context.span_id for s in by_kind["STEP"]}
     for t in by_kind["TOOL"]:
-        assert t.parent is not None and t.parent.span_id == agent.context.span_id
+        assert t.parent is not None and t.parent.span_id in step_span_ids
 
 
 def test_session_context_cleared_after_entry(instrumented_v0):
@@ -177,13 +160,7 @@ def test_io_attributes_on_entry_agent_step(instrumented_v0):
     inst, exporter = instrumented_v0
 
     import openhands.controller.agent_controller as ctrl_mod
-    import openhands.core.loop as loop_mod
-    import openhands.core.main as main_mod
     import openhands.runtime.base as rt_base
-
-    ctrl = ctrl_mod.AgentController(sid="io-sid")
-    runtime = rt_base.Runtime(sid="io-sid")
-    action = rt_base.Action(action_type="run", command="cat /etc/hosts")
 
     # Seed history with a *MessageAction*-named instance — that's the type
     # name the AGENT wrapper looks for when computing input.messages.
@@ -191,27 +168,18 @@ def test_io_attributes_on_entry_agent_step(instrumented_v0):
         content = "do the thing"
         source = "user"
 
+    ctrl = ctrl_mod.AgentController(sid="io-sid")
+    runtime = rt_base.Runtime(sid="io-sid")
+    action = rt_base.Action(action_type="run", command="cat /etc/hosts")
+
     ctrl.state.history = [MessageAction()]
 
-    async def _inner(_c, _r):
+    async def _scenario():
         await ctrl._step()
         runtime.run_action(action)
+        await ctrl.close()
 
-    loop_mod._test_inner_callback = _inner
-    main_mod._test_inner_args = (ctrl, runtime)
-
-    async def _scenario():
-        await main_mod.run_controller(
-            config=None,
-            initial_user_action=MessageAction(),
-            sid="io-sid",
-        )
-
-    try:
-        asyncio.run(_scenario())
-    finally:
-        loop_mod._test_inner_callback = None
-        main_mod._test_inner_args = None
+    asyncio.run(_scenario())
 
     entry = _spans_by_kind_attr(exporter, "ENTRY")[0]
     agent = _spans_by_kind_attr(exporter, "AGENT")[0]

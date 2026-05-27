@@ -73,6 +73,13 @@ def _create_mock_slop_code_modules():
             self.agent.usage.net_tokens = MagicMock()
             self.agent.usage.net_tokens.input = 100
             self.agent.usage.net_tokens.output = 50
+            self.run_spec = MagicMock()
+            self.run_spec.problem = MagicMock()
+            self.run_spec.problem.name = "test_problem"
+            self.run_spec.problem.prompt = "Solve the coding problem"
+
+        def run(self):
+            return {"status": "completed"}
 
         def _run_checkpoint(self, checkpoint, checkpoint_save_dir, is_first_checkpoint=False):
             result = MagicMock()
@@ -106,14 +113,29 @@ def _create_mock_slop_code_modules():
     class MiniSWEAgent(Agent):
         def __init__(self, problem_name="test_problem"):
             super().__init__(problem_name)
+            self._messages = [
+                {"role": "system", "content": "You are a coding assistant"},
+                {"role": "user", "content": "Fix the bug"},
+            ]
 
         def agent_step(self):
             return {
                 "token_usage": MagicMock(input=200, output=80, cache_read=50, cache_write=10),
                 "step_cost": 0.01,
+                "content": "I will fix this bug by editing the code.",
             }
 
+        def get_observation(self):
+            return "File modified successfully"
+
+        def execute_action(self, action):
+            return {"output": "command executed", "exit_code": 0}
+
     mod_miniswe.MiniSWEAgent = MiniSWEAgent
+
+    # Also register under the internal module name that the instrumentor patches
+    mod_miniswe_agent = _make_module("slop_code.agent_runner.agents._miniswe_agent")
+    mod_miniswe_agent.MiniSWEAgent = MiniSWEAgent
 
     # --- LLM: grade_file_async ---
     async def grade_file_async(*args, **kwargs):
@@ -144,6 +166,7 @@ def _create_mock_slop_code_modules():
     mod_agent_runner.agent = mod_agent
     mod_agent_runner.agents = mod_agents
     mod_agents.miniswe = mod_miniswe
+    mod_agents._miniswe_agent = mod_miniswe_agent
     mod_metrics.rubric = mod_rubric
     mod_rubric.router = mod_router
 
@@ -160,6 +183,7 @@ def _create_mock_slop_code_modules():
         "slop_code.agent_runner.runner": mod_runner,
         "slop_code.agent_runner.agent": mod_agent,
         "slop_code.agent_runner.agents": mod_agents,
+        "slop_code.agent_runner.agents._miniswe_agent": mod_miniswe_agent,
         "slop_code.agent_runner.agents.miniswe": mod_miniswe,
         "slop_code.metrics": mod_metrics,
         "slop_code.metrics.rubric": mod_rubric,

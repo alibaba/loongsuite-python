@@ -48,11 +48,12 @@ def _install_v0_stub_modules() -> None:
 
     @dataclass
     class _AgentState:
-        value: str = "finished"
+        value: str = "running"
 
     @dataclass
     class _State:
         agent_state: _AgentState = field(default_factory=_AgentState)
+        history: list = field(default_factory=list)
 
     @dataclass
     class _LLMConfig:
@@ -91,14 +92,23 @@ def _install_v0_stub_modules() -> None:
         step_calls = 0
         close_calls = 0
 
-        def __init__(self, agent=None, sid="sid-test"):
+        def __init__(self, agent=None, sid="sid-test", is_delegate=False):
             self.agent = agent or _Agent()
             self.id = sid
             self.state = _State()
             self._pending_action = None
-            self.is_delegate = False
+            self.is_delegate = is_delegate
 
         async def _step(self) -> None:
+            # Support test error injection via flag
+            err = getattr(self, '_test_raise_in_step', None)
+            if err:
+                self._test_raise_in_step = None  # one-shot
+                raise err
+            # Support empty-step testing: skip work when flag is set
+            if getattr(self, '_test_skip_work', False):
+                self._test_skip_work = False  # one-shot
+                return
             type(self).step_calls += 1
             class _Pending:
                 action = "run"
@@ -106,8 +116,15 @@ def _install_v0_stub_modules() -> None:
                 thought = "trying"
 
             self._pending_action = _Pending()
+            # Simulate work: grow history so the wrapper's work-detection passes.
+            self.state.history.append(_Pending())
 
         async def close(self, set_stop_state: bool = True) -> None:
+            # Support test error injection via flag
+            err = getattr(self, '_test_raise_in_close', None)
+            if err:
+                self._test_raise_in_close = None
+                raise err
             type(self).close_calls += 1
 
     ctrl_mod.AgentController = AgentController
@@ -173,6 +190,11 @@ def _install_v0_stub_modules() -> None:
             self.sid = sid
 
         def run_action(self, action) -> _Observation:
+            # Support test error injection via flag
+            err = getattr(self, '_test_raise_in_run', None)
+            if err:
+                self._test_raise_in_run = None
+                raise err
             type(self).run_action_calls += 1
             obs = self._next_observation
             if obs is not None:
@@ -184,6 +206,18 @@ def _install_v0_stub_modules() -> None:
     rt_base.Action = _Action
     rt_base.Observation = _Observation
     rt_base.ToolCallMetadata = _ToolCallMetadata
+
+    # LLM stub — lets the LLMInitWrapper patch succeed.
+    llm_pkg = _ensure_stub_module("openhands.llm")
+    llm_mod = _ensure_stub_module("openhands.llm.llm")
+
+    class LLM:
+        def __init__(self, config=None):
+            self.config = config
+            self._completion = lambda *a, **kw: None
+            self._completion_unwrapped = lambda *a, **kw: None
+
+    llm_mod.LLM = LLM
 
     @dataclass
     class _State2:
