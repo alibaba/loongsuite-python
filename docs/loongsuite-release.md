@@ -451,7 +451,7 @@ Dry Run 模式**不会**创建分支、归档 changelog、提交代码或创建 
 3. 填写参数：
    - `mode`: `release`
    - `loongsuite_version`: `0.1.0`
-   - `upstream_version`: `0.60b1`
+   - `upstream_version`: 上游 OTel 版本；留空时使用 workflow 中的 `DEFAULT_UPSTREAM_VERSION`
    - `skip_pypi`: 测试时可勾选
 4. 执行
 
@@ -501,7 +501,7 @@ git push origin v0.1.0
 | 收集/归档 changelog | 脚本内调用 Python 脚本 | 同上 |
 | Commit + Push | 脚本内 `git commit` + `git push` | 同上 |
 | GitHub Release | 脚本内 `gh release create`（可 skip） | 独立 job |
-| PyPI publish | 不执行（本地不做） | 独立 job 通过 OIDC/Token |
+| PyPI publish | 不执行（本地不做） | 独立 job 通过 API Token（未来可迁移到 OIDC） |
 | Post-release PR | 脚本内创建 PR（需 `gh` CLI） | 独立 job，自动创建 |
 | 新 PyPI 项目 dev-bootstrap | 不执行 | `mode=dev-bootstrap-new-projects` 独立执行，仅构建和上传缺失项目名的 dev wheel |
 
@@ -691,7 +691,8 @@ pip install loongsuite-util-genai
 
 **问题**: PyPI 发布 403 Forbidden
 ```bash
-# 解决: 检查 OIDC trusted publishing 配置或 API token
+# 解决: 检查 PYPI_API_TOKEN 是否有效、未过期，并且有目标 project 的上传权限
+# 如果未来改用 OIDC Trusted Publishing，再检查对应的 publisher 配置
 ```
 
 **问题**: 版本号已存在

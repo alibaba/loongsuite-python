@@ -20,10 +20,11 @@
 # - push tags: Automatic trigger on v* tags
 #
 # PyPI / Test PyPI configuration:
-# - Production PyPI: Set PYPI_API_TOKEN secret.
-# - OIDC Trusted Publishing can be used instead, but new PyPI project names then
-#   require Pending Publishers configured with workflow=loongsuite-release.yml
-#   and environment=pypi.
+# - Production PyPI: Set PYPI_API_TOKEN secret. This workflow currently uses
+#   API-token publishing, not PyPI OIDC Trusted Publishing.
+# - If switching to OIDC Trusted Publishing later, add id-token permissions and
+#   configure Pending Publishers for new PyPI project names with
+#   workflow=loongsuite-release.yml and environment=pypi.
 # - Test PyPI: Set TEST_PYPI_TOKEN secret (pypi-xxx from https://test.pypi.org/manage/account/token/)
 # - Use publish_target: testpypi to publish to Test PyPI instead of production
 #
@@ -32,9 +33,8 @@
 #
 name: LoongSuite Release
 
-# If this workflow is used with PyPI OIDC Trusted Publishing, Pending Publishers
-# are configured with this workflow filename. Renaming this file breaks those
-# publishers.
+# Keep this workflow filename stable; any future PyPI OIDC Trusted Publishing
+# setup would reference it from Pending Publisher entries.
 run-name: "LoongSuite ${{ github.event.inputs.mode || 'release' }}"
 
 on:
@@ -51,7 +51,7 @@ on:
         description: 'LoongSuite release/base version (e.g., 0.6.0). Dev bootstrap derives a unique .dev version.'
         required: true
       upstream_version:
-        description: 'Release mode: upstream OTel version (e.g., 0.60b1). Ignored when mode=dev-bootstrap-new-projects.'
+        description: 'Release mode: upstream OTel version. Blank uses DEFAULT_UPSTREAM_VERSION. Ignored when mode=dev-bootstrap-new-projects.'
         required: false
       skip_pypi:
         description: 'Release mode only: skip PyPI publish (ignored when mode=dev-bootstrap-new-projects)'
@@ -107,7 +107,7 @@ jobs:
             upstream_version="${INPUT_UPSTREAM_VERSION:-$DEFAULT_UPSTREAM_VERSION}"
           else
             loongsuite_version="$INPUT_LOONGSUITE_VERSION"
-            upstream_version="$INPUT_UPSTREAM_VERSION"
+            upstream_version="${INPUT_UPSTREAM_VERSION:-$DEFAULT_UPSTREAM_VERSION}"
           fi
 
           if [[ -z "$loongsuite_version" ]]; then
