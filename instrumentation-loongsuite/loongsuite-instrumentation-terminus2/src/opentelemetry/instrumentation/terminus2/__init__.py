@@ -90,6 +90,8 @@ _GEN_AI_TOOL_DESCRIPTION = "gen_ai.tool.description"
 _GEN_AI_TOOL_TYPE = "gen_ai.tool.type"
 _GEN_AI_TOOL_CALL_ARGUMENTS = "gen_ai.tool.call.arguments"
 _GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
+_GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
+_GEN_AI_SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions"
 _GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
 _GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 
@@ -107,6 +109,26 @@ _OP_REACT = "react"
 _OP_RUN_TASK = "run_task"
 _OP_TASK = "task"
 _TOOL_TYPE_EXTENSION = "extension"
+
+_TERMINAL_TOOL_DEFINITION = json.dumps([{
+    "type": "function",
+    "name": _TERMINAL_TOOL_NAME,
+    "description": _TERMINAL_TOOL_DESCRIPTION,
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "keystrokes": {
+                "type": "string",
+                "description": "Exact keystrokes to send to the terminal",
+            },
+            "duration_sec": {
+                "type": "number",
+                "description": "Seconds to wait for the command to complete",
+            },
+        },
+        "required": ["keystrokes"],
+    },
+}], ensure_ascii=False)
 
 # ── ReAct extension attributes (阿里云扩展规范) ──────────────────────────────
 _GEN_AI_REACT_ROUND = "gen_ai.react.round"
@@ -523,6 +545,16 @@ class _RunAgentLoopWrapper:
                 _infer_provider_name(model_name),
             )
             span.set_attribute("terminus2.parser", parser_name)
+
+            system_instructions = getattr(instance, "_prompt_template", "")
+            if system_instructions:
+                span.set_attribute(
+                    _GEN_AI_SYSTEM_INSTRUCTIONS, system_instructions
+                )
+
+            span.set_attribute(
+                _GEN_AI_TOOL_DEFINITIONS, _TERMINAL_TOOL_DEFINITION
+            )
 
             if original_instruction:
                 span.set_attribute(
