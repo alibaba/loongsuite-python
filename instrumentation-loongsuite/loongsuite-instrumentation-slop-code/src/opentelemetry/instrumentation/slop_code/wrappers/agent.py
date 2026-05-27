@@ -38,6 +38,34 @@ def _assistant_messages(instance):
     return messages[-3:]
 
 
+def _extract_system_prompt(instance):
+    """Extract the system prompt from the agent instance."""
+    system_prompt = safe_get(instance, "system_template")
+    if system_prompt:
+        return str(system_prompt)
+
+    system_prompt = safe_get(instance, "system_prompt")
+    if system_prompt:
+        return str(system_prompt)
+
+    for msg in safe_get(instance, "_messages", []) or []:
+        role = safe_get(msg, "role") or (msg.get("role") if isinstance(msg, dict) else None)
+        if role == "system":
+            content = safe_get(msg, "content") or (msg.get("content") if isinstance(msg, dict) else None)
+            if content:
+                return str(content)
+
+    for step in safe_get(instance, "_steps", []) or []:
+        role = safe_get(step, "role")
+        role_value = safe_get(role, "value", role)
+        if str(role_value).lower().endswith("system"):
+            content = safe_get(step, "content")
+            if content:
+                return str(content)
+
+    return None
+
+
 class _AgentRunCheckpointWrapper:
     """Wrapper for Agent.run_checkpoint to create AGENT span."""
 
@@ -60,6 +88,10 @@ class _AgentRunCheckpointWrapper:
         }
         if task_input is not None:
             attrs["gen_ai.input.messages"] = genai_messages([{"role": "user", "content": str(task_input)}])
+
+        system_prompt = _extract_system_prompt(instance)
+        if system_prompt is not None:
+            attrs["gen_ai.system.instructions"] = genai_messages([{"role": "system", "content": system_prompt}])
 
         with self._tracer.start_as_current_span(
             name=f"invoke_agent {agent_name}",

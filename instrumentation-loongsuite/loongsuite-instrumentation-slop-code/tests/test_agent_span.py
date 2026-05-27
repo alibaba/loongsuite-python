@@ -39,12 +39,18 @@ class TestAgentSpan:
         assert len(agent_spans) == 1
 
         span = agent_spans[0]
-        assert span.name == "agent.Agent"
+        assert span.name == "invoke_agent Agent"
         assert span.attributes["gen_ai.system"] == "slop-code"
         assert span.attributes["gen_ai.span.kind"] == "AGENT"
         assert span.attributes["gen_ai.agent.name"] == "Agent"
         assert span.attributes["slop_code.problem.name"] == "file_backup"
         assert span.status.status_code == StatusCode.OK
+
+        assert "gen_ai.input.messages" in span.attributes
+        assert "solve the bug" in span.attributes["gen_ai.input.messages"]
+
+        assert "gen_ai.system.instructions" in span.attributes
+        assert "coding agent" in span.attributes["gen_ai.system.instructions"]
 
     def test_agent_span_captures_usage(self, span_exporter, instrument):
         """AGENT span should capture token usage from result."""

@@ -86,6 +86,7 @@ def _create_mock_slop_code_modules():
     class Agent:
         def __init__(self, problem_name="test_problem"):
             self.problem_name = problem_name
+            self.system_template = "You are a coding agent. Solve the given programming problem."
             self.usage = MagicMock()
             self.usage.net_tokens = MagicMock()
             self.usage.net_tokens.input = 100
