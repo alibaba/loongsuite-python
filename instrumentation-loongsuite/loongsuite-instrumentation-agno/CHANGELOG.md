@@ -7,27 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Removed
-
-- Drop Agno 1.x support and require Agno 2.x public `Agent.run`/`Agent.arun`
-  APIs. Users that still depend on Agno 1.x should pin
-  `loongsuite-instrumentation-agno < 0.6`.
-
-### Changed
-
-- Align message content capture with `opentelemetry-util-genai` controls such as
-  `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY`.
-- Migrate Agno instrumentation to Agno 2.x public `Agent.run`/`Agent.arun`
-  APIs and `opentelemetry-util-genai` `ExtendedTelemetryHandler`.
-- Emit standardized AGENT, LLM, and TOOL GenAI spans for agent runs, model
-  calls, streaming calls, async streaming calls, and function executions.
-
-### Added
-
-- Add a DashScope smoke example that exercises non-streaming, streaming, and
-  concurrent Agno calls.
-- Add local test requirements for the Agno LoongSuite tox environment.
-
 ## Version 0.5.0 (2026-05-11)
 
 There are no changelog entries for this release.
