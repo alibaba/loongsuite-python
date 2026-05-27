@@ -223,7 +223,6 @@ def _open_task_spans(
         entry_span.set_attribute(WEBARENA_SITES, safe_json_dumps(sites))
     entry_span.set_attribute(WEBARENA_REQUIRE_LOGIN, require_login)
     if intent and capture_message_content():
-        entry_span.set_attribute("input.value", truncate_content(intent))
         entry_span.set_attribute(
             "gen_ai.input.messages",
             _json_dumps([{
