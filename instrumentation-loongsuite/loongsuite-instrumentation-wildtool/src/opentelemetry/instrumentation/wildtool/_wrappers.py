@@ -369,18 +369,33 @@ class WildToolAgentWrapper:
     def __call__(self, wrapped, instance, args, kwargs):
         test_entry = args[0] if args else kwargs.get("test_entry", {})
 
+        attributes = {
+            "gen_ai.framework": "wildtool",
+            "wildtool.turn_count": len(
+                test_entry.get("english_answer_list", [])
+            ),
+        }
+
+        env_info = test_entry.get("english_env_info", "")
+        if env_info:
+            attributes["gen_ai.system_instructions"] = json.dumps(
+                [{"type": "text", "content": f"Current Date: {env_info}"}],
+                ensure_ascii=False,
+            )
+
+        tools = test_entry.get("english_tools")
+        if isinstance(tools, list) and tools:
+            attributes["gen_ai.tool.definitions"] = json.dumps(
+                tools, ensure_ascii=False,
+            )
+
         invocation = InvokeAgentInvocation(
             provider=None,
             agent_name=type(instance).__name__,
             input_messages=_tasks_to_input_messages(test_entry),
             conversation_id=test_entry.get("id"),
             request_model=getattr(instance, "model_name", None),
-            attributes={
-                "gen_ai.framework": "wildtool",
-                "wildtool.turn_count": len(
-                    test_entry.get("english_answer_list", [])
-                ),
-            },
+            attributes=attributes,
         )
         self._handler.start_invoke_agent(invocation)
         _set_message_attributes(invocation)
