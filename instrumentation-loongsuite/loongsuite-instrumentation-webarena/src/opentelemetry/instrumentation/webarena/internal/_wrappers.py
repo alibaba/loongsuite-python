@@ -104,6 +104,8 @@ def _read_config_file(options: dict[str, Any] | None) -> dict[str, Any] | None:
             data = _json.load(f)
         if isinstance(data, dict):
             return data
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return data[0]
     except Exception:  # noqa: BLE001
         return None
     return None
@@ -222,6 +224,13 @@ def _open_task_spans(
     entry_span.set_attribute(WEBARENA_REQUIRE_LOGIN, require_login)
     if intent and capture_message_content():
         entry_span.set_attribute("input.value", truncate_content(intent))
+        entry_span.set_attribute(
+            "gen_ai.input.messages",
+            _json_dumps([{
+                "role": "user",
+                "parts": [{"type": "text", "content": truncate_content(intent)}],
+            }]),
+        )
 
     entry_token = otel_context.attach(set_span_in_context(entry_span))
     state.set_entry(entry_span, entry_token)
@@ -259,6 +268,14 @@ def _close_task_spans() -> None:
             chain.set_attribute(WEBARENA_STEP_COUNT, steps)
             chain.set_attribute(WEBARENA_TOOL_COUNT, tools)
             chain.set_attribute(WEBARENA_PARSING_FAILURE_COUNT, failures)
+            if capture_message_content():
+                chain.set_attribute(
+                    "output.value",
+                    truncate_content(
+                        f"Completed {steps} steps, {tools} tool calls, "
+                        f"{failures} parsing failures"
+                    ),
+                )
         except Exception:  # noqa: BLE001
             pass
     if entry is not None:
@@ -292,7 +309,7 @@ class EnvResetWrapper:
         options = kwargs.get("options")
         _open_task_spans(self._tracer, options)
         try:
-            return wrapped(*args, **kwargs)
+            result = wrapped(*args, **kwargs)
         except BaseException as exc:
             entry = state.get_entry_span()
             if entry is not None:
@@ -303,6 +320,31 @@ class EnvResetWrapper:
                     pass
             _close_task_spans()
             raise
+
+        # Set gen_ai.output.messages on ENTRY span with initial observation
+        if capture_message_content():
+            entry = state.get_entry_span()
+            if entry is not None:
+                try:
+                    obs_text = ""
+                    if isinstance(result, tuple) and len(result) >= 1:
+                        obs = result[0]
+                        if isinstance(obs, dict):
+                            obs_text = str(obs.get("text", ""))[:512]
+                        elif isinstance(obs, str):
+                            obs_text = obs[:512]
+                    if obs_text:
+                        entry.set_attribute(
+                            "gen_ai.output.messages",
+                            _json_dumps([{
+                                "role": "assistant",
+                                "parts": [{"type": "text", "content": obs_text}],
+                            }]),
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        return result
 
 
 class EnvCloseWrapper:
