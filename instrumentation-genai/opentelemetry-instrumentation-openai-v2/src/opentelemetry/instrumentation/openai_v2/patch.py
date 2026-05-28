@@ -828,7 +828,11 @@ class LegacyChatStreamWrapper(BaseStreamWrapper):
                 for tool_call in choice.tool_calls_buffers:
                     function = {"name": tool_call.function_name}
                     if self.capture_content:
-                        function["arguments"] = "".join(tool_call.arguments)
+                        function["arguments"] = "".join(
+                            part
+                            for part in tool_call.arguments
+                            if part is not None
+                        )
                     tool_call_dict = {
                         "id": tool_call.tool_call_id,
                         "type": "function",
@@ -904,7 +908,11 @@ class ChatStreamWrapper(BaseStreamWrapper):
                 tool_calls = []
                 for tool_call in choice.tool_calls_buffers:
                     arguments = None
-                    arguments_str = "".join(tool_call.arguments)
+                    arguments_str = "".join(
+                        part
+                        for part in tool_call.arguments
+                        if part is not None
+                    )
                     if arguments_str:
                         try:
                             arguments = json.loads(arguments_str)
