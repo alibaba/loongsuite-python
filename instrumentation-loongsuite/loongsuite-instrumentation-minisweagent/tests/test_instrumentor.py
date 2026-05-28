@@ -52,7 +52,7 @@ class TestImportAndMetadata:
         )
 
         assert isinstance(__version__, str)
-        assert __version__ == "0.1.0"
+        assert __version__ == "0.6.0.dev"
 
     def test_instruments_tuple(self):
         from opentelemetry.instrumentation.minisweagent.package import (
