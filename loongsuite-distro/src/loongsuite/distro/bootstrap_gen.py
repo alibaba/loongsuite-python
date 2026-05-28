@@ -226,7 +226,7 @@ libraries = [
     },
     {
         "library": "bfcl-eval >= 4.0.0",
-        "instrumentation": "loongsuite-instrumentation-bfclv4==0.1.3.dev0",
+        "instrumentation": "loongsuite-instrumentation-bfclv4==0.6.0.dev",
     },
     {
         "library": "claude-agent-sdk >= 0.1.0",
@@ -234,7 +234,7 @@ libraries = [
     },
     {
         "library": "claw-eval >= 0.1.0",
-        "instrumentation": "loongsuite-instrumentation-claw-eval==0.1.0",
+        "instrumentation": "loongsuite-instrumentation-claw-eval==0.6.0.dev",
     },
     {
         "library": "crewai >= 0.80.0",
@@ -274,7 +274,7 @@ libraries = [
     },
     {
         "library": "mini-swe-agent >= 2.2.0",
-        "instrumentation": "loongsuite-instrumentation-minisweagent==0.1.0",
+        "instrumentation": "loongsuite-instrumentation-minisweagent==0.6.0.dev",
     },
     {
         "library": "qwen-agent >= 0.0.20",
@@ -290,27 +290,27 @@ libraries = [
     },
     {
         "library": "slop-code-bench >= 0.1",
-        "instrumentation": "loongsuite-instrumentation-slop-code==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-slop-code==0.6.0.dev",
     },
     {
         "library": "terminal-bench >= 0.1.0",
-        "instrumentation": "loongsuite-instrumentation-terminus2==0.1.0",
+        "instrumentation": "loongsuite-instrumentation-terminus2==0.6.0.dev",
     },
     {
         "library": "vita >= 0.0.1",
-        "instrumentation": "loongsuite-instrumentation-vita==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-vita==0.6.0.dev",
     },
     {
         "library": "webarena >= 0.0.1",
-        "instrumentation": "loongsuite-instrumentation-webarena==0.1.0",
+        "instrumentation": "loongsuite-instrumentation-webarena==0.6.0.dev",
     },
     {
         "library": "widesearch >= 0.1.0",
-        "instrumentation": "loongsuite-instrumentation-widesearch==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-widesearch==0.6.0.dev",
     },
     {
         "library": "openai >= 1.0.0",
-        "instrumentation": "loongsuite-instrumentation-wildtool==0.1.0",
+        "instrumentation": "loongsuite-instrumentation-wildtool==0.6.0.dev",
     },
 ]
 
@@ -322,7 +322,7 @@ default_instrumentations = [
     "opentelemetry-instrumentation-threading==0.62b0.dev",
     "opentelemetry-instrumentation-urllib==0.62b0.dev",
     "opentelemetry-instrumentation-wsgi==0.62b0.dev",
-    "loongsuite-instrumentation-algotune==0.1.0",
+    "loongsuite-instrumentation-algotune==0.6.0.dev",
     "loongsuite-instrumentation-dify==0.6.0.dev",
-    "loongsuite-instrumentation-openhands==0.1.0",
+    "loongsuite-instrumentation-openhands==0.6.0.dev",
 ]
