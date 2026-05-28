@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Test configuration for AlgoTune instrumentation tests.
 
 Injects lightweight stub modules for ``AlgoTuner.*`` into ``sys.modules``
@@ -76,11 +90,17 @@ class CommandHandlers:
     def __init__(self):
         self.interface = types.SimpleNamespace(max_samples=None)
 
-    def handle_command(self, command_str: Any, *args: Any, **kwargs: Any) -> dict:
+    def handle_command(
+        self, command_str: Any, *args: Any, **kwargs: Any
+    ) -> dict:
         return {"success": True, "message": "ok"}
 
     def _runner_eval_dataset(
-        self, data_subset: str = "", command_source: str = "", *args: Any, **kwargs: Any
+        self,
+        data_subset: str = "",
+        command_source: str = "",
+        *args: Any,
+        **kwargs: Any,
     ) -> Any:
         return types.SimpleNamespace(
             success=True,
@@ -123,7 +143,9 @@ class BaselineManager:
     def __init__(self):
         self._cache: dict = {}
 
-    def get_baseline_times(self, subset: str = "", *args: Any, **kwargs: Any) -> dict:
+    def get_baseline_times(
+        self, subset: str = "", *args: Any, **kwargs: Any
+    ) -> dict:
         return {"problem_1": 100.0, "problem_2": 200.0}
 
 
@@ -215,9 +237,7 @@ def _inject_stub_modules() -> None:
     algotune_litellm_mod.LiteLLMModel = LiteLLMModel
 
     # AlgoTuner.models.together_model
-    algotune_together_mod = types.ModuleType(
-        "AlgoTuner.models.together_model"
-    )
+    algotune_together_mod = types.ModuleType("AlgoTuner.models.together_model")
     algotune_together_mod.TogetherModel = TogetherModel
 
     # Wire parent references
@@ -243,15 +263,17 @@ def _inject_stub_modules() -> None:
     sys.modules["AlgoTuner.interfaces"] = algotune_interfaces_mod
     sys.modules["AlgoTuner.interfaces.llm_interface"] = algotune_llm_mod
     sys.modules["AlgoTuner.interfaces.commands"] = algotune_commands_mod
-    sys.modules["AlgoTuner.interfaces.commands.handlers"] = algotune_handlers_mod
+    sys.modules["AlgoTuner.interfaces.commands.handlers"] = (
+        algotune_handlers_mod
+    )
     sys.modules["AlgoTuner.utils"] = algotune_utils_mod
     sys.modules["AlgoTuner.utils.evaluator"] = algotune_evaluator_mod
-    sys.modules[
-        "AlgoTuner.utils.evaluator.evaluation_orchestrator"
-    ] = algotune_eval_orch_mod
-    sys.modules[
-        "AlgoTuner.utils.evaluator.baseline_manager"
-    ] = algotune_baseline_mod
+    sys.modules["AlgoTuner.utils.evaluator.evaluation_orchestrator"] = (
+        algotune_eval_orch_mod
+    )
+    sys.modules["AlgoTuner.utils.evaluator.baseline_manager"] = (
+        algotune_baseline_mod
+    )
     sys.modules["AlgoTuner.models"] = algotune_models_mod
     sys.modules["AlgoTuner.models.lite_llm_model"] = algotune_litellm_mod
     sys.modules["AlgoTuner.models.together_model"] = algotune_together_mod

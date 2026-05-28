@@ -18,10 +18,7 @@ lifecycle with mock bfcl_eval modules available."""
 from __future__ import annotations
 
 import sys
-import types
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import MagicMock
 
 
 class TestIterHandlerClasses:

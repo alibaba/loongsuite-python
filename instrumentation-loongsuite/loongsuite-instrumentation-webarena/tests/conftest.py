@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Test configuration for WebArena instrumentation tests.
 
 Injects lightweight stub modules for WebArena's flat package layout
@@ -8,15 +22,13 @@ installing the real WebArena framework.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import types
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -45,6 +57,7 @@ if _UTIL_GENAI_SRC.is_dir() and str(_UTIL_GENAI_SRC) not in sys.path:
 
 class ActionTypes(Enum):
     """Minimal reproduction of ``browser_env.actions.ActionTypes``."""
+
     CLICK = 0
     TYPE = 1
     HOVER = 2
@@ -70,11 +83,15 @@ class ScriptBrowserEnv:
         self.page = _FakePage()
         self.main_observation_type = "accessibility_tree"
 
-    def reset(self, *, options: dict[str, Any] | None = None) -> tuple[dict[str, str], dict[str, Any]]:
+    def reset(
+        self, *, options: dict[str, Any] | None = None
+    ) -> tuple[dict[str, str], dict[str, Any]]:
         """Simulate env.reset returning (obs, info)."""
         return ({"text": "Initial observation"}, {"page": self.page})
 
-    def step(self, action: dict[str, Any]) -> tuple[str, bool, bool, bool, dict[str, Any]]:
+    def step(
+        self, action: dict[str, Any]
+    ) -> tuple[str, bool, bool, bool, dict[str, Any]]:
         """Simulate env.step returning (obs, reward, terminated, truncated, info)."""
         atype = action.get("action_type")
         terminated = False

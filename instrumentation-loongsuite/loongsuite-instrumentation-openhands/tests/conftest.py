@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Shared pytest fixtures and stub modules for the OpenHands instrumentation.
 
 We deliberately don't require ``openhands-ai`` to be installed at test time:
@@ -15,6 +29,7 @@ import types
 from dataclasses import dataclass, field
 
 import pytest
+
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -38,12 +53,12 @@ def _ensure_stub_module(name: str) -> types.ModuleType:
 def _install_v0_stub_modules() -> None:
     """Stubs for the V0 (Legacy CodeAct) hook points."""
     _ensure_stub_module("openhands")
-    core = _ensure_stub_module("openhands.core")
+    _ensure_stub_module("openhands.core")
     main_mod = _ensure_stub_module("openhands.core.main")
     loop_mod = _ensure_stub_module("openhands.core.loop")
-    ctrl_pkg = _ensure_stub_module("openhands.controller")
+    _ensure_stub_module("openhands.controller")
     ctrl_mod = _ensure_stub_module("openhands.controller.agent_controller")
-    rt_pkg = _ensure_stub_module("openhands.runtime")
+    _ensure_stub_module("openhands.runtime")
     rt_base = _ensure_stub_module("openhands.runtime.base")
 
     @dataclass
@@ -101,15 +116,16 @@ def _install_v0_stub_modules() -> None:
 
         async def _step(self) -> None:
             # Support test error injection via flag
-            err = getattr(self, '_test_raise_in_step', None)
+            err = getattr(self, "_test_raise_in_step", None)
             if err:
                 self._test_raise_in_step = None  # one-shot
                 raise err
             # Support empty-step testing: skip work when flag is set
-            if getattr(self, '_test_skip_work', False):
+            if getattr(self, "_test_skip_work", False):
                 self._test_skip_work = False  # one-shot
                 return
             type(self).step_calls += 1
+
             class _Pending:
                 action = "run"
                 command = "echo step"
@@ -121,7 +137,7 @@ def _install_v0_stub_modules() -> None:
 
         async def close(self, set_stop_state: bool = True) -> None:
             # Support test error injection via flag
-            err = getattr(self, '_test_raise_in_close', None)
+            err = getattr(self, "_test_raise_in_close", None)
             if err:
                 self._test_raise_in_close = None
                 raise err
@@ -161,7 +177,13 @@ def _install_v0_stub_modules() -> None:
                     self.choices = choices
 
             self.model_response = _ModelResp(
-                [_Choice(_Msg([_TC(tool_call_id, _Fn(function_name, arguments))]))]
+                [
+                    _Choice(
+                        _Msg(
+                            [_TC(tool_call_id, _Fn(function_name, arguments))]
+                        )
+                    )
+                ]
             )
 
     class _Action:
@@ -191,7 +213,7 @@ def _install_v0_stub_modules() -> None:
 
         def run_action(self, action) -> _Observation:
             # Support test error injection via flag
-            err = getattr(self, '_test_raise_in_run', None)
+            err = getattr(self, "_test_raise_in_run", None)
             if err:
                 self._test_raise_in_run = None
                 raise err
@@ -208,7 +230,7 @@ def _install_v0_stub_modules() -> None:
     rt_base.ToolCallMetadata = _ToolCallMetadata
 
     # LLM stub — lets the LLMInitWrapper patch succeed.
-    llm_pkg = _ensure_stub_module("openhands.llm")
+    _ensure_stub_module("openhands.llm")
     llm_mod = _ensure_stub_module("openhands.llm.llm")
 
     class LLM:
@@ -221,7 +243,9 @@ def _install_v0_stub_modules() -> None:
 
     @dataclass
     class _State2:
-        agent_state: _AgentState = field(default_factory=lambda: _AgentState("finished"))
+        agent_state: _AgentState = field(
+            default_factory=lambda: _AgentState("finished")
+        )
 
     async def run_controller(
         config=None,
@@ -278,4 +302,3 @@ def _reset_global_tracer():
     """Avoid bleed-through of the SDK provider between tests."""
     yield
     trace_api._TRACER_PROVIDER = None  # type: ignore[attr-defined]
-

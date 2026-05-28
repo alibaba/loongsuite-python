@@ -27,12 +27,11 @@ class TestToolSpan:
         import slop_code.agent_runner.agents._miniswe_agent as mod
 
         agent = mod.MiniSWEAgent(problem_name="test_prob")
-        result = agent.execute_action({"action": "ls -la", "thought": "List files"})
+        agent.execute_action({"action": "ls -la", "thought": "List files"})
 
         spans = span_exporter.get_finished_spans()
         tool_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "TOOL"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
         ]
         assert len(tool_spans) == 1
 
@@ -56,16 +55,21 @@ class TestToolSpan:
 
         spans = span_exporter.get_finished_spans()
         tool_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "TOOL"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
         ]
         assert len(tool_spans) == 1
-        assert "echo hello" in tool_spans[0].attributes["gen_ai.tool.call.arguments"]
+        assert (
+            "echo hello"
+            in tool_spans[0].attributes["gen_ai.tool.call.arguments"]
+        )
 
     def test_tool_span_error(self, span_exporter, tracer_provider):
         """Exception in execute_action should produce an error TOOL span."""
         import slop_code.agent_runner.agents._miniswe_agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class FailingToolAgent(mod.MiniSWEAgent):
             def execute_action(self, action):
@@ -75,7 +79,9 @@ class TestToolSpan:
         mod.MiniSWEAgent = FailingToolAgent
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.MiniSWEAgent(problem_name="test_prob")
@@ -85,7 +91,8 @@ class TestToolSpan:
 
             spans = span_exporter.get_finished_spans()
             tool_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "TOOL"
             ]
             assert len(tool_spans) == 1

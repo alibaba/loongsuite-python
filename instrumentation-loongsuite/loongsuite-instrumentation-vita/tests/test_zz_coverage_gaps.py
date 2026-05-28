@@ -22,7 +22,7 @@ error handling that swallows exceptions.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -44,7 +44,6 @@ from opentelemetry.instrumentation.vita.utils import (
     _infer_provider,
 )
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
-
 
 # ==================== helpers ====================
 
@@ -139,7 +138,9 @@ class TestUtilsCoverage:
         tool_with_name = SimpleNamespace(
             name="good_tool",
             short_desc="desc",
-            openai_schema={"function": {"name": "good_tool", "parameters": {}}},
+            openai_schema={
+                "function": {"name": "good_tool", "parameters": {}}
+            },
         )
         result = _get_tool_definitions([tool_no_name, tool_with_name])
         assert result is not None
@@ -148,7 +149,9 @@ class TestUtilsCoverage:
 
     def test_get_tool_definitions_all_nameless_returns_none(self):
         """Line 167: all tools nameless -> defs empty -> return None."""
-        tool_no_name = SimpleNamespace(name=None, short_desc="desc", openai_schema={})
+        tool_no_name = SimpleNamespace(
+            name=None, short_desc="desc", openai_schema={}
+        )
         result = _get_tool_definitions([tool_no_name])
         assert result is None
 
@@ -174,7 +177,9 @@ class TestCloseActiveReactStep:
 
         try:
             with patch.object(
-                handler, "stop_react_step", side_effect=RuntimeError("stop failed")
+                handler,
+                "stop_react_step",
+                side_effect=RuntimeError("stop failed"),
             ):
                 _close_active_react_step(handler)
 
@@ -240,7 +245,6 @@ class TestWrapOrchestratorStepDirect:
         )
 
         import sys
-        import vita.orchestrator.orchestrator  # ensure module is loaded
 
         vita_orch_mod = sys.modules["vita.orchestrator.orchestrator"]
         saved_role = vita_orch_mod.Role

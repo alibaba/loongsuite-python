@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Supplemental tests for WideSearch instrumentation.
 
 Covers uncovered error-handling branches, edge cases, and fallback paths
@@ -10,28 +24,26 @@ import asyncio
 import json
 import sys
 import types
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from opentelemetry.trace import StatusCode
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import StatusCode
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 
 from .conftest import (
     ActionStep,
-    ActionStepError,
     Agent,
     ErrorMarker,
     InternalResponse,
     LLMOutputItem,
     MemoryAgent,
     ModelResponse,
-    Runner,
     StepStatus,
     ToolCall,
     ToolCallResult,
@@ -68,7 +80,9 @@ class TestInstrumentErrorHandling:
         self, tracer_provider, meter_provider
     ):
         """If src.agent.run is missing, instrumentation should warn but not crash."""
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+        from opentelemetry.instrumentation.widesearch import (
+            WideSearchInstrumentor,
+        )
 
         saved = {}
         keys_to_remove = [
@@ -96,11 +110,11 @@ class TestInstrumentErrorHandling:
         self, tracer_provider, meter_provider
     ):
         """Each wrap_function_wrapper call is independently try/excepted."""
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+        from opentelemetry.instrumentation.widesearch import (
+            WideSearchInstrumentor,
+        )
 
         call_count = 0
-
-        original_wrap = None
 
         def failing_wrap(*args, **kwargs):
             nonlocal call_count
@@ -133,7 +147,9 @@ class TestUninstrumentErrorHandling:
         self, tracer_provider, meter_provider
     ):
         """_uninstrument should gracefully handle missing modules."""
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+        from opentelemetry.instrumentation.widesearch import (
+            WideSearchInstrumentor,
+        )
 
         instrumentor = WideSearchInstrumentor()
         instrumentor.instrument(
@@ -159,7 +175,9 @@ class TestUninstrumentErrorHandling:
         self, tracer_provider, meter_provider
     ):
         """_uninstrument should gracefully handle unwrap exceptions."""
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+        from opentelemetry.instrumentation.widesearch import (
+            WideSearchInstrumentor,
+        )
 
         instrumentor = WideSearchInstrumentor()
         instrumentor.instrument(
@@ -457,9 +475,7 @@ class TestToolCallEmptyPaths:
         from src.agent.run import Runner
 
         agent = Agent(name="no-tc-agent")
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[])])
 
         result = _run_async(Runner._invoke_tool_call(agent, model_resp))
         assert result == []
@@ -495,9 +511,7 @@ class TestToolInvocationCreationFailure:
             arguments='{"key": "val"}',
             tool_call_id="call_fb",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         with patch(
             "opentelemetry.instrumentation.widesearch.patch._create_tool_invocation",
@@ -524,9 +538,7 @@ class TestToolInvocationCreationFailure:
             arguments="{}",
             tool_call_id="call_miss",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         with patch(
             "opentelemetry.instrumentation.widesearch.patch._create_tool_invocation",
@@ -554,9 +566,7 @@ class TestToolInvocationCreationFailure:
             arguments='{"x": 1}',
             tool_call_id="call_boom",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         with patch(
             "opentelemetry.instrumentation.widesearch.patch._create_tool_invocation",
@@ -587,9 +597,7 @@ class TestToolInvocationCreationFailure:
             arguments='{"msg": "hello"}',
             tool_call_id="call_echo",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         with patch(
             "opentelemetry.instrumentation.widesearch.patch._create_tool_invocation",
@@ -619,9 +627,7 @@ class TestToolInvocationCreationFailure:
             arguments="not valid json {{{",
             tool_call_id="call_bad",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         with patch(
             "opentelemetry.instrumentation.widesearch.patch._create_tool_invocation",
@@ -657,9 +663,7 @@ class TestToolInvocationCreationFailure:
             arguments="{}",
             tool_call_id="call_err_resp",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         with patch(
             "opentelemetry.instrumentation.widesearch.patch._create_tool_invocation",
@@ -696,9 +700,7 @@ class TestToolArgumentsJsonDecode:
             arguments="not-json!!!",
             tool_call_id="call_badjson",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         results = _run_async(Runner._invoke_tool_call(agent, model_resp))
         assert len(results) == 1
@@ -740,9 +742,7 @@ class TestToolResponseErrors:
             arguments="{}",
             tool_call_id="call_err_marker",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         results = _run_async(Runner._invoke_tool_call(agent, model_resp))
         assert len(results) == 1
@@ -773,9 +773,7 @@ class TestToolResponseErrors:
             arguments="{}",
             tool_call_id="call_sys_err",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         results = _run_async(Runner._invoke_tool_call(agent, model_resp))
         assert len(results) == 1
@@ -794,7 +792,9 @@ class TestToolResponseErrors:
 
 
 class TestTaskSpanEdgeCases:
-    def test_task_span_safe_input_json_failure(self, span_exporter, instrument):
+    def test_task_span_safe_input_json_failure(
+        self, span_exporter, instrument
+    ):
         """TASK span should survive if json.dumps for input fails."""
         from opentelemetry.instrumentation.widesearch.patch import (
             wrap_create_sub_agents_factory,
@@ -917,9 +917,7 @@ class TestUtilsAgentInvocation:
 
         try:
             # Override the import path to raise
-            with patch.dict(
-                sys.modules, {"src.utils.config": None}
-            ):
+            with patch.dict(sys.modules, {"src.utils.config": None}):
                 # Need to make the import actually fail
                 saved_mod = sys.modules.pop("src.utils.config", None)
                 bad_mod = types.ModuleType("src.utils.config")
@@ -1048,9 +1046,7 @@ class TestExtractOutputMessages:
             _extract_output_messages,
         )
 
-        messages = [
-            {"role": "assistant", "content": "direct string answer"}
-        ]
+        messages = [{"role": "assistant", "content": "direct string answer"}]
         result = _extract_output_messages(messages)
         assert len(result) == 1
         assert result[0].parts[0].content == "direct string answer"

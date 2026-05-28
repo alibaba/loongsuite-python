@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Instrumentor lifecycle tests for WebarenaInstrumentor.
 
 Covers instrument / uninstrument, dependency declarations, double
@@ -7,9 +21,6 @@ instrument / uninstrument, and wrapping verification.
 from __future__ import annotations
 
 import sys
-import types
-
-import pytest
 
 from opentelemetry.instrumentation.webarena import WebarenaInstrumentor
 from opentelemetry.instrumentation.webarena.package import _instruments
@@ -57,7 +68,7 @@ class TestWrapping:
     def test_env_reset_is_wrapped(self, instrument):
         import browser_env.envs as envs_mod
 
-        env = envs_mod.ScriptBrowserEnv()
+        envs_mod.ScriptBrowserEnv()
         # After instrumentation, the method should have __wrapped__
         assert hasattr(envs_mod.ScriptBrowserEnv.reset, "__wrapped__")
 

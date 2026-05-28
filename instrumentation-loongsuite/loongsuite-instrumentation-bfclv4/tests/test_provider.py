@@ -16,14 +16,11 @@
 
 from __future__ import annotations
 
-import os
-
-import pytest
-
 
 class TestInferProvider:
     def test_openai_completions(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -37,6 +34,7 @@ class TestInferProvider:
 
     def test_openai_responses(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -49,6 +47,7 @@ class TestInferProvider:
 
     def test_anthropic(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -61,6 +60,7 @@ class TestInferProvider:
 
     def test_google(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -73,6 +73,7 @@ class TestInferProvider:
 
     def test_mistral(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -85,6 +86,7 @@ class TestInferProvider:
 
     def test_cohere(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -97,6 +99,7 @@ class TestInferProvider:
 
     def test_amazon(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -109,6 +112,7 @@ class TestInferProvider:
 
     def test_firework_ai(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -121,6 +125,7 @@ class TestInferProvider:
 
     def test_writer(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -133,6 +138,7 @@ class TestInferProvider:
 
     def test_novita_ai(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -145,6 +151,7 @@ class TestInferProvider:
 
     def test_nexus(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -157,6 +164,7 @@ class TestInferProvider:
 
     def test_gorilla(self):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -169,6 +177,7 @@ class TestInferProvider:
 
     def test_oss_vllm(self, monkeypatch):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -184,6 +193,7 @@ class TestInferProvider:
 
     def test_oss_sglang(self, monkeypatch):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )
@@ -198,6 +208,7 @@ class TestInferProvider:
 
     def test_oss_unknown_backend(self, monkeypatch):
         from bfcl_eval.constants.enums import ModelStyle
+
         from opentelemetry.instrumentation.bfclv4.internal.provider import (
             infer_provider,
         )

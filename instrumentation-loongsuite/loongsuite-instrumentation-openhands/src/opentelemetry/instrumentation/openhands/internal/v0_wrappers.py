@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Wrappers for the OpenHands **V0** (Legacy CodeAct) architecture.
 
 Trace tree
@@ -61,17 +75,6 @@ from typing import Any
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace as trace_api
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.trace import (
-    SpanKind,
-    Status,
-    StatusCode,
-    Tracer,
-    set_span_in_context,
-)
-
 from opentelemetry.instrumentation.openhands.config import (
     OTEL_INSTRUMENTATION_OPENHANDS_OUTER_SPANS,
 )
@@ -92,12 +95,20 @@ from opentelemetry.instrumentation.openhands.internal.session_context import (
 from opentelemetry.instrumentation.openhands.internal.utils import (
     action_to_genai_output,
     maybe_preview,
-    maybe_to_json_str,
-    messages_to_genai_input,
     safe_get_attr,
     safe_str,
     serialize_message,
     to_json_str,
+)
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.trace import (
+    SpanKind,
+    Status,
+    StatusCode,
+    Tracer,
+    set_span_in_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,8 +239,16 @@ def _state_to_input_messages(state: Any, max_messages: int = 10) -> str:
         cls_name = type(ev).__name__
         # Map common event types to roles
         if cls_name in ("MessageAction", "SystemMessageAction"):
-            role = "user" if str(safe_get_attr(ev, "source")) == "user" else "assistant"
-            content = safe_get_attr(ev, "content") or safe_get_attr(ev, "message") or ""
+            role = (
+                "user"
+                if str(safe_get_attr(ev, "source")) == "user"
+                else "assistant"
+            )
+            content = (
+                safe_get_attr(ev, "content")
+                or safe_get_attr(ev, "message")
+                or ""
+            )
         elif cls_name.endswith("Action"):
             role = "assistant"
             content = (
@@ -244,7 +263,9 @@ def _state_to_input_messages(state: Any, max_messages: int = 10) -> str:
         else:
             role = "system"
             content = safe_str(ev)
-        items.append({"role": role, "content": safe_str(content), "event": cls_name})
+        items.append(
+            {"role": role, "content": safe_str(content), "event": cls_name}
+        )
     return to_json_str(items)
 
 
@@ -255,9 +276,9 @@ def _final_state_to_output(state: Any) -> str:
     payload: dict[str, Any] = {}
     agent_state = safe_get_attr(state, "agent_state")
     if agent_state is not None:
-        payload["agent_state"] = (
-            safe_get_attr(agent_state, "value") or safe_str(agent_state)
-        )
+        payload["agent_state"] = safe_get_attr(
+            agent_state, "value"
+        ) or safe_str(agent_state)
     last_error = safe_get_attr(state, "last_error")
     if last_error:
         payload["last_error"] = safe_str(last_error)
@@ -275,7 +296,9 @@ def _final_state_to_output(state: Any) -> str:
                     or safe_get_attr(ev, "thought")
                     or ""
                 )
-                payload["outputs"] = safe_str(safe_get_attr(ev, "outputs") or {})
+                payload["outputs"] = safe_str(
+                    safe_get_attr(ev, "outputs") or {}
+                )
                 break
     return to_json_str(payload)
 
@@ -355,9 +378,7 @@ def _action_event_to_parts(ev: Any) -> list[dict[str, Any]]:
         try:
             mr = safe_get_attr(tcm, "model_response")
             choices = (
-                getattr(mr, "choices", None)
-                if mr is not None
-                else None
+                getattr(mr, "choices", None) if mr is not None else None
             ) or []
             for choice in choices:
                 msg = getattr(choice, "message", None) or (
@@ -419,7 +440,8 @@ def _action_event_to_parts(ev: Any) -> list[dict[str, Any]]:
                 {
                     "type": "tool_call",
                     "id": tcid,
-                    "name": fn_name or safe_str(safe_get_attr(ev, "action") or ""),
+                    "name": fn_name
+                    or safe_str(safe_get_attr(ev, "action") or ""),
                     "arguments": args,
                 }
             )
@@ -427,7 +449,9 @@ def _action_event_to_parts(ev: Any) -> list[dict[str, Any]]:
         # Minimal fallback when nothing else could be extracted.
         action_type = safe_str(safe_get_attr(ev, "action") or "")
         if action_type:
-            parts.append({"type": "tool_call", "name": action_type, "arguments": {}})
+            parts.append(
+                {"type": "tool_call", "name": action_type, "arguments": {}}
+            )
     return parts
 
 
@@ -449,7 +473,9 @@ def _observation_event_to_parts(ev: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _history_to_input_messages_schema(history: list, max_events: int = 200) -> list[dict[str, Any]]:
+def _history_to_input_messages_schema(
+    history: list, max_events: int = 200
+) -> list[dict[str, Any]]:
     """Convert ``state.history`` into the ARMS gen_ai.input.messages schema.
 
     Folds adjacent same-role events into a single message with multiple
@@ -509,9 +535,10 @@ def _history_to_output_messages_schema(history: list) -> list[dict[str, Any]]:
             continue
         if cls.endswith("Observation") or cls == "MessageAction":
             # Stop once we cross back into user-input or tool-result territory.
-            if cls == "MessageAction" and str(
-                safe_get_attr(ev, "source") or ""
-            ).lower() == "user":
+            if (
+                cls == "MessageAction"
+                and str(safe_get_attr(ev, "source") or "").lower() == "user"
+            ):
                 break
             if cls.endswith("Observation"):
                 break
@@ -541,10 +568,14 @@ def _history_to_output_messages_schema(history: list) -> list[dict[str, Any]]:
             parts.extend(_action_event_to_parts(ev))
     if not parts:
         parts = [{"type": "text", "content": ""}]
-    return [{"role": "assistant", "parts": parts, "finish_reason": finish_reason}]
+    return [
+        {"role": "assistant", "parts": parts, "finish_reason": finish_reason}
+    ]
 
 
-def _agent_to_system_instructions(agent: Any, state: Any) -> list[dict[str, Any]]:
+def _agent_to_system_instructions(
+    agent: Any, state: Any
+) -> list[dict[str, Any]]:
     """Return ARMS gen_ai.system_instructions for the controller's agent.
 
     Tries the explicit ``agent.get_system_message()`` API first (most
@@ -610,7 +641,9 @@ class RunControllerWrapper:
         # the controller will publish ``controller.id`` later. We update
         # the stash again from inside the AGENT wrapper.
 
-        span = self._tracer.start_span("enter openhands", kind=SpanKind.INTERNAL)
+        span = self._tracer.start_span(
+            "enter openhands", kind=SpanKind.INTERNAL
+        )
         _set_common(span, "ENTRY")
         span.set_attribute(GenAI.GEN_AI_OPERATION_NAME, "enter")
         if sid:
@@ -643,11 +676,13 @@ class RunControllerWrapper:
                 result = await wrapped(*args, **kwargs)
             except BaseException as exc:
                 span.record_exception(exc)
-                span.set_status(Status(StatusCode.ERROR, type(exc).__qualname__))
+                span.set_status(
+                    Status(StatusCode.ERROR, type(exc).__qualname__)
+                )
                 raise
             try:
-                entry_input_messages, entry_output_messages = _entry_io_from_state(
-                    result
+                entry_input_messages, entry_output_messages = (
+                    _entry_io_from_state(result)
                 )
                 if entry_input_messages or entry_output_messages:
                     _set_io(
@@ -659,7 +694,8 @@ class RunControllerWrapper:
                 if agent_state is not None:
                     span.set_attribute(
                         OH_AGENT_STATE,
-                        safe_get_attr(agent_state, "value") or safe_str(agent_state),
+                        safe_get_attr(agent_state, "value")
+                        or safe_str(agent_state),
                     )
             except Exception:
                 pass
@@ -710,14 +746,19 @@ class RunAgentUntilDoneWrapper:
         sid = safe_str(safe_get_attr(controller, "id") or "")
         llm = safe_get_attr(agent, "llm")
         llm_config = safe_get_attr(llm, "config")
-        model = safe_get_attr(llm_config, "model") or safe_get_attr(llm, "model")
+        model = safe_get_attr(llm_config, "model") or safe_get_attr(
+            llm, "model"
+        )
 
         # If AgentController.__init__ already opened lifecycle-bound ENTRY+AGENT
         # spans, do not create a second AGENT here. Just run the loop with the
         # existing AGENT context current so STEP/LLM/TOOL remain descendants.
         lifecycle_agent_span = getattr(controller, _AGENT_SPAN_ATTR, None)
         lifecycle_agent_ctx = getattr(controller, _AGENT_CTX_ATTR, None)
-        if lifecycle_agent_span is not None and lifecycle_agent_ctx is not None:
+        if (
+            lifecycle_agent_span is not None
+            and lifecycle_agent_ctx is not None
+        ):
             try:
                 _capture_agent_io_attributes(
                     lifecycle_agent_span,
@@ -747,7 +788,9 @@ class RunAgentUntilDoneWrapper:
                     )
                     history = safe_get_attr(state, "history") or []
                     if isinstance(history, list):
-                        lifecycle_agent_span.set_attribute(OH_HISTORY_LENGTH, len(history))
+                        lifecycle_agent_span.set_attribute(
+                            OH_HISTORY_LENGTH, len(history)
+                        )
                 except Exception:
                     pass
                 try:
@@ -765,14 +808,18 @@ class RunAgentUntilDoneWrapper:
                 "enter openhands", kind=SpanKind.INTERNAL
             )
             _set_common(fallback_entry_span, "ENTRY")
-            fallback_entry_span.set_attribute(GenAI.GEN_AI_OPERATION_NAME, "enter")
+            fallback_entry_span.set_attribute(
+                GenAI.GEN_AI_OPERATION_NAME, "enter"
+            )
             if sid:
                 fallback_entry_span.set_attribute(GEN_AI_SESSION_ID, sid)
                 fallback_entry_span.set_attribute(GEN_AI_CONVERSATION_ID, sid)
             if agent_class:
                 fallback_entry_span.set_attribute(OH_AGENT_NAME, agent_class)
             if model:
-                fallback_entry_span.set_attribute(GEN_AI_REQUEST_MODEL, safe_str(model))
+                fallback_entry_span.set_attribute(
+                    GEN_AI_REQUEST_MODEL, safe_str(model)
+                )
             try:
                 state = safe_get_attr(controller, "state")
                 entry_input_messages, _ = _entry_io_from_state(state)
@@ -834,7 +881,10 @@ class RunAgentUntilDoneWrapper:
                         name = safe_get_attr(fn, "name")
                     if not name:
                         continue
-                    item: dict[str, Any] = {"type": safe_str(kind), "name": safe_str(name)}
+                    item: dict[str, Any] = {
+                        "type": safe_str(kind),
+                        "name": safe_str(name),
+                    }
                     if isinstance(fn, dict):
                         desc = fn.get("description")
                         params = fn.get("parameters")
@@ -883,20 +933,26 @@ class RunAgentUntilDoneWrapper:
                             context=ctx_with_agent,
                         )
                         _set_common(warmup_step, "STEP")
-                        warmup_step.set_attribute(GenAI.GEN_AI_OPERATION_NAME, "react")
+                        warmup_step.set_attribute(
+                            GenAI.GEN_AI_OPERATION_NAME, "react"
+                        )
                         warmup_step.set_attribute(OH_REACT_ROUND, 1)
                         warmup_step.set_attribute(
                             GenAI.GEN_AI_AGENT_NAME, safe_str(agent_name)
                         )
                         if sid:
                             warmup_step.set_attribute(GEN_AI_SESSION_ID, sid)
-                            warmup_step.set_attribute(GEN_AI_CONVERSATION_ID, sid)
+                            warmup_step.set_attribute(
+                                GEN_AI_CONVERSATION_ID, sid
+                            )
                             warmup_step.set_attribute(GEN_AI_AGENT_ID, sid)
                         setattr(controller, _STEP_SPAN_ATTR, warmup_step)
                         setattr(controller, "_otel_oh_round", 1)
                         setattr(controller, "_otel_oh_step_consumed", False)
                         if sid:
-                            store_context(sid, set_span_in_context(warmup_step))
+                            store_context(
+                                sid, set_span_in_context(warmup_step)
+                            )
                     except Exception:
                         pass
             agent_token = otel_context.attach(ctx_with_agent)
@@ -912,7 +968,9 @@ class RunAgentUntilDoneWrapper:
                 # Capture final AGENT I/O using ARMS gen_ai.* message attrs.
                 try:
                     state = safe_get_attr(controller, "state")
-                    _capture_agent_io_attributes(span, controller, agent, state)
+                    _capture_agent_io_attributes(
+                        span, controller, agent, state
+                    )
                     if state is not None:
                         agent_state = safe_get_attr(state, "agent_state")
                         if agent_state is not None:
@@ -952,8 +1010,8 @@ class RunAgentUntilDoneWrapper:
             if fallback_entry_span is not None:
                 try:
                     state = safe_get_attr(controller, "state")
-                    entry_input_messages, entry_output_messages = _entry_io_from_state(
-                        state
+                    entry_input_messages, entry_output_messages = (
+                        _entry_io_from_state(state)
                     )
                     if entry_input_messages or entry_output_messages:
                         _set_io(
@@ -963,7 +1021,9 @@ class RunAgentUntilDoneWrapper:
                         )
                     history = safe_get_attr(state, "history") or []
                     if isinstance(history, list):
-                        fallback_entry_span.set_attribute(OH_HISTORY_LENGTH, len(history))
+                        fallback_entry_span.set_attribute(
+                            OH_HISTORY_LENGTH, len(history)
+                        )
                 except Exception:
                     pass
                 try:
@@ -1062,9 +1122,9 @@ class AgentControllerStepWrapper:
             state = safe_get_attr(instance, "state")
             agent_state = safe_get_attr(state, "agent_state")
             # AgentState enum value is 'running' (case-insensitive).
-            agent_state_str = (
-                safe_str(safe_get_attr(agent_state, "value") or agent_state).lower()
-            )
+            agent_state_str = safe_str(
+                safe_get_attr(agent_state, "value") or agent_state
+            ).lower()
             if agent_state_str != "running":
                 return True
             # Check the underlying tuple slot, not the property — the
@@ -1113,7 +1173,10 @@ class AgentControllerStepWrapper:
         # Snapshot the AGENT context if we don't already have one so
         # ``_close_open_step`` can restore the session stash to AGENT
         # after STEP ends.
-        if not hasattr(instance, _AGENT_CTX_ATTR) or getattr(instance, _AGENT_CTX_ATTR, None) is None:
+        if (
+            not hasattr(instance, _AGENT_CTX_ATTR)
+            or getattr(instance, _AGENT_CTX_ATTR, None) is None
+        ):
             try:
                 setattr(instance, _AGENT_CTX_ATTR, get_context(sid))
             except Exception:
@@ -1273,9 +1336,8 @@ class AgentControllerStepWrapper:
         post_history_len, post_pending_id = self._snapshot_for_work_detection(
             instance
         )
-        did_work = (
-            post_history_len > pre_history_len
-            or (post_pending_id is not None and post_pending_id != pre_pending_id)
+        did_work = post_history_len > pre_history_len or (
+            post_pending_id is not None and post_pending_id != pre_pending_id
         )
 
         if not did_work and is_new_span:
@@ -1349,7 +1411,10 @@ class AgentControllerStepWrapper:
             agent_span = getattr(instance, _AGENT_SPAN_ATTR, None)
             if agent_span is not None:
                 _capture_agent_io_attributes(
-                    agent_span, instance, agent, safe_get_attr(instance, "state")
+                    agent_span,
+                    instance,
+                    agent,
+                    safe_get_attr(instance, "state"),
                 )
         except Exception:
             pass
@@ -1432,7 +1497,7 @@ def _action_type_value(action: Any) -> str:
     # ``str(ActionType.MESSAGE)`` → "actiontype.message"; strip the prefix.
     prefix = "actiontype."
     if text.startswith(prefix):
-        return text[len(prefix):]
+        return text[len(prefix) :]
     return text
 
 
@@ -1484,7 +1549,9 @@ def _extract_tool_name(action: Any) -> tuple[str, str]:
         fn = safe_get_attr(tcm, "function_name")
         if fn:
             return safe_str(fn), action_type
-    tool_name = _TOOL_KIND_TO_NAME.get(action_type, action_type or "agent.action")
+    tool_name = _TOOL_KIND_TO_NAME.get(
+        action_type, action_type or "agent.action"
+    )
     return tool_name, action_type
 
 
@@ -1601,12 +1668,18 @@ class RuntimeRunActionWrapper:
                 if tool_def is not None:
                     if isinstance(tool_def, dict):
                         fn = tool_def.get("function") or {}
-                        desc = fn.get("description") if isinstance(fn, dict) else None
+                        desc = (
+                            fn.get("description")
+                            if isinstance(fn, dict)
+                            else None
+                        )
                     else:
                         fn = safe_get_attr(tool_def, "function")
                         desc = safe_get_attr(fn, "description")
                     if desc:
-                        span.set_attribute(GEN_AI_TOOL_DESCRIPTION, safe_str(desc))
+                        span.set_attribute(
+                            GEN_AI_TOOL_DESCRIPTION, safe_str(desc)
+                        )
             except Exception:
                 pass
 
@@ -1944,7 +2017,9 @@ def _open_entry_and_agent_for_controller(
     entry_ctx = get_context(sid)
     if entry_ctx is None:
         try:
-            entry = tracer.start_span("enter openhands", kind=SpanKind.INTERNAL)
+            entry = tracer.start_span(
+                "enter openhands", kind=SpanKind.INTERNAL
+            )
         except Exception as exc:
             logger.error(
                 "OpenHands instrumentation: failed to start ENTRY span for "
@@ -1973,7 +2048,9 @@ def _open_entry_and_agent_for_controller(
                     input_messages=entry_input_messages,
                 )
         except Exception as exc:
-            logger.debug("OpenHands instrumentation: ENTRY attr setup: %s", exc)
+            logger.debug(
+                "OpenHands instrumentation: ENTRY attr setup: %s", exc
+            )
 
         entry_ctx = set_span_in_context(entry)
 
@@ -2039,7 +2116,10 @@ def _open_entry_and_agent_for_controller(
                 name = safe_get_attr(fn, "name")
             if not name:
                 continue
-            item: dict[str, Any] = {"type": safe_str(kind), "name": safe_str(name)}
+            item: dict[str, Any] = {
+                "type": safe_str(kind),
+                "name": safe_str(name),
+            }
             if isinstance(fn, dict):
                 desc = fn.get("description")
                 params = fn.get("parameters")
@@ -2128,7 +2208,11 @@ def _open_entry_and_agent_for_controller(
         setattr(controller, _AGENT_CTX_ATTR, agent_ctx)
         # Stash warmup STEP so the first real ``_step`` reuses it.
         setattr(controller, _STEP_SPAN_ATTR, warmup_step_span)
-        setattr(controller, "_otel_oh_round", 1 if warmup_step_span is not None else 0)
+        setattr(
+            controller,
+            "_otel_oh_round",
+            1 if warmup_step_span is not None else 0,
+        )
         setattr(controller, "_otel_oh_step_consumed", False)
     except Exception:
         # If we can't attach to the instance (slots, etc.), close the
@@ -2196,8 +2280,12 @@ def _close_entry_and_agent_for_controller(
     sid = safe_str(safe_get_attr(controller, "id") or "")
     agent = safe_get_attr(controller, "agent")
     state = safe_get_attr(controller, "state")
-    entry_span: trace_api.Span | None = getattr(controller, _ENTRY_SPAN_ATTR, None)
-    agent_span: trace_api.Span | None = getattr(controller, _AGENT_SPAN_ATTR, None)
+    entry_span: trace_api.Span | None = getattr(
+        controller, _ENTRY_SPAN_ATTR, None
+    )
+    agent_span: trace_api.Span | None = getattr(
+        controller, _AGENT_SPAN_ATTR, None
+    )
     # Legacy slots — kept for back-compat with already-instrumented
     # instances created before we stopped persisting attach-tokens.
     # If they're set we simply ignore them (any detach attempt across
@@ -2228,7 +2316,8 @@ def _close_entry_and_agent_for_controller(
             if agent_state is not None:
                 agent_span.set_attribute(
                     OH_AGENT_STATE,
-                    safe_get_attr(agent_state, "value") or safe_str(agent_state),
+                    safe_get_attr(agent_state, "value")
+                    or safe_str(agent_state),
                 )
         except Exception:
             pass
@@ -2261,7 +2350,8 @@ def _close_entry_and_agent_for_controller(
             if agent_state is not None:
                 entry_span.set_attribute(
                     OH_AGENT_STATE,
-                    safe_get_attr(agent_state, "value") or safe_str(agent_state),
+                    safe_get_attr(agent_state, "value")
+                    or safe_str(agent_state),
                 )
             history = safe_get_attr(state, "history") or []
             if isinstance(history, list):
@@ -2467,7 +2557,9 @@ class LLMInitWrapper:
         try:
             self._patch_completion(instance)
         except Exception as exc:
-            logger.debug("LLM init wrapper failed to bridge completion: %s", exc)
+            logger.debug(
+                "LLM init wrapper failed to bridge completion: %s", exc
+            )
         return result
 
     @staticmethod
@@ -2498,7 +2590,9 @@ class LLMInitWrapper:
         # call ``_completion_unwrapped`` directly when retries are
         # disabled, and we want them to inherit the same parent context.
         unwrapped = getattr(instance, "_completion_unwrapped", None)
-        if unwrapped is not None and not getattr(unwrapped, _LLM_BRIDGE_FLAG, False):
+        if unwrapped is not None and not getattr(
+            unwrapped, _LLM_BRIDGE_FLAG, False
+        ):
 
             def bridged_unwrapped(*a: Any, **kw: Any) -> Any:
                 with AttachedSession(None):

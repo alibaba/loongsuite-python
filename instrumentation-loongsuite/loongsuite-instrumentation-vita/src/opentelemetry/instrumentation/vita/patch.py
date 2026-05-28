@@ -29,12 +29,13 @@ import json
 import logging
 import uuid
 from contextvars import ContextVar
-from typing import Any, Optional
+from typing import Optional
 
-from opentelemetry import trace as trace_api
 from opentelemetry.trace import SpanKind, Status, StatusCode
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
-from opentelemetry.util.genai.extended_semconv import gen_ai_extended_attributes
+from opentelemetry.util.genai.extended_semconv import (
+    gen_ai_extended_attributes,
+)
 from opentelemetry.util.genai.extended_types import (
     EntryInvocation,
     ExecuteToolInvocation,
@@ -50,11 +51,11 @@ from opentelemetry.util.genai.types import (
 )
 
 from .utils import (
+    _MAX_CONTENT_LEN,
     _convert_vita_assistant_to_output,
     _convert_vita_messages_to_input,
     _get_tool_definitions,
     _infer_provider,
-    _MAX_CONTENT_LEN,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ def wrap_run_task(
 ):
     """Wrapper for vita.run.run_task to create ENTRY span."""
     task = args[1] if len(args) > 1 else kwargs.get("task")
-    domain = args[0] if args else kwargs.get("domain")
+    args[0] if args else kwargs.get("domain")
 
     invocation = EntryInvocation(
         session_id=str(uuid.uuid4()),
@@ -102,7 +103,12 @@ def wrap_run_task(
 
     if task and hasattr(task, "instructions") and task.instructions:
         invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content=str(task.instructions)[:_MAX_CONTENT_LEN])])
+            InputMessage(
+                role="user",
+                parts=[
+                    Text(content=str(task.instructions)[:_MAX_CONTENT_LEN])
+                ],
+            )
         ]
 
     handler.start_entry(invocation)
@@ -111,8 +117,13 @@ def wrap_run_task(
 
         if result:
             output_parts = []
-            if hasattr(result, "termination_reason") and result.termination_reason:
-                output_parts.append(Text(content=f"termination: {result.termination_reason}"))
+            if (
+                hasattr(result, "termination_reason")
+                and result.termination_reason
+            ):
+                output_parts.append(
+                    Text(content=f"termination: {result.termination_reason}")
+                )
             if hasattr(result, "reward_info") and result.reward_info:
                 reward = getattr(result.reward_info, "reward", None)
                 if reward is not None:
@@ -173,8 +184,14 @@ def wrap_orchestrator_run(
             # Close any remaining open step span
             _close_active_react_step(handler)
 
-            if result and hasattr(result, "termination_reason") and result.termination_reason:
-                span.set_attribute("output.value", str(result.termination_reason))
+            if (
+                result
+                and hasattr(result, "termination_reason")
+                and result.termination_reason
+            ):
+                span.set_attribute(
+                    "output.value", str(result.termination_reason)
+                )
 
             span.set_status(Status(StatusCode.OK))
             return result
@@ -202,15 +219,16 @@ def wrap_orchestrator_step(
     _Role = None
     try:
         from vita.orchestrator.orchestrator import Role
+
         _Role = Role
     except ImportError:
         pass
 
     is_agent_turn = False
     if _Role is not None:
-        is_agent_turn = (to_role == _Role.AGENT)
+        is_agent_turn = to_role == _Role.AGENT
     else:
-        is_agent_turn = (str(to_role) == "Role.AGENT" or str(to_role) == "agent")
+        is_agent_turn = str(to_role) == "Role.AGENT" or str(to_role) == "agent"
 
     if is_agent_turn:
         # Close previous STEP span (deferred close strategy)
@@ -242,7 +260,11 @@ def wrap_orchestrator_step(
                         current_step.finish_reason = "agent_stop"
                 else:
                     message = getattr(instance, "message", None)
-                    if message and hasattr(message, "is_tool_call") and message.is_tool_call():
+                    if (
+                        message
+                        and hasattr(message, "is_tool_call")
+                        and message.is_tool_call()
+                    ):
                         current_step.finish_reason = "tool_call"
                     else:
                         current_step.finish_reason = "assistant_text"
@@ -252,7 +274,9 @@ def wrap_orchestrator_step(
         current_step = _react_step_invocation.get()
         if current_step:
             current_step.finish_reason = "error"
-            handler.fail_react_step(current_step, Error(message=str(e), type=type(e)))
+            handler.fail_react_step(
+                current_step, Error(message=str(e), type=type(e))
+            )
             _react_step_invocation.set(None)
         raise
 
@@ -283,10 +307,16 @@ def wrap_generate_next_message(
         message = args[0] if args else kwargs.get("message")
         state = args[1] if len(args) > 1 else kwargs.get("state")
         if message:
-            invocation.input_messages = _convert_vita_messages_to_input([message])
+            invocation.input_messages = _convert_vita_messages_to_input(
+                [message]
+            )
 
         # system_instruction
-        if state and hasattr(state, "system_messages") and state.system_messages:
+        if (
+            state
+            and hasattr(state, "system_messages")
+            and state.system_messages
+        ):
             invocation.system_instruction = [
                 Text(content=str(sm.content)[:_MAX_CONTENT_LEN])
                 for sm in state.system_messages
@@ -306,7 +336,9 @@ def wrap_generate_next_message(
             assistant_msg, _ = result
 
             # output_messages
-            invocation.output_messages = _convert_vita_assistant_to_output(assistant_msg)
+            invocation.output_messages = _convert_vita_assistant_to_output(
+                assistant_msg
+            )
 
             # token usage
             usage = getattr(assistant_msg, "usage", None)
@@ -317,7 +349,9 @@ def wrap_generate_next_message(
             handler.stop_invoke_agent(invocation)
             return result
         except Exception as e:
-            handler.fail_invoke_agent(invocation, Error(message=str(e), type=type(e)))
+            handler.fail_invoke_agent(
+                invocation, Error(message=str(e), type=type(e))
+            )
             raise
     finally:
         _in_agent_invoke.reset(token)
@@ -357,7 +391,9 @@ def wrap_generate(
 
         if result:
             # output_messages
-            invocation.output_messages = _convert_vita_assistant_to_output(result)
+            invocation.output_messages = _convert_vita_assistant_to_output(
+                result
+            )
 
             # response_model_name
             invocation.response_model_name = model
@@ -406,7 +442,9 @@ def wrap_get_response(
                 message.arguments, ensure_ascii=False, default=str
             )[:_MAX_CONTENT_LEN]
         except Exception:
-            invocation.tool_call_arguments = str(message.arguments)[:_MAX_CONTENT_LEN]
+            invocation.tool_call_arguments = str(message.arguments)[
+                :_MAX_CONTENT_LEN
+            ]
 
     handler.start_execute_tool(invocation)
 
@@ -415,18 +453,25 @@ def wrap_get_response(
 
         # tool_call_result
         if result and getattr(result, "content", None):
-            invocation.tool_call_result = str(result.content)[:_MAX_CONTENT_LEN]
+            invocation.tool_call_result = str(result.content)[
+                :_MAX_CONTENT_LEN
+            ]
 
         # Check if tool reported an error
         if result and getattr(result, "error", False):
             handler.fail_execute_tool(
                 invocation,
-                Error(message=f"Tool error: {getattr(result, 'content', '')}", type=RuntimeError),
+                Error(
+                    message=f"Tool error: {getattr(result, 'content', '')}",
+                    type=RuntimeError,
+                ),
             )
         else:
             handler.stop_execute_tool(invocation)
 
         return result
     except Exception as e:
-        handler.fail_execute_tool(invocation, Error(message=str(e), type=type(e)))
+        handler.fail_execute_tool(
+            invocation, Error(message=str(e), type=type(e))
+        )
         raise

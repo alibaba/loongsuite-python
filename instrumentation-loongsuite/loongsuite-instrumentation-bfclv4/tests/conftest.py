@@ -24,14 +24,14 @@ from __future__ import annotations
 import enum
 import sys
 import types
-from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
+
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 # ---------------------------------------------------------------------------
 # Mock bfcl_eval modules
@@ -63,7 +63,9 @@ class _MockBaseHandler:
     model_name = "test-model"
     model_style = _MockModelStyle.OPENAI_COMPLETIONS
 
-    def inference(self, test_entry, include_input_log=True, exclude_state_log=True):
+    def inference(
+        self, test_entry, include_input_log=True, exclude_state_log=True
+    ):
         return ("result", {}), {}
 
     def _query_FC(self, *args, **kwargs):
@@ -113,7 +115,9 @@ def _install_bfcl_mocks():
     constants.model_config = model_config_mod
 
     # bfcl_eval.constants.executable_backend_config
-    exec_cfg = types.ModuleType("bfcl_eval.constants.executable_backend_config")
+    exec_cfg = types.ModuleType(
+        "bfcl_eval.constants.executable_backend_config"
+    )
     exec_cfg.CLASS_FILE_PATH_MAPPING = {}
     mods["bfcl_eval.constants.executable_backend_config"] = exec_cfg
     constants.executable_backend_config = exec_cfg
@@ -127,8 +131,12 @@ def _install_bfcl_mocks():
     base_handler_mod.BaseHandler = _MockBaseHandler
 
     def _mock_execute_multi_turn_func_call(
-        func_call_list, initial_config=None, involved_classes=None,
-        model_name=None, test_entry_id=None, long_context=False,
+        func_call_list,
+        initial_config=None,
+        involved_classes=None,
+        model_name=None,
+        test_entry_id=None,
+        long_context=False,
         is_eval_run=False,
     ):
         results = [f"result_{i}" for i in range(len(func_call_list))]
@@ -143,6 +151,7 @@ def _install_bfcl_mocks():
     # bfcl_eval._llm_response_generation
     gen_mod = types.ModuleType("bfcl_eval._llm_response_generation")
     from concurrent.futures import ThreadPoolExecutor
+
     gen_mod.ThreadPoolExecutor = ThreadPoolExecutor
 
     def _mock_generate_results(args, model_name, test_cases_total):
@@ -165,9 +174,7 @@ def _install_bfcl_mocks():
         "bfcl_eval.eval_checker.multi_turn_eval.multi_turn_utils"
     )
     mt_utils.execute_multi_turn_func_call = _mock_execute_multi_turn_func_call
-    mods[
-        "bfcl_eval.eval_checker.multi_turn_eval.multi_turn_utils"
-    ] = mt_utils
+    mods["bfcl_eval.eval_checker.multi_turn_eval.multi_turn_utils"] = mt_utils
 
     return mods
 

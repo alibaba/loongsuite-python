@@ -14,8 +14,6 @@
 
 """Tests for STEP span (MiniSWEAgent.agent_step)."""
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from opentelemetry.trace import StatusCode
@@ -29,14 +27,13 @@ class TestStepSpan:
         import slop_code.agent_runner.agents._miniswe_agent as mod
 
         agent = mod.MiniSWEAgent(problem_name="test_prob")
-        result = agent.agent_step()
+        agent.agent_step()
         # The step span stays open until get_observation finishes it
         agent.get_observation()
 
         spans = span_exporter.get_finished_spans()
         step_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "STEP"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
         ]
         assert len(step_spans) == 1
 
@@ -57,8 +54,7 @@ class TestStepSpan:
 
         spans = span_exporter.get_finished_spans()
         step_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "STEP"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
         ]
         assert len(step_spans) == 1
         span = step_spans[0]
@@ -66,7 +62,9 @@ class TestStepSpan:
         assert span.attributes["gen_ai.usage.input_tokens"] == 200
         assert span.attributes["gen_ai.usage.output_tokens"] == 80
         assert span.attributes["gen_ai.usage.cache_read.input_tokens"] == 50
-        assert span.attributes["gen_ai.usage.cache_creation.input_tokens"] == 10
+        assert (
+            span.attributes["gen_ai.usage.cache_creation.input_tokens"] == 10
+        )
 
     def test_step_span_increments_round(self, span_exporter, instrument):
         """Multiple agent_step calls should increment the round number."""
@@ -80,8 +78,7 @@ class TestStepSpan:
 
         spans = span_exporter.get_finished_spans()
         step_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "STEP"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
         ]
         assert len(step_spans) == 1
         assert step_spans[0].name == "react step"
@@ -91,7 +88,9 @@ class TestStepSpan:
         """Exception in agent_step should produce an error STEP span."""
         import slop_code.agent_runner.agents._miniswe_agent as mod
 
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class FailingMiniSWE(mod.MiniSWEAgent):
             def agent_step(self):
@@ -101,7 +100,9 @@ class TestStepSpan:
         mod.MiniSWEAgent = FailingMiniSWE
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.MiniSWEAgent(problem_name="test_prob")
@@ -111,7 +112,8 @@ class TestStepSpan:
 
             spans = span_exporter.get_finished_spans()
             step_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "STEP"
             ]
             assert len(step_spans) == 1
@@ -132,15 +134,19 @@ class TestStepSpan:
 
         spans = span_exporter.get_finished_spans()
         step_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "STEP"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
         ]
         assert step_spans[0].attributes["gen_ai.react.finish_reason"] == "stop"
 
-    def test_step_span_none_result_finishes_immediately(self, span_exporter, tracer_provider):
+    def test_step_span_none_result_finishes_immediately(
+        self, span_exporter, tracer_provider
+    ):
         """agent_step returning None should finish the span immediately with stop."""
         import slop_code.agent_runner.agents._miniswe_agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class NoneStepAgent(mod.MiniSWEAgent):
             def agent_step(self):
@@ -150,7 +156,9 @@ class TestStepSpan:
         mod.MiniSWEAgent = NoneStepAgent
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.MiniSWEAgent(problem_name="test_prob")
@@ -159,11 +167,15 @@ class TestStepSpan:
 
             spans = span_exporter.get_finished_spans()
             step_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "STEP"
             ]
             assert len(step_spans) == 1
-            assert step_spans[0].attributes["gen_ai.react.finish_reason"] == "stop"
+            assert (
+                step_spans[0].attributes["gen_ai.react.finish_reason"]
+                == "stop"
+            )
             assert step_spans[0].status.status_code == StatusCode.OK
         finally:
             instrumentor.uninstrument()
@@ -179,18 +191,22 @@ class TestStepSpan:
 
         spans = span_exporter.get_finished_spans()
         step_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "STEP"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
         ]
         assert len(step_spans) == 1
         span = step_spans[0]
         assert "gen_ai.output.messages" in span.attributes
         assert "fix this bug" in span.attributes["gen_ai.output.messages"]
 
-    def test_observation_error_finishes_step(self, span_exporter, tracer_provider):
+    def test_observation_error_finishes_step(
+        self, span_exporter, tracer_provider
+    ):
         """Exception in get_observation should finish the step span with error."""
         import slop_code.agent_runner.agents._miniswe_agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class ErrorObsAgent(mod.MiniSWEAgent):
             def get_observation(self):
@@ -200,7 +216,9 @@ class TestStepSpan:
         mod.MiniSWEAgent = ErrorObsAgent
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.MiniSWEAgent(problem_name="test_prob")
@@ -211,20 +229,29 @@ class TestStepSpan:
 
             spans = span_exporter.get_finished_spans()
             step_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "STEP"
             ]
             assert len(step_spans) == 1
             assert step_spans[0].status.status_code == StatusCode.ERROR
-            assert step_spans[0].attributes["gen_ai.react.finish_reason"] == "error"
+            assert (
+                step_spans[0].attributes["gen_ai.react.finish_reason"]
+                == "error"
+            )
         finally:
             instrumentor.uninstrument()
             mod.MiniSWEAgent = OriginalClass
 
-    def test_step_span_no_token_usage_in_result(self, span_exporter, tracer_provider):
+    def test_step_span_no_token_usage_in_result(
+        self, span_exporter, tracer_provider
+    ):
         """Step with result dict but no token_usage should estimate tokens."""
         import slop_code.agent_runner.agents._miniswe_agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class NoTokenAgent(mod.MiniSWEAgent):
             def agent_step(self):
@@ -237,7 +264,9 @@ class TestStepSpan:
         mod.MiniSWEAgent = NoTokenAgent
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.MiniSWEAgent(problem_name="test_prob")
@@ -246,7 +275,8 @@ class TestStepSpan:
 
             spans = span_exporter.get_finished_spans()
             step_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "STEP"
             ]
             assert len(step_spans) == 1
@@ -261,7 +291,10 @@ class TestStepSpan:
     def test_step_span_empty_content(self, span_exporter, tracer_provider):
         """Step with empty string content should estimate 0 output tokens."""
         import slop_code.agent_runner.agents._miniswe_agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class EmptyContentAgent(mod.MiniSWEAgent):
             def agent_step(self):
@@ -274,7 +307,9 @@ class TestStepSpan:
         mod.MiniSWEAgent = EmptyContentAgent
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.MiniSWEAgent(problem_name="test_prob")
@@ -283,7 +318,8 @@ class TestStepSpan:
 
             spans = span_exporter.get_finished_spans()
             step_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "STEP"
             ]
             assert len(step_spans) == 1

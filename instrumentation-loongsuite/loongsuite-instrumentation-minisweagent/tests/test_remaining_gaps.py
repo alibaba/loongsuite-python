@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for remaining coverage gaps in __init__.py, conversation.py, cli_wrappers.py, delegates.py.
 
 Targets:
@@ -11,11 +25,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any
 from unittest.mock import MagicMock, patch
-
-import pytest
-
 
 # =====================================================================
 # __init__.py  -- error-handling branches in _instrument / _uninstrument
@@ -27,7 +37,9 @@ class TestInstrumentErrorPaths:
 
     def test_get_environment_wrap_failure(self):
         """Lines 105-106: import minisweagent.environments fails."""
-        from opentelemetry.instrumentation.minisweagent import MiniSweAgentInstrumentor
+        from opentelemetry.instrumentation.minisweagent import (
+            MiniSweAgentInstrumentor,
+        )
 
         # Break the environments import
         saved = sys.modules.pop("minisweagent.environments", None)
@@ -37,7 +49,7 @@ class TestInstrumentErrorPaths:
             delattr(mini, "environments")
         try:
             inst = MiniSweAgentInstrumentor()
-            inst._instrument()   # should warn and continue
+            inst._instrument()  # should warn and continue
             inst._uninstrument()
         finally:
             if saved is not None:
@@ -47,26 +59,30 @@ class TestInstrumentErrorPaths:
 
     def test_patch_cli_app_failure(self):
         """Lines 110-111: patch_mini_cli_app_module() raises."""
-        from opentelemetry.instrumentation.minisweagent import MiniSweAgentInstrumentor
+        from opentelemetry.instrumentation.minisweagent import (
+            MiniSweAgentInstrumentor,
+        )
 
         with patch(
             "opentelemetry.instrumentation.minisweagent.internal.cli_wrappers.patch_mini_cli_app_module",
             side_effect=Exception("patch fail"),
         ):
             inst = MiniSweAgentInstrumentor()
-            inst._instrument()   # should warn and continue
+            inst._instrument()  # should warn and continue
             inst._uninstrument()
 
     def test_wrap_function_wrapper_failure(self):
         """Lines 120-121 and 129-130: wrap_function_wrapper raises for run/step."""
-        from opentelemetry.instrumentation.minisweagent import MiniSweAgentInstrumentor
+        from opentelemetry.instrumentation.minisweagent import (
+            MiniSweAgentInstrumentor,
+        )
 
         with patch(
             "opentelemetry.instrumentation.minisweagent.wrap_function_wrapper",
             side_effect=Exception("wrap fail"),
         ):
             inst = MiniSweAgentInstrumentor()
-            inst._instrument()   # should warn for both run and step, then continue
+            inst._instrument()  # should warn for both run and step, then continue
             inst._uninstrument()
 
 
@@ -75,7 +91,9 @@ class TestUninstrumentErrorPaths:
 
     def test_unwrap_agent_failure(self):
         """Lines 141-142: import DefaultAgent fails in _uninstrument."""
-        from opentelemetry.instrumentation.minisweagent import MiniSweAgentInstrumentor
+        from opentelemetry.instrumentation.minisweagent import (
+            MiniSweAgentInstrumentor,
+        )
 
         inst = MiniSweAgentInstrumentor()
         inst._instrument()
@@ -87,7 +105,7 @@ class TestUninstrumentErrorPaths:
         if agents and hasattr(agents, "default"):
             delattr(agents, "default")
         try:
-            inst._uninstrument()   # should catch and continue
+            inst._uninstrument()  # should catch and continue
         finally:
             if saved is not None:
                 sys.modules["minisweagent.agents.default"] = saved
@@ -96,7 +114,9 @@ class TestUninstrumentErrorPaths:
 
     def test_unpatch_cli_failure(self):
         """Lines 150-151: unpatch_mini_cli_app_module raises."""
-        from opentelemetry.instrumentation.minisweagent import MiniSweAgentInstrumentor
+        from opentelemetry.instrumentation.minisweagent import (
+            MiniSweAgentInstrumentor,
+        )
 
         inst = MiniSweAgentInstrumentor()
         inst._instrument()
@@ -105,11 +125,13 @@ class TestUninstrumentErrorPaths:
             "opentelemetry.instrumentation.minisweagent.internal.cli_wrappers.unpatch_mini_cli_app_module",
             side_effect=Exception("unpatch fail"),
         ):
-            inst._uninstrument()   # should catch and continue
+            inst._uninstrument()  # should catch and continue
 
     def test_restore_get_environment_failure(self):
         """Lines 160-161: restoring get_environment fails in _uninstrument."""
-        from opentelemetry.instrumentation.minisweagent import MiniSweAgentInstrumentor
+        from opentelemetry.instrumentation.minisweagent import (
+            MiniSweAgentInstrumentor,
+        )
 
         inst = MiniSweAgentInstrumentor()
         inst._instrument()
@@ -121,7 +143,7 @@ class TestUninstrumentErrorPaths:
         if hasattr(mini, "environments"):
             delattr(mini, "environments")
         try:
-            inst._uninstrument()   # should catch and continue
+            inst._uninstrument()  # should catch and continue
         finally:
             if saved is not None:
                 sys.modules["minisweagent.environments"] = saved
@@ -140,7 +162,10 @@ class TestTryFillEntryPayload:
     """Cover try_fill_entry_payload_from_mini_trajectory (lines 192-214)."""
 
     def _conv(self):
-        from opentelemetry.instrumentation.minisweagent.internal import conversation
+        from opentelemetry.instrumentation.minisweagent.internal import (
+            conversation,
+        )
+
         return conversation
 
     def test_no_global_config_dir_returns_none(self):
@@ -204,7 +229,9 @@ class TestTryFillEntryPayload:
         mini = sys.modules["minisweagent"]
         mini.global_config_dir = str(tmp_path)
         traj_file = tmp_path / "last_mini_run.traj.json"
-        traj_file.write_text(json.dumps({"messages": "not a list"}), encoding="utf-8")
+        traj_file.write_text(
+            json.dumps({"messages": "not a list"}), encoding="utf-8"
+        )
         try:
             result = self._conv().try_fill_entry_payload_from_mini_trajectory()
             assert result is None
@@ -217,7 +244,9 @@ class TestTryFillEntryPayload:
         mini = sys.modules["minisweagent"]
         mini.global_config_dir = str(tmp_path)
         traj_file = tmp_path / "last_mini_run.traj.json"
-        traj_file.write_text(json.dumps({"messages": ["str", 42, None]}), encoding="utf-8")
+        traj_file.write_text(
+            json.dumps({"messages": ["str", 42, None]}), encoding="utf-8"
+        )
         try:
             result = self._conv().try_fill_entry_payload_from_mini_trajectory()
             assert result is None
@@ -261,7 +290,9 @@ class TestTryFillEntryPayload:
                 "opentelemetry.instrumentation.minisweagent.internal.conversation.build_invoke_payload_from_messages",
                 side_effect=Exception("build failed"),
             ):
-                result = self._conv().try_fill_entry_payload_from_mini_trajectory()
+                result = (
+                    self._conv().try_fill_entry_payload_from_mini_trajectory()
+                )
                 assert result is None
         finally:
             if hasattr(mini, "global_config_dir"):
@@ -272,16 +303,20 @@ class TestConversationSerializationError:
     """Cover the except block in build_invoke_payload_from_messages (lines 167-168)."""
 
     def test_message_conversion_failure_caught(self):
-        from opentelemetry.instrumentation.minisweagent.internal import conversation
+        from opentelemetry.instrumentation.minisweagent.internal import (
+            conversation,
+        )
 
         with patch.object(
             conversation,
             "_message_to_semconv_messages",
             side_effect=Exception("conversion error"),
         ):
-            payload = conversation.build_invoke_payload_from_messages([
-                {"role": "user", "content": "hello"},
-            ])
+            payload = conversation.build_invoke_payload_from_messages(
+                [
+                    {"role": "user", "content": "hello"},
+                ]
+            )
             # Exception caught; partial results
             assert payload["system_instruction"] == []
             assert "tool_definitions" in payload
@@ -351,7 +386,7 @@ class TestPatchCliEdgeCases:
         if run_pkg and hasattr(run_pkg, "mini"):
             delattr(run_pkg, "mini")
         try:
-            patch_mini_cli_app_module()   # should catch ImportError and return
+            patch_mini_cli_app_module()  # should catch ImportError and return
         finally:
             if saved is not None:
                 sys.modules["minisweagent.run.mini"] = saved
@@ -361,15 +396,15 @@ class TestPatchCliEdgeCases:
     def test_app_is_none_returns_early(self):
         """Line 89: when mini_mod.app is None."""
         from opentelemetry.instrumentation.minisweagent.internal.cli_wrappers import (
-            patch_mini_cli_app_module,
             _PATCH_FLAG,
+            patch_mini_cli_app_module,
         )
 
         mini_mod = sys.modules["minisweagent.run.mini"]
         original_app = mini_mod.app
         mini_mod.app = None
         try:
-            patch_mini_cli_app_module()   # inner is None, returns early
+            patch_mini_cli_app_module()  # inner is None, returns early
             assert not getattr(mini_mod, _PATCH_FLAG, False)
         finally:
             mini_mod.app = original_app
@@ -377,10 +412,10 @@ class TestPatchCliEdgeCases:
     def test_app_already_proxy_returns_early(self):
         """Line 89: when mini_mod.app is already a _MiniTyperAppProxy."""
         from opentelemetry.instrumentation.minisweagent.internal.cli_wrappers import (
+            _PATCH_FLAG,
+            _MiniTyperAppProxy,
             patch_mini_cli_app_module,
             unpatch_mini_cli_app_module,
-            _MiniTyperAppProxy,
-            _PATCH_FLAG,
         )
 
         # First patch normally
@@ -404,10 +439,9 @@ class TestUnpatchCliError:
 
     def test_delattr_failure_caught(self):
         from opentelemetry.instrumentation.minisweagent.internal.cli_wrappers import (
+            _ORIG_APP_ATTR,
             patch_mini_cli_app_module,
             unpatch_mini_cli_app_module,
-            _ORIG_APP_ATTR,
-            _PATCH_FLAG,
         )
 
         patch_mini_cli_app_module()
@@ -418,7 +452,7 @@ class TestUnpatchCliError:
             delattr(mini_mod, _ORIG_APP_ATTR)
 
         # unpatch should catch the AttributeError from the second delattr
-        unpatch_mini_cli_app_module()   # should not raise
+        unpatch_mini_cli_app_module()  # should not raise
 
 
 # =====================================================================

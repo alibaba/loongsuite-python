@@ -15,7 +15,9 @@ from opentelemetry.instrumentation.slop_code.utils import (
 )
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from opentelemetry.util.genai.extended_semconv import gen_ai_extended_attributes
+from opentelemetry.util.genai.extended_semconv import (
+    gen_ai_extended_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,11 @@ class _EntryWrapper:
         input_parts = []
         problem_names = kwargs.get("problem_names") or kwargs.get("problem")
         if problem_names:
-            names = list(problem_names) if not isinstance(problem_names, str) else [problem_names]
+            names = (
+                list(problem_names)
+                if not isinstance(problem_names, str)
+                else [problem_names]
+            )
             input_parts.append("problems: " + ", ".join(str(n) for n in names))
         model_override = kwargs.get("model_override") or kwargs.get("model")
         if model_override and isinstance(model_override, str):
@@ -86,9 +92,15 @@ class _RunnerEntryWrapper:
         )
         if not task:
             run_spec = safe_get(instance, "run_spec")
-            task = safe_get(run_spec, "template") if run_spec is not None else None
+            task = (
+                safe_get(run_spec, "template")
+                if run_spec is not None
+                else None
+            )
         if task is not None:
-            attrs["gen_ai.input.messages"] = genai_messages([{"role": "user", "content": str(task)}])
+            attrs["gen_ai.input.messages"] = genai_messages(
+                [{"role": "user", "content": str(task)}]
+            )
 
         with self._tracer.start_as_current_span(
             name="enter_ai_application_system",
@@ -98,7 +110,13 @@ class _RunnerEntryWrapper:
             try:
                 result = wrapped(*args, **kwargs)
                 if result is not None:
-                    set_optional_attr(span, "output.value", json.dumps(result, ensure_ascii=False, default=str)[:1024])
+                    set_optional_attr(
+                        span,
+                        "output.value",
+                        json.dumps(result, ensure_ascii=False, default=str)[
+                            :1024
+                        ],
+                    )
                 span.set_status(Status(StatusCode.OK))
                 return result
             except Exception as exc:

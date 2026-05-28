@@ -16,10 +16,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
-from opentelemetry.trace import StatusCode
-
 
 class TestSpanHierarchy:
     """Verify parent-child relationships between spans."""
@@ -48,11 +44,13 @@ class TestSpanHierarchy:
 
             spans = span_exporter.get_finished_spans()
             entry_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "ENTRY"
             ]
             workflow_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "workflow"
             ]
 
@@ -63,7 +61,9 @@ class TestSpanHierarchy:
             workflow_span = workflow_spans[0]
 
             # workflow should be child of entry
-            assert workflow_span.context.trace_id == entry_span.context.trace_id
+            assert (
+                workflow_span.context.trace_id == entry_span.context.trace_id
+            )
             assert workflow_span.parent is not None
             assert workflow_span.parent.span_id == entry_span.context.span_id
         finally:
@@ -101,16 +101,19 @@ class TestSpanHierarchy:
 
             spans = span_exporter.get_finished_spans()
             workflow_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "workflow"
             ]
             task_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "run_task"
             ]
             # _TaskRunCheckpointWrapper creates an inner ENTRY span too
             inner_entry_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "enter"
             ]
 
@@ -124,11 +127,17 @@ class TestSpanHierarchy:
 
             # All spans share the same trace
             assert task_span.context.trace_id == workflow_span.context.trace_id
-            assert inner_entry_span.context.trace_id == workflow_span.context.trace_id
+            assert (
+                inner_entry_span.context.trace_id
+                == workflow_span.context.trace_id
+            )
 
             # inner_entry is child of workflow
             assert inner_entry_span.parent is not None
-            assert inner_entry_span.parent.span_id == workflow_span.context.span_id
+            assert (
+                inner_entry_span.parent.span_id
+                == workflow_span.context.span_id
+            )
 
             # task is child of inner_entry
             assert task_span.parent is not None

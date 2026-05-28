@@ -29,8 +29,10 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
     Text,
-    ToolCall as OTelToolCall,
     ToolCallResponse,
+)
+from opentelemetry.util.genai.types import (
+    ToolCall as OTelToolCall,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,9 @@ def _convert_vita_messages_to_input(messages: Any) -> List[InputMessage]:
                     for tc in tool_calls:
                         tc_args = getattr(tc, "arguments", {})
                         if isinstance(tc_args, dict):
-                            tc_args = json.dumps(tc_args, ensure_ascii=False, default=str)
+                            tc_args = json.dumps(
+                                tc_args, ensure_ascii=False, default=str
+                            )
                         parts.append(
                             OTelToolCall(
                                 name=getattr(tc, "name", ""),
@@ -120,7 +124,11 @@ def _convert_vita_assistant_to_output(msg: Any) -> List[OutputMessage]:
     if not parts:
         parts.append(Text(content=""))
 
-    return [OutputMessage(role="assistant", parts=parts, finish_reason=finish_reason)]
+    return [
+        OutputMessage(
+            role="assistant", parts=parts, finish_reason=finish_reason
+        )
+    ]
 
 
 def _infer_provider(model_name: str) -> str:
@@ -141,7 +149,9 @@ def _infer_provider(model_name: str) -> str:
     return "unknown"
 
 
-def _get_tool_definitions(tools: Any) -> Optional[List[FunctionToolDefinition]]:
+def _get_tool_definitions(
+    tools: Any,
+) -> Optional[List[FunctionToolDefinition]]:
     """Extract tool definitions from vita Tool list."""
     if not tools:
         return None

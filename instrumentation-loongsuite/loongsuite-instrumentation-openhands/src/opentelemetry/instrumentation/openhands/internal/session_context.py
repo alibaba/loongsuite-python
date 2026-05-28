@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Cross-thread / cross-loop OTel context bridge keyed by OpenHands session id.
 
 Why this exists
@@ -117,15 +131,19 @@ def store_tool_registry(sid: Optional[str], tools: object) -> None:
                     name = fn.get("name") if isinstance(fn, dict) else None
                 else:
                     fn = getattr(t, "function", None)
-                    name = getattr(fn, "name", None) if fn is not None else None
+                    name = (
+                        getattr(fn, "name", None) if fn is not None else None
+                    )
                     # Normalize to a dict so the consumer doesn't need type-knowledge.
                     if name and not isinstance(t, dict):
                         t = {
                             "type": getattr(t, "type", "function"),
                             "function": {
                                 "name": name,
-                                "description": getattr(fn, "description", "") or "",
-                                "parameters": getattr(fn, "parameters", None) or {},
+                                "description": getattr(fn, "description", "")
+                                or "",
+                                "parameters": getattr(fn, "parameters", None)
+                                or {},
                             },
                         }
                 if name:
@@ -140,7 +158,9 @@ def store_tool_registry(sid: Optional[str], tools: object) -> None:
         _session_tool_registry[sid] = registry
 
 
-def get_tool_definition(sid: Optional[str], name: Optional[str]) -> Optional[dict]:
+def get_tool_definition(
+    sid: Optional[str], name: Optional[str]
+) -> Optional[dict]:
     """Look up a single tool's definition (dict) by name, sid-scoped."""
     if not name:
         return None

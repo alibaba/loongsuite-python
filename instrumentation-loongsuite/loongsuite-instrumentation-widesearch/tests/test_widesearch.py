@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for WideSearch instrumentation.
 
 Covers:
@@ -12,9 +26,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-from dataclasses import field
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -24,15 +35,11 @@ from .conftest import (
     ActionStep,
     ActionStepError,
     Agent,
-    ErrorMarker,
     InternalResponse,
     LLMOutputItem,
-    MemoryAgent,
     ModelResponse,
-    Runner,
     StepStatus,
     ToolCall,
-    ToolCallResult,
 )
 
 
@@ -47,11 +54,13 @@ def _run_async(coro):
 
 def _run_async_gen(async_gen):
     """Helper to consume an async generator."""
+
     async def _consume():
         results = []
         async for item in async_gen:
             results.append(item)
         return results
+
     loop = asyncio.new_event_loop()
     try:
         return loop.run_until_complete(_consume())
@@ -65,8 +74,12 @@ def _run_async_gen(async_gen):
 
 
 class TestInstrumentorLifecycle:
-    def test_instrument_and_uninstrument(self, tracer_provider, meter_provider):
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+    def test_instrument_and_uninstrument(
+        self, tracer_provider, meter_provider
+    ):
+        from opentelemetry.instrumentation.widesearch import (
+            WideSearchInstrumentor,
+        )
 
         instrumentor = WideSearchInstrumentor()
         instrumentor.instrument(
@@ -78,8 +91,12 @@ class TestInstrumentorLifecycle:
         instrumentor.uninstrument()
         assert instrumentor._handler is None
 
-    def test_double_instrument_uninstrument(self, tracer_provider, meter_provider):
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+    def test_double_instrument_uninstrument(
+        self, tracer_provider, meter_provider
+    ):
+        from opentelemetry.instrumentation.widesearch import (
+            WideSearchInstrumentor,
+        )
 
         instrumentor = WideSearchInstrumentor()
         instrumentor.instrument(
@@ -99,7 +116,9 @@ class TestInstrumentorLifecycle:
         instrumentor2.uninstrument()
 
     def test_instrumentation_dependencies(self):
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+        from opentelemetry.instrumentation.widesearch import (
+            WideSearchInstrumentor,
+        )
 
         instrumentor = WideSearchInstrumentor()
         deps = instrumentor.instrumentation_dependencies()
@@ -130,7 +149,9 @@ class TestEntrySpan:
         assert attrs.get("gen_ai.operation.name") == "enter"
         assert attrs.get("gen_ai.framework") == "widesearch"
 
-    def test_entry_span_records_gen_ai_arms_semantic_attrs(self, span_exporter, instrument):
+    def test_entry_span_records_gen_ai_arms_semantic_attrs(
+        self, span_exporter, instrument
+    ):
         """ENTRY should record input/output messages, but not agent-only metadata.
 
         Controlled by OTEL_SEMCONV_STABILITY_OPT_IN + SPAN_ONLY capture mode (see conftest).
@@ -213,9 +234,7 @@ class TestAgentSpan:
         _run_async(_run())
 
         spans = span_exporter.get_finished_spans()
-        agent_spans = [
-            s for s in spans if "invoke_agent" in s.name
-        ]
+        agent_spans = [s for s in spans if "invoke_agent" in s.name]
         assert len(agent_spans) == 1
 
         span = agent_spans[0]
@@ -225,7 +244,9 @@ class TestAgentSpan:
         assert attrs.get("gen_ai.agent.name") == "search-agent"
         assert attrs.get("gen_ai.framework") == "widesearch"
 
-    def test_agent_span_records_gen_ai_arms_semantic_attrs(self, span_exporter, instrument):
+    def test_agent_span_records_gen_ai_arms_semantic_attrs(
+        self, span_exporter, instrument
+    ):
         """AGENT invoke_agent should expose ARMS-aligned message/tool attributes."""
         from src.agent.run import Runner
 
@@ -256,9 +277,7 @@ class TestAgentSpan:
         _run_async(_run())
 
         spans = span_exporter.get_finished_spans()
-        agent_spans = [
-            s for s in spans if "invoke_agent" in s.name
-        ]
+        agent_spans = [s for s in spans if "invoke_agent" in s.name]
         assert len(agent_spans) == 1
         attrs = dict(agent_spans[0].attributes)
         assert "gen_ai.input.messages" in attrs
@@ -395,6 +414,7 @@ class TestStepSpan:
         agent = Agent(name="error-agent")
 
         try:
+
             async def _run():
                 async for _ in Runner.run(agent, "test"):
                     pass
@@ -444,9 +464,7 @@ class TestToolSpan:
             arguments='{"q": "AI"}',
             tool_call_id="call_123",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         _run_async(Runner._invoke_tool_call(agent, model_resp))
 
@@ -481,9 +499,7 @@ class TestToolSpan:
             arguments=json.dumps({"q": "OpenTelemetry"}),
             tool_call_id="call_456",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         results = _run_async(Runner._invoke_tool_call(agent, model_resp))
         assert len(results) == 1
@@ -507,9 +523,7 @@ class TestToolSpan:
             arguments="{}",
             tool_call_id="call_789",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         results = _run_async(Runner._invoke_tool_call(agent, model_resp))
         assert len(results) == 1
@@ -537,9 +551,7 @@ class TestToolSpan:
             arguments="{}",
             tool_call_id="call_err",
         )
-        model_resp = ModelResponse(
-            outputs=[LLMOutputItem(tool_calls=[tc])]
-        )
+        model_resp = ModelResponse(outputs=[LLMOutputItem(tool_calls=[tc])])
 
         results = _run_async(Runner._invoke_tool_call(agent, model_resp))
         assert len(results) == 1
@@ -630,12 +642,10 @@ class TestTaskSpan:
         """TASK span should record output.value."""
         from src.agent.multi_agent_tools import create_sub_agents_wrap
 
-        closure = create_sub_agents_wrap(
-            "agent", "gpt-4o", {}, [], "prompt"
-        )
+        closure = create_sub_agents_wrap("agent", "gpt-4o", {}, [], "prompt")
 
         sub_agents = [{"index": 0, "prompt": "find info"}]
-        result = _run_async(closure(sub_agents))
+        _run_async(closure(sub_agents))
 
         spans = span_exporter.get_finished_spans()
         task_spans = [
@@ -647,7 +657,6 @@ class TestTaskSpan:
 
     def test_task_span_error(self, span_exporter, instrument):
         """TASK span should record ERROR when closure raises."""
-        from src.agent.multi_agent_tools import create_sub_agents_wrap
 
         # Temporarily replace create_sub_agents_wrap's inner closure behavior
         import src.agent.multi_agent_tools as mat
@@ -655,7 +664,7 @@ class TestTaskSpan:
         original = mat.create_sub_agents_wrap
 
         def error_factory(*args, **kwargs):
-            original_closure = original(*args, **kwargs)
+            original(*args, **kwargs)
 
             async def error_closure(sub_agents):
                 raise RuntimeError("Sub-agent execution failed")
@@ -665,7 +674,6 @@ class TestTaskSpan:
         mat.create_sub_agents_wrap = error_factory
 
         # Re-instrument to pick up the new function
-        from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
 
         instrument.uninstrument()
         instrument.instrument(
@@ -683,13 +691,13 @@ class TestTaskSpan:
         from opentelemetry.instrumentation.widesearch.patch import (
             wrap_create_sub_agents_factory,
         )
-        from opentelemetry.util.genai.extended_handler import (
-            ExtendedTelemetryHandler,
-        )
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
         from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
             InMemorySpanExporter,
+        )
+        from opentelemetry.util.genai.extended_handler import (
+            ExtendedTelemetryHandler,
         )
 
         exporter = InMemorySpanExporter()
@@ -777,6 +785,7 @@ class TestParentChildRelationships:
         Runner._step_override = custom_step
 
         try:
+
             async def _run():
                 async for _ in Runner.run(agent, "test"):
                     pass

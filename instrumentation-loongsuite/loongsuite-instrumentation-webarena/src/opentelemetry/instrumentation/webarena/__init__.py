@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 OpenTelemetry WebArena Instrumentation
 ======================================
@@ -60,10 +74,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Collection
 
-from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
 
+from opentelemetry import trace as trace_api
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.webarena.package import _instruments
 from opentelemetry.instrumentation.webarena.version import __version__
 
@@ -92,7 +106,10 @@ _PROMPT_CONSTRUCTOR_TARGETS = (
     ("agent.prompts.prompt_constructor", "CoTPromptConstructor.construct"),
 )
 
-_HF_TARGET = ("llms.providers.hf_utils", "generate_from_huggingface_completion")
+_HF_TARGET = (
+    "llms.providers.hf_utils",
+    "generate_from_huggingface_completion",
+)
 
 
 class WebarenaInstrumentor(BaseInstrumentor):
@@ -182,7 +199,9 @@ class WebarenaInstrumentor(BaseInstrumentor):
             )
 
     def _uninstrument(self, **kwargs: Any) -> None:
-        from opentelemetry.instrumentation.webarena.internal import _state as state
+        from opentelemetry.instrumentation.webarena.internal import (
+            _state as state,
+        )
 
         # Always make sure we don't leak open spans on uninstrument.
         try:

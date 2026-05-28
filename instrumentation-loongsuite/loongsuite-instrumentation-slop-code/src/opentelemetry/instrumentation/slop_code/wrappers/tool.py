@@ -8,10 +8,15 @@ import logging
 from uuid import uuid4
 
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.slop_code.utils import SYSTEM_NAME, truncate_text
+from opentelemetry.instrumentation.slop_code.utils import (
+    SYSTEM_NAME,
+    truncate_text,
+)
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from opentelemetry.util.genai.extended_semconv import gen_ai_extended_attributes
+from opentelemetry.util.genai.extended_semconv import (
+    gen_ai_extended_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,9 @@ class _ToolExecuteActionWrapper:
 
     def __call__(self, wrapped, instance, args, kwargs):
         action = args[0] if args else kwargs.get("action", {})
-        command = action.get("action") if isinstance(action, dict) else str(action)
+        command = (
+            action.get("action") if isinstance(action, dict) else str(action)
+        )
         attrs = {
             gen_ai_attributes.GEN_AI_OPERATION_NAME: "execute_tool",
             gen_ai_attributes.GEN_AI_SYSTEM: SYSTEM_NAME,
@@ -47,12 +54,19 @@ class _ToolExecuteActionWrapper:
         ) as span:
             try:
                 result = wrapped(*args, **kwargs)
-                span.set_attribute("gen_ai.tool.call.result", _json_attr(result))
+                span.set_attribute(
+                    "gen_ai.tool.call.result", _json_attr(result)
+                )
                 span.set_status(Status(StatusCode.OK))
                 return result
             except Exception as exc:
                 span.record_exception(exc)
-                span.set_attribute("gen_ai.tool.call.result", _json_attr({"error": str(exc), "error.type": type(exc).__name__}))
+                span.set_attribute(
+                    "gen_ai.tool.call.result",
+                    _json_attr(
+                        {"error": str(exc), "error.type": type(exc).__name__}
+                    ),
+                )
                 span.set_status(Status(StatusCode.ERROR, str(exc)))
                 span.set_attribute("error.type", type(exc).__name__)
                 raise

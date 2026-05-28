@@ -9,13 +9,15 @@ from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.slop_code.utils import (
     SYSTEM_NAME,
+    genai_messages,
     safe_get,
     set_optional_attr,
-    genai_messages,
 )
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from opentelemetry.util.genai.extended_semconv import gen_ai_extended_attributes
+from opentelemetry.util.genai.extended_semconv import (
+    gen_ai_extended_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,9 @@ class _MiniSWEStepWrapper:
         if messages:
             attrs["gen_ai.input.messages"] = genai_messages(messages)
 
-        span = self._tracer.start_span("react step", kind=SpanKind.INTERNAL, attributes=attrs)
+        span = self._tracer.start_span(
+            "react step", kind=SpanKind.INTERNAL, attributes=attrs
+        )
         token = context_api.attach(trace_api.set_span_in_context(span))
         setattr(instance, _STEP_SPAN_ATTR, span)
         setattr(instance, _STEP_TOKEN_ATTR, token)
@@ -101,24 +105,46 @@ def _record_step_result(instance, span, result, messages) -> None:
     if not isinstance(result, dict):
         return
     token_usage = result.get("token_usage")
-    input_tokens = safe_get(token_usage, "input") if token_usage is not None else None
-    output_tokens = safe_get(token_usage, "output") if token_usage is not None else None
+    input_tokens = (
+        safe_get(token_usage, "input") if token_usage is not None else None
+    )
+    output_tokens = (
+        safe_get(token_usage, "output") if token_usage is not None else None
+    )
     content = result.get("content")
     if not input_tokens:
         input_tokens = _estimate_tokens(genai_messages(messages))
     if not output_tokens:
         output_tokens = _estimate_tokens(content)
-    set_optional_attr(span, gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS, input_tokens)
-    set_optional_attr(span, gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens)
+    set_optional_attr(
+        span, gen_ai_attributes.GEN_AI_USAGE_INPUT_TOKENS, input_tokens
+    )
+    set_optional_attr(
+        span, gen_ai_attributes.GEN_AI_USAGE_OUTPUT_TOKENS, output_tokens
+    )
     if input_tokens is not None and output_tokens is not None:
-        set_optional_attr(span, "gen_ai.usage.total_tokens", input_tokens + output_tokens)
+        set_optional_attr(
+            span, "gen_ai.usage.total_tokens", input_tokens + output_tokens
+        )
         _add_agent_tokens(instance, input_tokens, output_tokens)
     if token_usage is not None:
-        set_optional_attr(span, gen_ai_extended_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS, safe_get(token_usage, "cache_read"))
-        set_optional_attr(span, gen_ai_extended_attributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS, safe_get(token_usage, "cache_write"))
+        set_optional_attr(
+            span,
+            gen_ai_extended_attributes.GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
+            safe_get(token_usage, "cache_read"),
+        )
+        set_optional_attr(
+            span,
+            gen_ai_extended_attributes.GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+            safe_get(token_usage, "cache_write"),
+        )
     set_optional_attr(span, "slop_code.step.cost", result.get("step_cost"))
     if content is not None:
-        set_optional_attr(span, "gen_ai.output.messages", genai_messages([{"role": "assistant", "content": content}]))
+        set_optional_attr(
+            span,
+            "gen_ai.output.messages",
+            genai_messages([{"role": "assistant", "content": content}]),
+        )
 
 
 def _finish_step(instance, status: Status, finish_reason: str) -> None:
@@ -127,7 +153,10 @@ def _finish_step(instance, status: Status, finish_reason: str) -> None:
     if span is None:
         return
     try:
-        span.set_attribute(gen_ai_extended_attributes.GEN_AI_REACT_FINISH_REASON, finish_reason)
+        span.set_attribute(
+            gen_ai_extended_attributes.GEN_AI_REACT_FINISH_REASON,
+            finish_reason,
+        )
         span.set_status(status)
         span.end()
     finally:

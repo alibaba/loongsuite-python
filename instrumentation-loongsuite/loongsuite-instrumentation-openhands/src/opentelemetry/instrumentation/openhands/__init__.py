@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """OpenTelemetry OpenHands Instrumentation.
 
 Wraps the legacy V0 (CodeAct + AgentController + Runtime) path:
@@ -22,10 +36,10 @@ import importlib
 import logging
 from typing import Any, Collection
 
-from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
 
+from opentelemetry import trace as trace_api
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.openhands.config import (
     OTEL_INSTRUMENTATION_OPENHANDS_AUTO_INSTRUMENT_LITELLM,
     OTEL_INSTRUMENTATION_OPENHANDS_ENABLED,
@@ -169,15 +183,18 @@ class OpenHandsInstrumentor(BaseInstrumentor):
         )
 
         if OTEL_INSTRUMENTATION_OPENHANDS_OUTER_SPANS:
-            self._install_v0_patches(tracer, {
-                "run_controller": RunControllerWrapper,
-                "run_agent_until_done": RunAgentUntilDoneWrapper,
-                "agent_init": AgentControllerInitWrapper,
-                "agent_close": AgentControllerCloseWrapper,
-                "agent_step": AgentControllerStepWrapper,
-                "runtime_run_action": RuntimeRunActionWrapper,
-                "llm_init": LLMInitWrapper,
-            })
+            self._install_v0_patches(
+                tracer,
+                {
+                    "run_controller": RunControllerWrapper,
+                    "run_agent_until_done": RunAgentUntilDoneWrapper,
+                    "agent_init": AgentControllerInitWrapper,
+                    "agent_close": AgentControllerCloseWrapper,
+                    "agent_step": AgentControllerStepWrapper,
+                    "runtime_run_action": RuntimeRunActionWrapper,
+                    "llm_init": LLMInitWrapper,
+                },
+            )
 
         # Auto-enable bundled LiteLLM instrumentation so SDK / V0 LLM
         # ``litellm.completion()`` calls become LLM spans.
@@ -254,11 +271,15 @@ class OpenHandsInstrumentor(BaseInstrumentor):
             return
         try:
             instr = LiteLLMInstrumentor()
-            already = getattr(instr, "_is_instrumented_by_opentelemetry", False)
+            already = getattr(
+                instr, "_is_instrumented_by_opentelemetry", False
+            )
             if not already:
                 instr.instrument(**kwargs)
         except Exception as exc:
-            logger.debug("Could not auto-enable LiteLLM instrumentation: %s", exc)
+            logger.debug(
+                "Could not auto-enable LiteLLM instrumentation: %s", exc
+            )
 
     def _uninstrument(self, **kwargs: Any) -> None:
         for module, qualname in _PATCH_TARGETS:

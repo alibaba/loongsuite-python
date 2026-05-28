@@ -28,7 +28,6 @@ import pytest
 
 from opentelemetry.instrumentation.vita import VitaInstrumentor
 
-
 FAKE_MODELS_CONFIG = {
     "qwen-max": {
         "base_url": "http://fake-api.example.com/v1/chat/completions",
@@ -54,7 +53,11 @@ def _make_openai_response(content=None, tool_calls=None, usage=None):
         "model": "test-model",
         "choices": [{"message": message, "finish_reason": "stop"}],
         "usage": usage
-        or {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        or {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+        },
     }
 
 
@@ -77,14 +80,22 @@ def _tool_call_response():
                 },
             }
         ],
-        usage={"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+        usage={
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+        },
     )
 
 
 def _text_response(content="Order 123 has been delivered. ###STOP###"):
     return _make_openai_response(
         content=content,
-        usage={"prompt_tokens": 200, "completion_tokens": 30, "total_tokens": 230},
+        usage={
+            "prompt_tokens": 200,
+            "completion_tokens": 30,
+            "total_tokens": 230,
+        },
     )
 
 
@@ -195,22 +206,27 @@ class TestLLMSpan:
         from vita.data_model.message import UserMessage
         from vita.utils.llm_utils import generate
 
-        with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-            "requests.post",
-            return_value=_mock_requests_post(
-                _make_openai_response(
-                    content="The order has been delivered.",
-                    usage={
-                        "prompt_tokens": 150,
-                        "completion_tokens": 30,
-                        "total_tokens": 180,
-                    },
-                )
+        with (
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch(
+                "requests.post",
+                return_value=_mock_requests_post(
+                    _make_openai_response(
+                        content="The order has been delivered.",
+                        usage={
+                            "prompt_tokens": 150,
+                            "completion_tokens": 30,
+                            "total_tokens": 180,
+                        },
+                    )
+                ),
             ),
         ):
             result = generate(
                 model="qwen-max",
-                messages=[UserMessage(role="user", content="Where is my order?")],
+                messages=[
+                    UserMessage(role="user", content="Where is my order?")
+                ],
             )
 
         assert result.content == "The order has been delivered."
@@ -228,8 +244,12 @@ class TestLLMSpan:
         from vita.data_model.message import UserMessage
         from vita.utils.llm_utils import generate
 
-        with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-            "requests.post", return_value=_mock_requests_post(_tool_call_response())
+        with (
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch(
+                "requests.post",
+                return_value=_mock_requests_post(_tool_call_response()),
+            ),
         ):
             result = generate(
                 model="gpt-4",
@@ -241,12 +261,18 @@ class TestLLMSpan:
         assert attrs["gen_ai.response.finish_reasons"] == ("tool_calls",)
         assert attrs["gen_ai.provider.name"] == "openai"
 
-    def test_llm_span_captures_positional_tools(self, instrument, span_exporter):
+    def test_llm_span_captures_positional_tools(
+        self, instrument, span_exporter
+    ):
         from vita.data_model.message import UserMessage
         from vita.utils.llm_utils import generate
 
-        with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-            "requests.post", return_value=_mock_requests_post(_text_response("Done."))
+        with (
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch(
+                "requests.post",
+                return_value=_mock_requests_post(_text_response("Done.")),
+            ),
         ):
             generate(
                 "qwen-max",
@@ -254,7 +280,9 @@ class TestLLMSpan:
                 [FakeTool()],
             )
 
-        attrs = _span_attrs(span_exporter.get_finished_spans(), "chat qwen-max")
+        attrs = _span_attrs(
+            span_exporter.get_finished_spans(), "chat qwen-max"
+        )
         assert "gen_ai.tool.definitions" in attrs
         assert "get_order" in attrs["gen_ai.tool.definitions"]
 
@@ -266,7 +294,9 @@ class TestToolSpan:
 
         env = Environment(domain_name="delivery", tools=FakeTools())
         result = env.get_response(
-            ToolCall(id="tc_42", name="get_order", arguments={"order_id": "999"})
+            ToolCall(
+                id="tc_42", name="get_order", arguments={"order_id": "999"}
+            )
         )
 
         assert result.content is not None
@@ -305,8 +335,12 @@ class TestAgentSpan:
         agent = _make_agent()
         state = agent.get_init_state([])
 
-        with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-            "requests.post", return_value=_mock_requests_post(_text_response("Sure."))
+        with (
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch(
+                "requests.post",
+                return_value=_mock_requests_post(_text_response("Sure.")),
+            ),
         ):
             assistant_msg, _ = agent.generate_next_message(
                 UserMessage(role="user", content="I need help"), state
@@ -314,7 +348,9 @@ class TestAgentSpan:
 
         assert assistant_msg.content == "Sure."
         spans = span_exporter.get_finished_spans()
-        agent_span = next(s for s in spans if s.name == "invoke_agent LLMAgent")
+        agent_span = next(
+            s for s in spans if s.name == "invoke_agent LLMAgent"
+        )
         llm_span = next(s for s in spans if s.name == "chat qwen-max")
         attrs = dict(agent_span.attributes)
         assert attrs["gen_ai.operation.name"] == "invoke_agent"
@@ -323,7 +359,9 @@ class TestAgentSpan:
         assert attrs["gen_ai.request.model"] == "qwen-max"
         assert llm_span.parent.span_id == agent_span.context.span_id
 
-    def test_agent_span_created_for_llm_solo_agent(self, instrument, span_exporter):
+    def test_agent_span_created_for_llm_solo_agent(
+        self, instrument, span_exporter
+    ):
         from vita.agent.llm_agent import LLMSoloAgent
 
         agent = LLMSoloAgent(
@@ -336,8 +374,12 @@ class TestAgentSpan:
         )
         state = agent.get_init_state([])
 
-        with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-            "requests.post", return_value=_mock_requests_post(_tool_call_response())
+        with (
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch(
+                "requests.post",
+                return_value=_mock_requests_post(_tool_call_response()),
+            ),
         ):
             agent.generate_next_message(None, state)
 
@@ -357,8 +399,9 @@ class TestStepAndChainSpans:
             _mock_requests_post(_text_response()),
         ]
 
-        with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-            "requests.post", side_effect=responses
+        with (
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch("requests.post", side_effect=responses),
         ):
             result = _make_orchestrator().run()
 
@@ -366,7 +409,8 @@ class TestStepAndChainSpans:
         spans = span_exporter.get_finished_spans()
         chain = next(s for s in spans if s.name == "workflow delivery")
         steps = sorted(
-            [s for s in spans if s.name == "react step"], key=lambda s: s.start_time
+            [s for s in spans if s.name == "react step"],
+            key=lambda s: s.start_time,
         )
         agents = sorted(
             [s for s in spans if s.name == "invoke_agent LLMAgent"],
@@ -398,12 +442,19 @@ class TestStepAndChainSpans:
         assert llms[1].parent.span_id == agents[1].context.span_id
         assert tools[0].parent.span_id == steps[0].context.span_id
 
-    def test_open_step_fails_when_env_turn_raises(self, instrument, span_exporter):
-        with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-            "requests.post", return_value=_mock_requests_post(_tool_call_response())
-        ), patch(
-            "vita.environment.environment.Environment.get_response",
-            side_effect=RuntimeError("env broke"),
+    def test_open_step_fails_when_env_turn_raises(
+        self, instrument, span_exporter
+    ):
+        with (
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch(
+                "requests.post",
+                return_value=_mock_requests_post(_tool_call_response()),
+            ),
+            patch(
+                "vita.environment.environment.Environment.get_response",
+                side_effect=RuntimeError("env broke"),
+            ),
         ):
             with pytest.raises(RuntimeError, match="env broke"):
                 _make_orchestrator().run()
@@ -418,7 +469,9 @@ class TestStepAndChainSpans:
 
 
 class TestEntrySpan:
-    def test_run_task_entry_wraps_orchestrator_trace(self, instrument, span_exporter):
+    def test_run_task_entry_wraps_orchestrator_trace(
+        self, instrument, span_exporter
+    ):
         from vita.run import run_task
 
         def fake_internal(**kwargs):
@@ -434,14 +487,18 @@ class TestEntrySpan:
             message_history=None,
         )
 
-        with patch("vita.run._run_task_internal", side_effect=fake_internal), patch(
-            "vita.utils.llm_utils.models", FAKE_MODELS_CONFIG
-        ), patch("requests.post", side_effect=responses):
+        with (
+            patch("vita.run._run_task_internal", side_effect=fake_internal),
+            patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+            patch("requests.post", side_effect=responses),
+        ):
             result = run_task("delivery", task, "llm_agent", "user_simulator")
 
         assert result.termination_reason == "agent_stop"
         spans = span_exporter.get_finished_spans()
-        entry = next(s for s in spans if s.name == "enter_ai_application_system")
+        entry = next(
+            s for s in spans if s.name == "enter_ai_application_system"
+        )
         chain = next(s for s in spans if s.name == "workflow delivery")
         attrs = dict(entry.attributes)
         assert attrs["gen_ai.operation.name"] == "enter"
@@ -457,9 +514,14 @@ class TestProviderInference:
         from vita.utils.llm_utils import generate
 
         for model in ("gpt-4", "claude-3-opus", "qwen-max"):
-            with patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG), patch(
-                "requests.post",
-                return_value=_mock_requests_post(_make_openai_response(content="Hi")),
+            with (
+                patch("vita.utils.llm_utils.models", FAKE_MODELS_CONFIG),
+                patch(
+                    "requests.post",
+                    return_value=_mock_requests_post(
+                        _make_openai_response(content="Hi")
+                    ),
+                ),
             ):
                 generate(
                     model=model,

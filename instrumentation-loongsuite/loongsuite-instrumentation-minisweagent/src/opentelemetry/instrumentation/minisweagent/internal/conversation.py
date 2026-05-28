@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Map mini-swe-agent trajectory dicts → OpenTelemetry GenAI message / tool-definition types."""
 
 from __future__ import annotations
@@ -23,7 +37,9 @@ _TRAJ_MAX_BYTES = 8_000_000
 
 def bash_tool_definition() -> FunctionToolDefinition:
     """Single bash tool (same schema mini uses via LiteLLM)."""
-    from minisweagent.models.utils.actions_toolcall import BASH_TOOL  # noqa: PLC0415
+    from minisweagent.models.utils.actions_toolcall import (
+        BASH_TOOL,  # noqa: PLC0415
+    )
 
     fn = BASH_TOOL["function"]
     return FunctionToolDefinition(
@@ -68,7 +84,11 @@ def _normalized_tool_calls(msg: dict[str, Any]) -> list[ToolCall]:
                     args_obj = {"raw": raw_args}
             else:
                 args_obj = raw_args if raw_args is not None else {}
-            parts.append(ToolCall(id=tc_id, name=str(name or "bash"), arguments=args_obj))
+            parts.append(
+                ToolCall(
+                    id=tc_id, name=str(name or "bash"), arguments=args_obj
+                )
+            )
 
     extra = msg.get("extra") or {}
     actions = extra.get("actions") or []
@@ -79,7 +99,9 @@ def _normalized_tool_calls(msg: dict[str, Any]) -> list[ToolCall]:
                 continue
             parts.append(
                 ToolCall(
-                    id=act.get("tool_call_id") if isinstance(act, dict) else None,
+                    id=act.get("tool_call_id")
+                    if isinstance(act, dict)
+                    else None,
                     name="bash",
                     arguments={"command": cmd},
                 )
@@ -108,7 +130,9 @@ def _message_to_semconv_messages(
 ) -> list[InputMessage | OutputMessage]:
     role = msg.get("role")
     if role == "user":
-        return [InputMessage(role="user", parts=_text_parts(msg.get("content")))]
+        return [
+            InputMessage(role="user", parts=_text_parts(msg.get("content")))
+        ]
     if role == "tool":
         tid = msg.get("tool_call_id")
         return [
@@ -130,11 +154,15 @@ def _message_to_semconv_messages(
             parts = [Text(content="")]
         extra = msg.get("extra") or {}
         finish = (
-            "tool_calls" if extra.get("actions") or msg.get("tool_calls") else "stop"
+            "tool_calls"
+            if extra.get("actions") or msg.get("tool_calls")
+            else "stop"
         )
         return [
             OutputMessage(
-                role="assistant", parts=parts, finish_reason=finish  # type: ignore[arg-type]
+                role="assistant",
+                parts=parts,
+                finish_reason=finish,  # type: ignore[arg-type]
             )
         ]
     if role == "exit":
@@ -146,12 +174,15 @@ def _message_to_semconv_messages(
         ]
     return [
         InputMessage(
-            role=str(role or "unknown"), parts=_text_parts(str(msg.get("content")))
+            role=str(role or "unknown"),
+            parts=_text_parts(str(msg.get("content"))),
         ),
     ]
 
 
-def build_invoke_payload_from_messages(messages: list[dict[str, Any]]) -> dict[str, Any]:
+def build_invoke_payload_from_messages(
+    messages: list[dict[str, Any]],
+) -> dict[str, Any]:
     """Core conversion: trajectory message dicts → invoke_agent / ENTRY payload."""
     sys_inst, rest = split_system_messages(messages)
     input_messages: list[InputMessage] = []
@@ -194,7 +225,9 @@ def try_fill_entry_payload_from_mini_trajectory() -> dict[str, Any] | None:
         return None
     try:
         if path.stat().st_size > _TRAJ_MAX_BYTES:
-            logger.warning("trajectory too large for telemetry snapshot: %s", path)
+            logger.warning(
+                "trajectory too large for telemetry snapshot: %s", path
+            )
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -214,7 +247,9 @@ def try_fill_entry_payload_from_mini_trajectory() -> dict[str, Any] | None:
         return None
 
 
-def apply_payload_to_entry_invocation(entry_inv: Any, payload: dict[str, Any]) -> None:
+def apply_payload_to_entry_invocation(
+    entry_inv: Any, payload: dict[str, Any]
+) -> None:
     entry_inv.input_messages = payload["input_messages"]
     entry_inv.output_messages = payload["output_messages"]
     entry_inv.system_instruction = payload["system_instruction"]

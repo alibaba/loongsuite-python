@@ -81,7 +81,9 @@ def _create_mock_slop_code_modules():
         def run(self):
             return {"status": "completed"}
 
-        def _run_checkpoint(self, checkpoint, checkpoint_save_dir, is_first_checkpoint=False):
+        def _run_checkpoint(
+            self, checkpoint, checkpoint_save_dir, is_first_checkpoint=False
+        ):
             result = MagicMock()
             result.had_error = False
             result.passed_policy = True
@@ -93,7 +95,9 @@ def _create_mock_slop_code_modules():
     class Agent:
         def __init__(self, problem_name="test_problem"):
             self.problem_name = problem_name
-            self.system_template = "You are a coding agent. Solve the given programming problem."
+            self.system_template = (
+                "You are a coding agent. Solve the given programming problem."
+            )
             self.usage = MagicMock()
             self.usage.net_tokens = MagicMock()
             self.usage.net_tokens.input = 100
@@ -120,7 +124,9 @@ def _create_mock_slop_code_modules():
 
         def agent_step(self):
             return {
-                "token_usage": MagicMock(input=200, output=80, cache_read=50, cache_write=10),
+                "token_usage": MagicMock(
+                    input=200, output=80, cache_read=50, cache_write=10
+                ),
                 "step_cost": 0.01,
                 "content": "I will fix this bug by editing the code.",
             }
@@ -134,7 +140,9 @@ def _create_mock_slop_code_modules():
     mod_miniswe.MiniSWEAgent = MiniSWEAgent
 
     # Also register under the internal module name that the instrumentor patches
-    mod_miniswe_agent = _make_module("slop_code.agent_runner.agents._miniswe_agent")
+    mod_miniswe_agent = _make_module(
+        "slop_code.agent_runner.agents._miniswe_agent"
+    )
     mod_miniswe_agent.MiniSWEAgent = MiniSWEAgent
 
     # --- LLM: grade_file_async ---

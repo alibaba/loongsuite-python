@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tracing delegates for Environment (factory-injected wrappers).
 
 LLM-call spans remain with LiteLLM/OpenAI instrumentation; this emits execute_tool.
@@ -38,11 +52,20 @@ class TracingEnvironment:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
-    def execute(self, action: dict, cwd: str = "", **kwargs: Any) -> dict[str, Any]:
+    def execute(
+        self, action: dict, cwd: str = "", **kwargs: Any
+    ) -> dict[str, Any]:
         from minisweagent.exceptions import InterruptAgentFlow  # noqa: PLC0415
-        from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler  # noqa: PLC0415
-        from opentelemetry.util.genai.extended_types import ExecuteToolInvocation  # noqa: PLC0415
-        from opentelemetry.util.genai.types import Error as GenAIError  # noqa: PLC0415
+
+        from opentelemetry.util.genai.extended_handler import (
+            get_extended_telemetry_handler,  # noqa: PLC0415
+        )
+        from opentelemetry.util.genai.extended_types import (
+            ExecuteToolInvocation,  # noqa: PLC0415
+        )
+        from opentelemetry.util.genai.types import (
+            Error as GenAIError,  # noqa: PLC0415
+        )
 
         command = action.get("command", "") if isinstance(action, dict) else ""
         tool_call_id = (
@@ -53,7 +76,9 @@ class TracingEnvironment:
             tool_name="bash",
             provider="minisweagent",
             tool_type="function",
-            tool_call_id=tool_call_id if isinstance(tool_call_id, str) else None,
+            tool_call_id=tool_call_id
+            if isinstance(tool_call_id, str)
+            else None,
             tool_description="Execute a bash command",
             tool_call_arguments={"command": command},
         )

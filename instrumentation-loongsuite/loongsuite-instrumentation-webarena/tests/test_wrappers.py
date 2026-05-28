@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Comprehensive wrapper tests for WebArena instrumentation spans.
 
 Each test class covers one wrapper / span type. Tests verify:
@@ -26,7 +40,6 @@ import sys
 import types
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -42,8 +55,10 @@ from conftest import (
     make_action,
     make_ns_args,
     span_attr,
-    spans_by_name,
 )
+
+# State module for resetting between tests
+from opentelemetry.instrumentation.webarena.internal import _state as state
 
 # Attribute constants used by the production code
 from opentelemetry.instrumentation.webarena.internal._attrs import (
@@ -64,15 +79,10 @@ from opentelemetry.instrumentation.webarena.internal._attrs import (
     WEBARENA_PARSING_FAILURE_COUNT,
     WEBARENA_PREVIOUS_ACTION,
     WEBARENA_REQUIRE_LOGIN,
-    WEBARENA_SITES,
     WEBARENA_STEP_COUNT,
     WEBARENA_TASK_ID,
     WEBARENA_TOOL_COUNT,
 )
-
-# State module for resetting between tests
-from opentelemetry.instrumentation.webarena.internal import _state as state
-
 
 # ---------------------------------------------------------------------------
 # Accessor helpers: always fetch classes/functions from sys.modules so we
@@ -97,18 +107,24 @@ def _construct_agent(ns_args):
 
 def _generate_hf(*args, **kwargs):
     """Call generate_from_huggingface_completion via sys.modules (wrapped)."""
-    fn = sys.modules["llms.providers.hf_utils"].generate_from_huggingface_completion
+    fn = sys.modules[
+        "llms.providers.hf_utils"
+    ].generate_from_huggingface_completion
     return fn(*args, **kwargs)
 
 
 def _new_direct_pc():
     """Return a new DirectPromptConstructor instance (wrapped class)."""
-    return sys.modules["agent.prompts.prompt_constructor"].DirectPromptConstructor()
+    return sys.modules[
+        "agent.prompts.prompt_constructor"
+    ].DirectPromptConstructor()
 
 
 def _new_cot_pc():
     """Return a new CoTPromptConstructor instance (wrapped class)."""
-    return sys.modules["agent.prompts.prompt_constructor"].CoTPromptConstructor()
+    return sys.modules[
+        "agent.prompts.prompt_constructor"
+    ].CoTPromptConstructor()
 
 
 def _make_tracer(span_exporter):
@@ -192,7 +208,9 @@ class TestConfig:
 
         for val in ("1", "true", "yes", "on", "True", "YES", "ON"):
             os.environ["WEBARENA_BOOL_TEST"] = val
-            assert _bool_env("WEBARENA_BOOL_TEST") is True, f"Expected True for {val!r}"
+            assert _bool_env("WEBARENA_BOOL_TEST") is True, (
+                f"Expected True for {val!r}"
+            )
         os.environ.pop("WEBARENA_BOOL_TEST", None)
 
     def test_bool_env_falsy_values(self):
@@ -200,21 +218,43 @@ class TestConfig:
 
         for val in ("0", "false", "no", "off", "random"):
             os.environ["WEBARENA_BOOL_TEST"] = val
-            assert _bool_env("WEBARENA_BOOL_TEST") is False, f"Expected False for {val!r}"
+            assert _bool_env("WEBARENA_BOOL_TEST") is False, (
+                f"Expected False for {val!r}"
+            )
         os.environ.pop("WEBARENA_BOOL_TEST", None)
 
     def test_capture_message_content_truthy(self):
-        from opentelemetry.instrumentation.webarena.config import capture_message_content
+        from opentelemetry.instrumentation.webarena.config import (
+            capture_message_content,
+        )
 
-        for val in ("TRUE", "1", "YES", "ON", "SPAN_ONLY", "SPAN_AND_EVENT", "EVENT_ONLY"):
-            os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = val
-            assert capture_message_content() is True, f"Expected True for {val!r}"
-        os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+        for val in (
+            "TRUE",
+            "1",
+            "YES",
+            "ON",
+            "SPAN_ONLY",
+            "SPAN_AND_EVENT",
+            "EVENT_ONLY",
+        ):
+            os.environ[
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+            ] = val
+            assert capture_message_content() is True, (
+                f"Expected True for {val!r}"
+            )
+        os.environ.pop(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+        )
 
     def test_capture_message_content_default_false(self):
-        from opentelemetry.instrumentation.webarena.config import capture_message_content
+        from opentelemetry.instrumentation.webarena.config import (
+            capture_message_content,
+        )
 
-        os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+        os.environ.pop(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+        )
         assert capture_message_content() is False
 
 
@@ -227,12 +267,16 @@ class TestAttrHelpers:
     """Tests for internal._attrs helper functions."""
 
     def test_truncate_short_string(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import truncate
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            truncate,
+        )
 
         assert truncate("hello", 1024) == "hello"
 
     def test_truncate_long_string(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import truncate
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            truncate,
+        )
 
         long = "x" * 2000
         result = truncate(long, 100)
@@ -240,59 +284,80 @@ class TestAttrHelpers:
         assert result.endswith("...")
 
     def test_truncate_none_returns_empty(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import truncate
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            truncate,
+        )
 
         assert truncate(None, 100) == ""
 
     def test_truncate_non_string(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import truncate
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            truncate,
+        )
 
         assert truncate(42, 100) == "42"
 
     def test_truncate_very_small_max(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import truncate
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            truncate,
+        )
 
         assert truncate("abcdef", 3) == "abc"
 
     def test_safe_json_dumps_dict(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import safe_json_dumps
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            safe_json_dumps,
+        )
 
         result = safe_json_dumps({"key": "value"})
         assert "key" in result
         assert "value" in result
 
     def test_safe_json_dumps_with_max_len(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import safe_json_dumps
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            safe_json_dumps,
+        )
 
         result = safe_json_dumps({"key": "x" * 5000}, max_len=50)
         assert len(result) <= 50
 
     def test_safe_json_dumps_unencodable(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import safe_json_dumps
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            safe_json_dumps,
+        )
 
         class Weird:
             pass
+
         result = safe_json_dumps(Weird())
         assert isinstance(result, str)
 
     def test_action_type_name_dict_with_enum(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_type_name
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_type_name,
+        )
 
         action = {"action_type": ActionTypes.CLICK}
         assert action_type_name(action) == "CLICK"
 
     def test_action_type_name_not_dict(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_type_name
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_type_name,
+        )
 
         assert action_type_name("not a dict") == "UNKNOWN"
 
     def test_action_type_name_missing_key(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_type_name
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_type_name,
+        )
 
         assert action_type_name({}) == "UNKNOWN"
 
     def test_action_arguments_filters_keys(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_arguments
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_arguments,
+        )
 
         action = {
             "action_type": ActionTypes.CLICK,
@@ -311,24 +376,32 @@ class TestAttrHelpers:
         assert "page_screenshot" not in result
 
     def test_action_arguments_not_dict(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_arguments
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_arguments,
+        )
 
         assert action_arguments("nope") == {}
 
     def test_messages_to_input_value_string(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import messages_to_input_value
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            messages_to_input_value,
+        )
 
         assert messages_to_input_value("hello") == "hello"
 
     def test_messages_to_input_value_list(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import messages_to_input_value
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            messages_to_input_value,
+        )
 
         msgs = [{"role": "user", "content": "hi"}]
         result = messages_to_input_value(msgs)
         assert "user" in result
 
     def test_messages_to_input_value_other(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import messages_to_input_value
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            messages_to_input_value,
+        )
 
         result = messages_to_input_value(42)
         assert result == "42"
@@ -431,8 +504,12 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"]
-        chain_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"]
+        entry_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ]
+        chain_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ]
         assert len(entry_spans) >= 1
         assert len(chain_spans) >= 1
 
@@ -442,7 +519,9 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+        entry = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ][0]
         assert span_attr(entry, GEN_AI_FRAMEWORK) == FRAMEWORK_NAME
         assert span_attr(entry, "gen_ai.operation.name") == "enter"
 
@@ -452,7 +531,9 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        chain = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"][0]
+        chain = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ][0]
         assert span_attr(chain, GEN_AI_FRAMEWORK) == FRAMEWORK_NAME
         assert span_attr(chain, "gen_ai.operation.name") == "workflow"
         assert "webarena_task" in chain.name
@@ -463,8 +544,12 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
-        chain = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"][0]
+        entry = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ][0]
+        chain = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ][0]
         assert chain.parent is not None
         assert chain.parent.span_id == entry.context.span_id
 
@@ -483,7 +568,9 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+        entry = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ][0]
         assert span_attr(entry, WEBARENA_TASK_ID) == "42"
         assert span_attr(entry, WEBARENA_REQUIRE_LOGIN) is True
         assert "42" in entry.name
@@ -498,7 +585,9 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+        entry = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ][0]
         assert span_attr(entry, WEBARENA_TASK_ID) == "7"
 
     def test_reset_error_records_exception(self, span_exporter):
@@ -506,8 +595,12 @@ class TestEnvResetWrapper:
 
         Tested by invoking the wrapper class directly with a failing ``wrapped``.
         """
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvResetWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvResetWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -521,22 +614,30 @@ class TestEnvResetWrapper:
             wrapper(_failing_reset, env, (), {"options": None})
 
         spans = local_exporter.get_finished_spans()
-        entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+        entry = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ][0]
         assert entry.status.status_code == StatusCode.ERROR
         events = entry.events
         assert any("browser init failed" in str(e.attributes) for e in events)
 
-    def test_consecutive_resets_close_previous_task(self, instrument, span_exporter):
+    def test_consecutive_resets_close_previous_task(
+        self, instrument, span_exporter
+    ):
         env = _new_env()
         env.reset(options=None)
         env.reset(options=None)
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"]
+        entry_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ]
         assert len(entry_spans) == 2
 
-    def test_reset_with_content_capture(self, instrument_with_content, span_exporter, tmp_path):
+    def test_reset_with_content_capture(
+        self, instrument_with_content, span_exporter, tmp_path
+    ):
         config = {"task_id": 1, "intent": "Buy the cheapest item", "sites": []}
         cfg_path = tmp_path / "cfg.json"
         cfg_path.write_text(json.dumps(config))
@@ -546,7 +647,9 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+        entry = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ][0]
         input_msgs = span_attr(entry, "gen_ai.input.messages")
         assert input_msgs is not None
         assert "Buy the cheapest item" in input_msgs
@@ -559,7 +662,9 @@ class TestEnvResetWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+        entry = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ][0]
         output_msgs = span_attr(entry, "gen_ai.output.messages")
         assert output_msgs is not None
         assert "Initial observation" in output_msgs
@@ -579,8 +684,12 @@ class TestEnvCloseWrapper:
         env.close()
 
         spans = span_exporter.get_finished_spans()
-        entry_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"]
-        chain_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"]
+        entry_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ]
+        chain_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ]
         assert len(entry_spans) >= 1
         assert len(chain_spans) >= 1
 
@@ -599,7 +708,9 @@ class TestEnvCloseWrapper:
         env.close()
 
         spans = span_exporter.get_finished_spans()
-        chain = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"][0]
+        chain = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ][0]
         assert span_attr(chain, WEBARENA_STEP_COUNT) == 1
         assert span_attr(chain, WEBARENA_TOOL_COUNT) == 1
 
@@ -622,9 +733,15 @@ class TestNextActionWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        step_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"]
-        agent_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
-                       and "invoke_agent" in s.name]
+        step_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"
+        ]
+        agent_spans = [
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
+        ]
         assert len(step_spans) >= 1
         assert len(agent_spans) >= 1
 
@@ -638,17 +755,23 @@ class TestNextActionWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
         assert span_attr(step, GEN_AI_REACT_ROUND) == 1
 
-    def test_multiple_rounds_increment_step_number(self, instrument, span_exporter):
+    def test_multiple_rounds_increment_step_number(
+        self, instrument, span_exporter
+    ):
         env = _new_env()
         env.reset(options=None)
 
         agent = _new_agent()
         agent.next_action("obs1", "intent", {"action_history": []})
         agent.next_action("obs2", "intent", {"action_history": ["click [1]"]})
-        agent.next_action("obs3", "intent", {"action_history": ["click [1]", "type [2]"]})
+        agent.next_action(
+            "obs3", "intent", {"action_history": ["click [1]", "type [2]"]}
+        )
 
         state.end_task_spans()
 
@@ -673,8 +796,10 @@ class TestNextActionWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ][0]
         assert span_attr(agent_span, GEN_AI_FRAMEWORK) == FRAMEWORK_NAME
         assert span_attr(agent_span, "gen_ai.operation.name") == "invoke_agent"
@@ -693,8 +818,10 @@ class TestNextActionWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ][0]
         assert span_attr(agent_span, WEBARENA_ACTION_TYPE) == "CLICK"
 
@@ -709,8 +836,10 @@ class TestNextActionWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ][0]
         assert "click [5]" in span_attr(agent_span, WEBARENA_PREVIOUS_ACTION)
 
@@ -724,10 +853,14 @@ class TestNextActionWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
         agent_span = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ][0]
         assert agent_span.parent is not None
         assert agent_span.parent.span_id == step.context.span_id
@@ -742,8 +875,12 @@ class TestNextActionWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        chain = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"][0]
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
+        chain = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
         assert step.parent is not None
         assert step.parent.span_id == chain.context.span_id
 
@@ -752,8 +889,12 @@ class TestNextActionWrapper:
 
         Tested by invoking the wrapper directly with a failing wrapped function.
         """
-        from opentelemetry.instrumentation.webarena.internal._wrappers import NextActionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            NextActionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -768,25 +909,35 @@ class TestNextActionWrapper:
             raise ValueError("LLM call failed")
 
         with pytest.raises(ValueError, match="LLM call failed"):
-            wrapper(_failing, agent, ("obs", "intent", {"action_history": []}), {})
+            wrapper(
+                _failing, agent, ("obs", "intent", {"action_history": []}), {}
+            )
 
         state.end_task_spans()
 
         spans = local_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ][0]
         assert agent_span.status.status_code == StatusCode.ERROR
-        assert span_attr(agent_span, GEN_AI_REACT_FINISH_REASON) == "ValueError"
+        assert (
+            span_attr(agent_span, GEN_AI_REACT_FINISH_REASON) == "ValueError"
+        )
 
     def test_stop_action_sets_finish_reason(self, span_exporter):
         """When next_action returns STOP, the STEP should record finish_reason=stop.
 
         Tested by invoking the wrapper directly.
         """
-        from opentelemetry.instrumentation.webarena.internal._wrappers import NextActionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            NextActionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -803,11 +954,15 @@ class TestNextActionWrapper:
                 "raw_prediction": "stop [The price is $42]",
             }
 
-        wrapper(_stop_action, agent, ("obs", "intent", {"action_history": []}), {})
+        wrapper(
+            _stop_action, agent, ("obs", "intent", {"action_history": []}), {}
+        )
         state.end_task_spans()
 
         spans = local_exporter.get_finished_spans()
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
         assert span_attr(step, GEN_AI_REACT_FINISH_REASON) == "stop"
 
     def test_none_action_increments_parsing_failure(self, span_exporter):
@@ -815,8 +970,12 @@ class TestNextActionWrapper:
 
         Tested by invoking the wrapper directly.
         """
-        from opentelemetry.instrumentation.webarena.internal._wrappers import NextActionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            NextActionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -832,14 +991,18 @@ class TestNextActionWrapper:
                 "raw_prediction": "gibberish",
             }
 
-        wrapper(_none_action, agent, ("obs", "intent", {"action_history": []}), {})
+        wrapper(
+            _none_action, agent, ("obs", "intent", {"action_history": []}), {}
+        )
 
         assert state.parsing_failure_count() == 1
 
         state.end_task_spans()
 
         spans = local_exporter.get_finished_spans()
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
         assert span_attr(step, GEN_AI_REACT_FINISH_REASON) == "parse_failure"
 
     def test_next_action_outside_task_no_step(self, instrument, span_exporter):
@@ -849,26 +1012,38 @@ class TestNextActionWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_spans = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ]
-        step_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"]
+        step_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"
+        ]
         assert len(agent_spans) >= 1
         assert len(step_spans) == 0
 
-    def test_agent_content_capture(self, instrument_with_content, span_exporter):
+    def test_agent_content_capture(
+        self, instrument_with_content, span_exporter
+    ):
         env = _new_env()
         env.reset(options=None)
 
         agent = _new_agent()
-        agent.next_action("obs", "click the login button", {"action_history": ["type [1] hello"]})
+        agent.next_action(
+            "obs",
+            "click the login button",
+            {"action_history": ["type [1] hello"]},
+        )
 
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ][0]
         input_msgs = span_attr(agent_span, "gen_ai.input.messages")
         assert input_msgs is not None
@@ -888,14 +1063,20 @@ class TestNextActionWrapper:
         env.reset(options=None)
 
         agent = _new_agent()
-        agent.next_action("obs", intent="find the product", meta_data={"action_history": ["goto [url]"]})
+        agent.next_action(
+            "obs",
+            intent="find the product",
+            meta_data={"action_history": ["goto [url]"]},
+        )
 
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
-            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT" and "invoke_agent" in s.name
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
         ][0]
         assert "goto [url]" in span_attr(agent_span, WEBARENA_PREVIOUS_ACTION)
 
@@ -919,7 +1100,9 @@ class TestEnvStepWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        tool_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"]
+        tool_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"
+        ]
         assert len(tool_spans) == 1
 
     def test_tool_span_attributes(self, instrument, span_exporter):
@@ -929,11 +1112,15 @@ class TestEnvStepWrapper:
         agent = _new_agent()
         agent.next_action("obs", "intent", {"action_history": []})
 
-        env.step(make_action(ActionTypes.GOTO, element_id="", url="http://shop.com"))
+        env.step(
+            make_action(ActionTypes.GOTO, element_id="", url="http://shop.com")
+        )
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert span_attr(tool, GEN_AI_FRAMEWORK) == FRAMEWORK_NAME
         assert span_attr(tool, "gen_ai.operation.name") == "execute_tool"
         assert span_attr(tool, "gen_ai.tool.name") == "GOTO"
@@ -951,10 +1138,14 @@ class TestEnvStepWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert span_attr(tool, WEBARENA_BROWSER_ELEMENT_ID) == "77"
 
-    def test_tool_span_records_page_url_before(self, instrument, span_exporter):
+    def test_tool_span_records_page_url_before(
+        self, instrument, span_exporter
+    ):
         env = _new_env()
         env.page = types.SimpleNamespace(url="http://before.example.com")
         env.reset(options=None)
@@ -966,10 +1157,16 @@ class TestEnvStepWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
-        assert "before.example.com" in span_attr(tool, WEBARENA_PAGE_URL_BEFORE)
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
+        assert "before.example.com" in span_attr(
+            tool, WEBARENA_PAGE_URL_BEFORE
+        )
 
-    def test_tool_span_records_observation_main_type(self, instrument, span_exporter):
+    def test_tool_span_records_observation_main_type(
+        self, instrument, span_exporter
+    ):
         env = _new_env()
         env.main_observation_type = "image"
         env.reset(options=None)
@@ -981,7 +1178,9 @@ class TestEnvStepWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert span_attr(tool, WEBARENA_OBSERVATION_MAIN_TYPE) == "image"
 
     def test_tool_span_is_child_of_step(self, instrument, span_exporter):
@@ -995,8 +1194,12 @@ class TestEnvStepWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert tool.parent is not None
         assert tool.parent.span_id == step.context.span_id
 
@@ -1005,8 +1208,12 @@ class TestEnvStepWrapper:
 
         Tested by invoking the wrapper directly.
         """
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvStepWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvStepWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1021,7 +1228,9 @@ class TestEnvStepWrapper:
             wrapper(_failing, env, (action,), {})
 
         spans = local_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert tool.status.status_code == StatusCode.ERROR
 
     def test_tool_span_fail_error_attribute(self, span_exporter):
@@ -1029,8 +1238,12 @@ class TestEnvStepWrapper:
 
         Tested by invoking the wrapper directly.
         """
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvStepWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvStepWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1038,17 +1251,27 @@ class TestEnvStepWrapper:
         env = _new_env()
 
         def _fail_result(*args, **kwargs):
-            return ("obs", False, False, False, {"fail_error": "element not found"})
+            return (
+                "obs",
+                False,
+                False,
+                False,
+                {"fail_error": "element not found"},
+            )
 
         action = make_action()
         wrapper(_fail_result, env, (action,), {})
 
         spans = local_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert span_attr(tool, WEBARENA_FAIL_ERROR) == "element not found"
         assert tool.status.status_code == StatusCode.ERROR
 
-    def test_tool_span_terminated_sets_step_finish_reason(self, instrument, span_exporter):
+    def test_tool_span_terminated_sets_step_finish_reason(
+        self, instrument, span_exporter
+    ):
         """When step returns terminated=True, the parent STEP should get finish_reason=terminated.
 
         Tested by invoking the wrapper directly within a STEP context.
@@ -1057,7 +1280,9 @@ class TestEnvStepWrapper:
             EnvStepWrapper,
             _rotate_step,
         )
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1078,23 +1303,31 @@ class TestEnvStepWrapper:
         state.end_task_spans()
 
         spans = local_exporter.get_finished_spans()
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
         assert span_attr(step, GEN_AI_REACT_FINISH_REASON) == "terminated"
 
-    def test_tool_span_with_content_capture(self, instrument_with_content, span_exporter):
+    def test_tool_span_with_content_capture(
+        self, instrument_with_content, span_exporter
+    ):
         env = _new_env()
         env.reset(options=None)
 
         agent = _new_agent()
         agent.next_action("obs", "intent", {"action_history": []})
 
-        action = make_action(ActionTypes.TYPE, element_id="5", text="hello world")
+        action = make_action(
+            ActionTypes.TYPE, element_id="5", text="hello world"
+        )
         env.step(action)
 
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         args_str = span_attr(tool, "gen_ai.tool.call.arguments")
         assert args_str is not None
         assert "TYPE" in args_str
@@ -1115,7 +1348,9 @@ class TestEnvStepWrapper:
         env.close()
 
         spans = span_exporter.get_finished_spans()
-        chain = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"][0]
+        chain = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ][0]
         assert span_attr(chain, WEBARENA_TOOL_COUNT) == 3
 
 
@@ -1137,7 +1372,9 @@ class TestPromptConstructWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        task_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"]
+        task_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"
+        ]
         assert len(task_spans) >= 1
 
     def test_task_span_attributes(self, instrument, span_exporter):
@@ -1150,7 +1387,9 @@ class TestPromptConstructWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         assert span_attr(task, GEN_AI_FRAMEWORK) == FRAMEWORK_NAME
         assert span_attr(task, "gen_ai.operation.name") == "run_task"
         assert span_attr(task, "webarena.task.name") == "build_prompt_context"
@@ -1161,13 +1400,18 @@ class TestPromptConstructWrapper:
         env.reset(options=None)
 
         pc = _new_direct_pc()
-        trajectory = [{"observation": {"text": "hello"}, "info": {}}, {"observation": {}, "info": {}}]
+        trajectory = [
+            {"observation": {"text": "hello"}, "info": {}},
+            {"observation": {}, "info": {}},
+        ]
         pc.construct(trajectory=trajectory, intent="intent", meta_data={})
 
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         assert span_attr(task, WEBARENA_MEMORY_TRAJECTORY_LENGTH) == 2
 
     def test_task_span_prompt_messages_count(self, instrument, span_exporter):
@@ -1180,7 +1424,9 @@ class TestPromptConstructWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         assert span_attr(task, "webarena.prompt.messages_count") == len(result)
 
     def test_task_span_error_path(self, span_exporter):
@@ -1188,8 +1434,12 @@ class TestPromptConstructWrapper:
 
         Tested by invoking the wrapper directly.
         """
-        from opentelemetry.instrumentation.webarena.internal._wrappers import PromptConstructWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            PromptConstructWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1203,20 +1453,30 @@ class TestPromptConstructWrapper:
             wrapper(_failing, pc, ([], "intent", {}), {})
 
         spans = local_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         assert task.status.status_code == StatusCode.ERROR
 
-    def test_task_span_with_content_capture(self, instrument_with_content, span_exporter):
+    def test_task_span_with_content_capture(
+        self, instrument_with_content, span_exporter
+    ):
         env = _new_env()
         env.reset(options=None)
 
         pc = _new_direct_pc()
-        pc.construct(trajectory=[], intent="buy the item", meta_data={"action_history": ["goto [url]"]})
+        pc.construct(
+            trajectory=[],
+            intent="buy the item",
+            meta_data={"action_history": ["goto [url]"]},
+        )
 
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         input_val = span_attr(task, "input.value")
         assert input_val is not None
         assert "buy the item" in input_val
@@ -1239,7 +1499,9 @@ class TestPromptConstructWrapper:
         state.end_task_spans()
 
         spans = span_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         assert span_attr(task, "webarena.memory.obs_text_length") == 500
 
 
@@ -1257,7 +1519,8 @@ class TestConstructAgentWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_spans = [
-            s for s in spans
+            s
+            for s in spans
             if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
             and "create_agent" in s.name
         ]
@@ -1275,7 +1538,8 @@ class TestConstructAgentWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
+            s
+            for s in spans
             if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
             and "create_agent" in s.name
         ][0]
@@ -1285,8 +1549,14 @@ class TestConstructAgentWrapper:
         assert "prompt" in span_attr(agent_span, "gen_ai.agent.name")
         assert span_attr(agent_span, "gen_ai.provider.name") == "openai"
         assert span_attr(agent_span, "gen_ai.request.model") == "gpt-4-turbo"
-        assert span_attr(agent_span, WEBARENA_ACTION_SET_TAG) == "id_accessibility_tree"
-        assert span_attr(agent_span, WEBARENA_OBSERVATION_TYPE) == "accessibility_tree"
+        assert (
+            span_attr(agent_span, WEBARENA_ACTION_SET_TAG)
+            == "id_accessibility_tree"
+        )
+        assert (
+            span_attr(agent_span, WEBARENA_OBSERVATION_TYPE)
+            == "accessibility_tree"
+        )
         assert "create_agent webarena" in agent_span.name
 
     def test_create_agent_has_agent_id(self, instrument, span_exporter):
@@ -1295,7 +1565,8 @@ class TestConstructAgentWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
+            s
+            for s in spans
             if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
             and "create_agent" in s.name
         ][0]
@@ -1309,7 +1580,8 @@ class TestConstructAgentWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
+            s
+            for s in spans
             if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
             and "create_agent" in s.name
         ][0]
@@ -1333,19 +1605,23 @@ class TestConstructAgentWrapper:
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
+            s
+            for s in spans
             if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
             and "create_agent" in s.name
         ][0]
         assert agent_span.status.status_code == StatusCode.ERROR
 
-    def test_create_agent_with_content_capture(self, instrument_with_content, span_exporter):
+    def test_create_agent_with_content_capture(
+        self, instrument_with_content, span_exporter
+    ):
         ns = make_ns_args()
         _construct_agent(ns)
 
         spans = span_exporter.get_finished_spans()
         agent_span = [
-            s for s in spans
+            s
+            for s in spans
             if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
             and "create_agent" in s.name
         ][0]
@@ -1373,7 +1649,9 @@ class TestHuggingFaceCompletionWrapper:
         assert result == "Generated text response"
 
         spans = span_exporter.get_finished_spans()
-        llm_spans = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "LLM"]
+        llm_spans = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "LLM"
+        ]
         assert len(llm_spans) == 1
 
     def test_llm_span_attributes(self, instrument, span_exporter):
@@ -1392,7 +1670,9 @@ class TestHuggingFaceCompletionWrapper:
         assert span_attr(llm, "gen_ai.operation.name") == "text_completion"
         assert span_attr(llm, "gen_ai.provider.name") == "huggingface"
         assert span_attr(llm, "gen_ai.request.model") == "http://my-model:8080"
-        assert span_attr(llm, "gen_ai.response.model") == "http://my-model:8080"
+        assert (
+            span_attr(llm, "gen_ai.response.model") == "http://my-model:8080"
+        )
         assert span_attr(llm, "gen_ai.request.temperature") == 0.7
         assert span_attr(llm, "gen_ai.request.top_p") == 0.95
         assert span_attr(llm, "gen_ai.request.max_tokens") == 256
@@ -1418,7 +1698,9 @@ class TestHuggingFaceCompletionWrapper:
 
         hf_mod.generate_from_huggingface_completion.__wrapped__ = fail_hf
         try:
-            with pytest.raises(ConnectionError, match="HF endpoint unreachable"):
+            with pytest.raises(
+                ConnectionError, match="HF endpoint unreachable"
+            ):
                 _generate_hf("test")
         finally:
             hf_mod.generate_from_huggingface_completion.__wrapped__ = original
@@ -1427,7 +1709,9 @@ class TestHuggingFaceCompletionWrapper:
         llm = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "LLM"][0]
         assert llm.status.status_code == StatusCode.ERROR
 
-    def test_llm_span_with_content_capture(self, instrument_with_content, span_exporter):
+    def test_llm_span_with_content_capture(
+        self, instrument_with_content, span_exporter
+    ):
         _generate_hf(
             "What is the capital of France?",
             "http://hf:8080",
@@ -1445,8 +1729,12 @@ class TestHuggingFaceCompletionWrapper:
         assert output_val is not None
         assert "Generated text response" in output_val
 
-    def test_llm_span_no_content_without_capture(self, instrument, span_exporter):
-        os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+    def test_llm_span_no_content_without_capture(
+        self, instrument, span_exporter
+    ):
+        os.environ.pop(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+        )
         _generate_hf("secret prompt", "http://hf:8080", 0.0, 1.0, 64)
 
         spans = span_exporter.get_finished_spans()
@@ -1464,7 +1752,11 @@ class TestFullWorkflow:
     """End-to-end test verifying the complete span hierarchy for a single task."""
 
     def test_complete_hierarchy(self, instrument, span_exporter, tmp_path):
-        config = {"task_id": 100, "intent": "Buy the item", "sites": ["shopping"]}
+        config = {
+            "task_id": 100,
+            "intent": "Buy the item",
+            "sites": ["shopping"],
+        }
         cfg_path = tmp_path / "task.json"
         cfg_path.write_text(json.dumps(config))
 
@@ -1484,18 +1776,28 @@ class TestFullWorkflow:
             intent="Buy the item",
             meta_data={},
         )
-        agent.next_action("obs2", "Buy the item", {"action_history": ["click [3]"]})
+        agent.next_action(
+            "obs2", "Buy the item", {"action_history": ["click [3]"]}
+        )
         env.step(make_action(ActionTypes.TYPE, element_id="7", text="42"))
 
         env.close()
 
         spans = span_exporter.get_finished_spans()
 
-        entries = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"]
-        chains = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"]
+        entries = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ]
+        chains = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ]
         steps = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"]
-        agents = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
-                  and "invoke_agent" in s.name]
+        agents = [
+            s
+            for s in spans
+            if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+            and "invoke_agent" in s.name
+        ]
         tools = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"]
         tasks = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"]
 
@@ -1516,13 +1818,17 @@ class TestFullWorkflow:
         # Hierarchy: AGENT -> STEP
         for ag in agents:
             assert ag.parent is not None
-            parent_step = [s for s in steps if s.context.span_id == ag.parent.span_id]
+            parent_step = [
+                s for s in steps if s.context.span_id == ag.parent.span_id
+            ]
             assert len(parent_step) == 1
 
         # Hierarchy: TOOL -> STEP
         for tool in tools:
             assert tool.parent is not None
-            parent_step = [s for s in steps if s.context.span_id == tool.parent.span_id]
+            parent_step = [
+                s for s in steps if s.context.span_id == tool.parent.span_id
+            ]
             assert len(parent_step) == 1
 
         # Summary attributes on CHAIN
@@ -1548,8 +1854,12 @@ class TestFullWorkflow:
         env.close()
 
         spans = span_exporter.get_finished_spans()
-        entries = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"]
-        chains = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"]
+        entries = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+        ]
+        chains = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ]
         assert len(entries) == 2
         assert len(chains) == 2
 
@@ -1566,7 +1876,9 @@ class TestFullWorkflow:
         env.close()
 
         spans = span_exporter.get_finished_spans()
-        chain = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"][0]
+        chain = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+        ][0]
         output_val = span_attr(chain, "output.value")
         assert output_val is not None
         assert "1 steps" in output_val
@@ -1583,14 +1895,18 @@ class TestReadConfigFile:
 
     def test_config_file_invalid_path(self, span_exporter):
         """Non-existent config file should not crash; returns None."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _read_config_file
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _read_config_file,
+        )
 
         result = _read_config_file({"config_file": "/nonexistent/path.json"})
         assert result is None
 
     def test_config_file_non_dict_non_list_data(self, span_exporter, tmp_path):
         """Config file with string data should return None."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _read_config_file
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _read_config_file,
+        )
 
         cfg = tmp_path / "string.json"
         cfg.write_text('"just a string"')
@@ -1599,7 +1915,9 @@ class TestReadConfigFile:
 
     def test_config_file_empty_list(self, span_exporter, tmp_path):
         """Config file with empty list should return None."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _read_config_file
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _read_config_file,
+        )
 
         cfg = tmp_path / "empty_list.json"
         cfg.write_text("[]")
@@ -1608,13 +1926,17 @@ class TestReadConfigFile:
 
     def test_config_file_no_config_file_key(self, span_exporter):
         """Options dict without config_file key."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _read_config_file
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _read_config_file,
+        )
 
         result = _read_config_file({"other_key": "value"})
         assert result is None
 
     def test_config_file_none_options(self, span_exporter):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _read_config_file
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _read_config_file,
+        )
 
         assert _read_config_file(None) is None
         assert _read_config_file({}) is None
@@ -1624,16 +1946,21 @@ class TestJsonDumps:
     """Tests for _json_dumps in _wrappers.py."""
 
     def test_json_dumps_normal(self):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _json_dumps
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _json_dumps,
+        )
 
         result = _json_dumps({"key": "value"})
         assert '"key"' in result
         assert '"value"' in result
 
     def test_json_dumps_with_non_serializable_uses_default_str(self):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _json_dumps
-
         import datetime
+
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _json_dumps,
+        )
+
         result = _json_dumps({"ts": datetime.datetime(2024, 1, 1)})
         assert "2024" in result
 
@@ -1642,7 +1969,9 @@ class TestSetCommonAttrs:
     """Tests for _set_common_attrs."""
 
     def test_sets_span_kind_and_framework(self, span_exporter):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _set_common_attrs
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _set_common_attrs,
+        )
         from opentelemetry.sdk.trace import TracerProvider as _TP
 
         provider = _TP()
@@ -1659,21 +1988,29 @@ class TestSetAgentContentAttrs:
 
     def test_agent_content_attrs_no_prompt_constructor(self, span_exporter):
         """When instance has no prompt_constructor, should not crash."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _set_agent_content_attrs
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _set_agent_content_attrs,
+        )
         from opentelemetry.sdk.trace import TracerProvider as _TP
 
         provider = _TP()
         tracer = provider.get_tracer("test")
         span = tracer.start_span("test")
         instance = types.SimpleNamespace()  # no prompt_constructor
-        _set_agent_content_attrs(span, instance, "intent text", {"action_history": ["click [1]"]})
+        _set_agent_content_attrs(
+            span, instance, "intent text", {"action_history": ["click [1]"]}
+        )
         span.end()
         # Should still set input messages and tool definitions
-        assert "intent text" in span.attributes.get("gen_ai.input.messages", "")
+        assert "intent text" in span.attributes.get(
+            "gen_ai.input.messages", ""
+        )
         assert "click" in span.attributes.get("gen_ai.tool.definitions", "")
 
     def test_agent_content_attrs_with_intent_and_history(self, span_exporter):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _set_agent_content_attrs
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _set_agent_content_attrs,
+        )
         from opentelemetry.sdk.trace import TracerProvider as _TP
 
         provider = _TP()
@@ -1684,7 +2021,9 @@ class TestSetAgentContentAttrs:
                 instruction={"intro": "You help with browsing."}
             )
         )
-        _set_agent_content_attrs(span, instance, "find product", {"action_history": ["goto [url]"]})
+        _set_agent_content_attrs(
+            span, instance, "find product", {"action_history": ["goto [url]"]}
+        )
         span.end()
         sys_instr = span.attributes.get("gen_ai.system_instructions", "")
         assert "browsing" in sys_instr
@@ -1693,7 +2032,9 @@ class TestSetAgentContentAttrs:
         assert "goto [url]" in input_msgs
 
     def test_agent_content_attrs_no_intent(self, span_exporter):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import _set_agent_content_attrs
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            _set_agent_content_attrs,
+        )
         from opentelemetry.sdk.trace import TracerProvider as _TP
 
         provider = _TP()
@@ -1711,10 +2052,16 @@ class TestEnvResetWrapperEdgeCases:
 
     def test_reset_result_string_obs(self, span_exporter):
         """When reset returns a string observation instead of dict."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvResetWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvResetWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
-        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "true"
+        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+            "true"
+        )
         try:
             local_exporter = InMemorySpanExporter()
             tracer = _make_tracer(local_exporter)
@@ -1729,19 +2076,29 @@ class TestEnvResetWrapperEdgeCases:
             state.end_task_spans()
 
             spans = local_exporter.get_finished_spans()
-            entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+            entry = [
+                s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+            ][0]
             output_msgs = span_attr(entry, "gen_ai.output.messages")
             assert output_msgs is not None
             assert "String observation text" in output_msgs
         finally:
-            os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+            os.environ.pop(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+            )
 
     def test_reset_result_non_tuple(self, span_exporter):
         """When reset returns a non-tuple, output messages should be skipped."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvResetWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvResetWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
-        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "true"
+        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+            "true"
+        )
         try:
             local_exporter = InMemorySpanExporter()
             tracer = _make_tracer(local_exporter)
@@ -1756,11 +2113,15 @@ class TestEnvResetWrapperEdgeCases:
             state.end_task_spans()
 
             spans = local_exporter.get_finished_spans()
-            entry = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"][0]
+            entry = [
+                s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "ENTRY"
+            ][0]
             # No output messages since result is not a tuple
             assert span_attr(entry, "gen_ai.output.messages") is None
         finally:
-            os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+            os.environ.pop(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+            )
 
 
 class TestEnvStepWrapperEdgeCases:
@@ -1768,8 +2129,12 @@ class TestEnvStepWrapperEdgeCases:
 
     def test_tool_span_url_after_recorded(self, span_exporter):
         """After step, if page.url changed, url_after should be recorded."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvStepWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvStepWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1785,15 +2150,21 @@ class TestEnvStepWrapperEdgeCases:
         wrapper(_step, env, (make_action(),), {})
 
         spans = local_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert span_attr(tool, WEBARENA_PAGE_URL_AFTER) == "http://after.com"
         assert span_attr(tool, WEBARENA_PAGE_URL_BEFORE) == "http://before.com"
         assert span_attr(tool, "webarena.tool.success") is True
 
     def test_tool_span_short_result_tuple(self, span_exporter):
         """When step returns tuple with fewer than 5 elements."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvStepWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvStepWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1807,14 +2178,20 @@ class TestEnvStepWrapperEdgeCases:
         wrapper(_short_step, env, (make_action(),), {})
 
         spans = local_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         # success defaults to False since len(result) < 5
         assert span_attr(tool, "webarena.tool.success") is False
 
     def test_tool_span_no_page(self, span_exporter):
         """When env has no page attribute."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvStepWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvStepWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1828,13 +2205,19 @@ class TestEnvStepWrapperEdgeCases:
         wrapper(_step, env, (make_action(),), {})
 
         spans = local_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert span_attr(tool, WEBARENA_PAGE_URL_BEFORE) is None
 
     def test_tool_span_action_no_element_id(self, span_exporter):
         """When action dict has no element_id or empty element_id."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import EnvStepWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            EnvStepWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1849,7 +2232,9 @@ class TestEnvStepWrapperEdgeCases:
         wrapper(_step, env, (action,), {})
 
         spans = local_exporter.get_finished_spans()
-        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][0]
+        tool = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TOOL"][
+            0
+        ]
         assert span_attr(tool, WEBARENA_BROWSER_ELEMENT_ID) is None
 
 
@@ -1858,8 +2243,12 @@ class TestNextActionWrapperEdgeCases:
 
     def test_agent_no_lm_config(self, span_exporter):
         """When agent has no lm_config, should still emit span."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import NextActionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            NextActionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1867,7 +2256,9 @@ class TestNextActionWrapperEdgeCases:
 
         class CustomAgent:
             def __init__(self):
-                self.prompt_constructor = types.SimpleNamespace(instruction_path=None)
+                self.prompt_constructor = types.SimpleNamespace(
+                    instruction_path=None
+                )
                 self.lm_config = None
 
         agent = CustomAgent()
@@ -1878,13 +2269,19 @@ class TestNextActionWrapperEdgeCases:
         wrapper(_action, agent, ("obs",), {})
 
         spans = local_exporter.get_finished_spans()
-        agent_span = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"][0]
+        agent_span = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+        ][0]
         assert span_attr(agent_span, "gen_ai.operation.name") == "invoke_agent"
 
     def test_agent_no_prompt_constructor(self, span_exporter):
         """When agent has no prompt_constructor, should handle gracefully."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import NextActionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            NextActionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1899,16 +2296,24 @@ class TestNextActionWrapperEdgeCases:
         def _action(*args, **kwargs):
             return {"action_type": ActionTypes.HOVER}
 
-        wrapper(_action, agent, ("obs",), {"intent": "do thing", "meta_data": {}})
+        wrapper(
+            _action, agent, ("obs",), {"intent": "do thing", "meta_data": {}}
+        )
 
         spans = local_exporter.get_finished_spans()
-        agent_span = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"][0]
+        agent_span = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+        ][0]
         assert "BareAgent" in agent_span.name
 
     def test_agent_error_propagated_to_step(self, span_exporter):
         """When next_action raises, the STEP span should also record error status."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import NextActionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            NextActionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1928,7 +2333,9 @@ class TestNextActionWrapperEdgeCases:
         state.end_task_spans()
 
         spans = local_exporter.get_finished_spans()
-        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][0]
+        step = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "STEP"][
+            0
+        ]
         assert step.status.status_code == StatusCode.ERROR
         assert span_attr(step, GEN_AI_REACT_FINISH_REASON) == "RuntimeError"
 
@@ -1938,8 +2345,12 @@ class TestConstructAgentWrapperEdgeCases:
 
     def test_construct_agent_minimal_ns_args(self, span_exporter):
         """When ns_args has minimal attributes."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import ConstructAgentWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            ConstructAgentWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1953,20 +2364,28 @@ class TestConstructAgentWrapperEdgeCases:
         wrapper(_construct, None, (ns,), {})
 
         spans = local_exporter.get_finished_spans()
-        agent_span = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"][0]
+        agent_span = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+        ][0]
         assert span_attr(agent_span, "gen_ai.operation.name") == "create_agent"
         assert "unknown" in span_attr(agent_span, "gen_ai.agent.name")
 
     def test_construct_agent_via_kwargs(self, span_exporter):
         """When args is passed via kwargs instead of positional."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import ConstructAgentWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            ConstructAgentWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
         wrapper = ConstructAgentWrapper(tracer)
 
-        ns = make_ns_args(agent_type="custom", provider="aws", model="claude-3")
+        ns = make_ns_args(
+            agent_type="custom", provider="aws", model="claude-3"
+        )
 
         def _construct(args):
             return "agent"
@@ -1974,14 +2393,20 @@ class TestConstructAgentWrapperEdgeCases:
         wrapper(_construct, None, (), {"args": ns})
 
         spans = local_exporter.get_finished_spans()
-        agent_span = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"][0]
+        agent_span = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+        ][0]
         assert "custom" in span_attr(agent_span, "gen_ai.agent.name")
         assert span_attr(agent_span, "gen_ai.provider.name") == "aws"
         assert span_attr(agent_span, "gen_ai.request.model") == "claude-3"
 
     def test_construct_agent_error(self, span_exporter):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import ConstructAgentWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            ConstructAgentWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -1996,7 +2421,9 @@ class TestConstructAgentWrapperEdgeCases:
             wrapper(_fail, None, (ns,), {})
 
         spans = local_exporter.get_finished_spans()
-        agent_span = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"][0]
+        agent_span = [
+            s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "AGENT"
+        ][0]
         assert agent_span.status.status_code == StatusCode.ERROR
 
 
@@ -2005,8 +2432,12 @@ class TestHuggingFaceCompletionWrapperEdgeCases:
 
     def test_hf_none_temperature(self, span_exporter):
         """When temperature is None, attribute should not be set."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import HuggingFaceCompletionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            HuggingFaceCompletionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2025,8 +2456,12 @@ class TestHuggingFaceCompletionWrapperEdgeCases:
 
     def test_hf_empty_model_endpoint(self, span_exporter):
         """When model_endpoint is empty."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import HuggingFaceCompletionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            HuggingFaceCompletionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2044,10 +2479,16 @@ class TestHuggingFaceCompletionWrapperEdgeCases:
 
     def test_hf_non_string_result(self, span_exporter):
         """When generation returns non-string, output.value should not be set."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import HuggingFaceCompletionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            HuggingFaceCompletionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
-        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "true"
+        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+            "true"
+        )
         try:
             local_exporter = InMemorySpanExporter()
             tracer = _make_tracer(local_exporter)
@@ -2059,15 +2500,23 @@ class TestHuggingFaceCompletionWrapperEdgeCases:
             wrapper(_gen, None, ("prompt", "http://ep", 0.5, 0.9, 128), {})
 
             spans = local_exporter.get_finished_spans()
-            llm = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "LLM"][0]
+            llm = [
+                s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "LLM"
+            ][0]
             assert span_attr(llm, "output.value") is None
         finally:
-            os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+            os.environ.pop(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+            )
 
     def test_hf_via_kwargs(self, span_exporter):
         """When called with kwargs instead of positional args."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import HuggingFaceCompletionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            HuggingFaceCompletionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2077,7 +2526,9 @@ class TestHuggingFaceCompletionWrapperEdgeCases:
             return "generated"
 
         wrapper(
-            _gen, None, (),
+            _gen,
+            None,
+            (),
             {
                 "prompt": "hello",
                 "model_endpoint": "http://model",
@@ -2095,8 +2546,12 @@ class TestHuggingFaceCompletionWrapperEdgeCases:
         assert span_attr(llm, "gen_ai.request.max_tokens") == 100
 
     def test_hf_error_path(self, span_exporter):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import HuggingFaceCompletionWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            HuggingFaceCompletionWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2118,8 +2573,12 @@ class TestPromptConstructWrapperEdgeCases:
 
     def test_construct_string_result(self, span_exporter):
         """When construct returns a string instead of a list."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import PromptConstructWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            PromptConstructWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2133,13 +2592,21 @@ class TestPromptConstructWrapperEdgeCases:
         wrapper(_construct, instance, ([], "intent", {}), {})
 
         spans = local_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
-        assert span_attr(task, "webarena.prompt.length") == len("raw prompt text")
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
+        assert span_attr(task, "webarena.prompt.length") == len(
+            "raw prompt text"
+        )
 
     def test_construct_with_trajectory_url(self, span_exporter):
         """When trajectory has page URL info."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import PromptConstructWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            PromptConstructWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2149,23 +2616,34 @@ class TestPromptConstructWrapperEdgeCases:
         page = types.SimpleNamespace(url="http://example.com/page")
         trajectory = [{"observation": {}, "info": {"page": page}}]
 
-        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "true"
+        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+            "true"
+        )
         try:
+
             def _construct(*args, **kwargs):
                 return [{"role": "user", "content": "do it"}]
 
             wrapper(_construct, instance, (trajectory, "intent", {}), {})
 
             spans = local_exporter.get_finished_spans()
-            task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+            task = [
+                s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"
+            ][0]
             input_val = span_attr(task, "input.value")
             assert "example.com" in input_val
         finally:
-            os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+            os.environ.pop(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+            )
 
     def test_construct_error_path(self, span_exporter):
-        from opentelemetry.instrumentation.webarena.internal._wrappers import PromptConstructWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            PromptConstructWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2180,13 +2658,19 @@ class TestPromptConstructWrapperEdgeCases:
             wrapper(_fail, instance, ([], "intent", {}), {})
 
         spans = local_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         assert task.status.status_code == StatusCode.ERROR
 
     def test_construct_via_kwargs(self, span_exporter):
         """When construct is called with keyword arguments."""
-        from opentelemetry.instrumentation.webarena.internal._wrappers import PromptConstructWrapper
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.instrumentation.webarena.internal._wrappers import (
+            PromptConstructWrapper,
+        )
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
         local_exporter = InMemorySpanExporter()
         tracer = _make_tracer(local_exporter)
@@ -2198,12 +2682,22 @@ class TestPromptConstructWrapperEdgeCases:
             return [{"role": "user", "content": "hi"}]
 
         wrapper(
-            _construct, instance, (),
-            {"trajectory": [{"observation": {"text": "A" * 100}, "info": {}}], "intent": "test", "meta_data": {"action_history": ["click [1]"]}},
+            _construct,
+            instance,
+            (),
+            {
+                "trajectory": [
+                    {"observation": {"text": "A" * 100}, "info": {}}
+                ],
+                "intent": "test",
+                "meta_data": {"action_history": ["click [1]"]},
+            },
         )
 
         spans = local_exporter.get_finished_spans()
-        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][0]
+        task = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "TASK"][
+            0
+        ]
         assert span_attr(task, WEBARENA_MEMORY_TRAJECTORY_LENGTH) == 1
         assert span_attr(task, "webarena.memory.obs_text_length") == 100
 
@@ -2217,9 +2711,13 @@ class TestCloseTaskSpans:
             _close_task_spans,
             _open_task_spans,
         )
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
 
-        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "true"
+        os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+            "true"
+        )
         try:
             local_exporter = InMemorySpanExporter()
             tracer = _make_tracer(local_exporter)
@@ -2231,20 +2729,26 @@ class TestCloseTaskSpans:
             _close_task_spans()
 
             spans = local_exporter.get_finished_spans()
-            chain = [s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"][0]
+            chain = [
+                s for s in spans if span_attr(s, GEN_AI_SPAN_KIND) == "CHAIN"
+            ][0]
             output = span_attr(chain, "output.value")
             assert "1 steps" in output
             assert "1 tool calls" in output
             assert "1 parsing failures" in output
         finally:
-            os.environ.pop("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None)
+            os.environ.pop(
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+            )
 
 
 class TestAttrHelpersAdditional:
     """Additional tests for _attrs.py."""
 
     def test_truncate_content(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import truncate_content
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            truncate_content,
+        )
 
         short = "hello"
         assert truncate_content(short) == short
@@ -2255,22 +2759,26 @@ class TestAttrHelpersAdditional:
 
     def test_action_type_name_with_raw_int(self):
         """When action_type is a raw int matching an enum value."""
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_type_name
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_type_name,
+        )
 
         action = {"action_type": 0}  # ActionTypes.CLICK.value
         result = action_type_name(action)
         assert result == "CLICK"
 
     def test_action_arguments_empty_values_excluded(self):
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_arguments
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_arguments,
+        )
 
         action = {
             "action_type": ActionTypes.CLICK,
             "element_id": "",  # empty string
-            "text": None,       # None
-            "url": [],          # empty list
-            "direction": {},    # empty dict
-            "amount": "5",      # non-empty
+            "text": None,  # None
+            "url": [],  # empty list
+            "direction": {},  # empty dict
+            "amount": "5",  # non-empty
         }
         result = action_arguments(action)
         assert "element_id" not in result  # empty string excluded
@@ -2281,12 +2789,13 @@ class TestAttrHelpersAdditional:
 
     def test_safe_json_dumps_fallback_on_unjsonifiable(self):
         """When json.dumps raises, safe_json_dumps falls back to str()."""
-        from opentelemetry.instrumentation.webarena.internal._attrs import safe_json_dumps
-
         # Create an object that cannot be JSON-serialized even with default=str
         # by monkeypatching json.dumps to raise
         import json as _json
-        from unittest.mock import patch
+
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            safe_json_dumps,
+        )
 
         with patch.object(_json, "dumps", side_effect=OverflowError("boom")):
             result = safe_json_dumps({"key": "value"})
@@ -2297,7 +2806,9 @@ class TestAttrHelpersAdditional:
     def test_action_type_name_invalid_int_fallback(self):
         """When action_type is an int that doesn't match any enum value,
         ActionTypes(raw) raises and we fall back to str(raw)."""
-        from opentelemetry.instrumentation.webarena.internal._attrs import action_type_name
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            action_type_name,
+        )
 
         action = {"action_type": 99999}  # Not a valid ActionTypes value
         result = action_type_name(action)
@@ -2305,8 +2816,9 @@ class TestAttrHelpersAdditional:
 
     def test_messages_to_input_value_list_exception_fallback(self):
         """When safe_json_dumps raises on a list, fall back to str()."""
-        from opentelemetry.instrumentation.webarena.internal._attrs import messages_to_input_value
-        from unittest.mock import patch
+        from opentelemetry.instrumentation.webarena.internal._attrs import (
+            messages_to_input_value,
+        )
 
         msgs = [{"role": "user", "content": "hello"}]
         with patch(

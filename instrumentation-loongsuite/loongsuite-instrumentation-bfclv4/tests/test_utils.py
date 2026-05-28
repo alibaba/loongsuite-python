@@ -19,8 +19,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 class TestGenAIHookHelper:
     def test_on_completion_non_recording_span(self):
@@ -67,12 +65,15 @@ class TestGenAIHookHelper:
         ]
         system = [Text(content="Be helpful")]
 
-        with patch(
-            "opentelemetry.instrumentation.bfclv4.utils.is_experimental_mode",
-            return_value=True,
-        ), patch(
-            "opentelemetry.instrumentation.bfclv4.utils.get_content_capturing_mode",
-        ) as mock_mode:
+        with (
+            patch(
+                "opentelemetry.instrumentation.bfclv4.utils.is_experimental_mode",
+                return_value=True,
+            ),
+            patch(
+                "opentelemetry.instrumentation.bfclv4.utils.get_content_capturing_mode",
+            ) as mock_mode,
+        ):
             from opentelemetry.util.genai.types import ContentCapturingMode
 
             mock_mode.return_value = ContentCapturingMode.SPAN_ONLY
@@ -108,12 +109,15 @@ class TestGenAIHookHelper:
 
         inputs = [InputMessage(role="user", parts=[Text(content="hello")])]
 
-        with patch(
-            "opentelemetry.instrumentation.bfclv4.utils.is_experimental_mode",
-            return_value=True,
-        ), patch(
-            "opentelemetry.instrumentation.bfclv4.utils.get_content_capturing_mode",
-        ) as mock_mode:
+        with (
+            patch(
+                "opentelemetry.instrumentation.bfclv4.utils.is_experimental_mode",
+                return_value=True,
+            ),
+            patch(
+                "opentelemetry.instrumentation.bfclv4.utils.get_content_capturing_mode",
+            ) as mock_mode,
+        ):
             from opentelemetry.util.genai.types import ContentCapturingMode
 
             mock_mode.return_value = ContentCapturingMode.SPAN_AND_EVENT
@@ -131,12 +135,15 @@ class TestGenAIHookHelper:
 
         inputs = [InputMessage(role="user", parts=[Text(content="hello")])]
 
-        with patch(
-            "opentelemetry.instrumentation.bfclv4.utils.is_experimental_mode",
-            return_value=True,
-        ), patch(
-            "opentelemetry.instrumentation.bfclv4.utils.get_content_capturing_mode",
-        ) as mock_mode:
+        with (
+            patch(
+                "opentelemetry.instrumentation.bfclv4.utils.is_experimental_mode",
+                return_value=True,
+            ),
+            patch(
+                "opentelemetry.instrumentation.bfclv4.utils.get_content_capturing_mode",
+            ) as mock_mode,
+        ):
             from opentelemetry.util.genai.types import ContentCapturingMode
 
             mock_mode.return_value = ContentCapturingMode.EVENT_ONLY

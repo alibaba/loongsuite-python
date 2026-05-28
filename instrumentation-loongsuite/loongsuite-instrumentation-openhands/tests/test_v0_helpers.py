@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for V0 wrapper helper functions (non-wrapper code in v0_wrappers.py).
 
 Covers: _set_io, _extract_model_from_config, _state_to_input_messages,
@@ -17,10 +31,13 @@ import json
 from unittest import mock
 
 import pytest
+
+from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry import trace as trace_api
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 
 @pytest.fixture
@@ -44,7 +61,9 @@ def _reset():
 
 
 def test_set_io_all_fields(tracer):
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import _set_io
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _set_io,
+    )
 
     tr, exporter = tracer
     with tr.start_as_current_span("test") as span:
@@ -66,7 +85,9 @@ def test_set_io_all_fields(tracer):
 
 
 def test_set_io_empty_fields(tracer):
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import _set_io
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _set_io,
+    )
 
     tr, exporter = tracer
     with tr.start_as_current_span("test") as span:
@@ -1316,15 +1337,15 @@ def test_close_open_step_no_span():
 
 
 def test_close_open_step_with_span(tracer):
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _close_open_step,
-        _STEP_SPAN_ATTR,
-        _AGENT_CTX_ATTR,
-    )
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         clear_all,
         get_context,
         store_context,
+    )
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _AGENT_CTX_ATTR,
+        _STEP_SPAN_ATTR,
+        _close_open_step,
     )
 
     clear_all()

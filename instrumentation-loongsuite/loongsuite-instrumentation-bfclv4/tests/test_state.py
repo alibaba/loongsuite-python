@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestStateFunctions:
     def test_reset_state_normal(self):

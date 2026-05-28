@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Test configuration for WideSearch instrumentation tests.
 
 Injects lightweight stub modules for `src.agent.*` into sys.modules
@@ -10,9 +24,9 @@ import os
 import sys
 import types
 from dataclasses import dataclass, field
-from pathlib import Path
 from enum import Enum
-from typing import Any, Callable, List, Literal
+from pathlib import Path
+from typing import Any, Literal
 
 # Ensure workspace opentelemetry-util-genai is imported (not stale site-packages).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -28,7 +42,10 @@ if _UTIL_GENAI_SRC.is_dir() and str(_UTIL_GENAI_SRC) not in sys.path:
             del sys.modules[_m]
 
 _WIDESEARCH_PLUGIN_SRC = Path(__file__).resolve().parents[1] / "src"
-if _WIDESEARCH_PLUGIN_SRC.is_dir() and str(_WIDESEARCH_PLUGIN_SRC) not in sys.path:
+if (
+    _WIDESEARCH_PLUGIN_SRC.is_dir()
+    and str(_WIDESEARCH_PLUGIN_SRC) not in sys.path
+):
     sys.path.insert(0, str(_WIDESEARCH_PLUGIN_SRC))
 
 import pytest
@@ -185,7 +202,7 @@ class Runner:
             memory = MemoryAgent(
                 system_instructions=starting_agent.instructions
             )
-        last_turn = memory.insert_user_input(user_input)
+        memory.insert_user_input(user_input)
         step_result = await cls._step(agent=starting_agent, memory=memory)
         if not isinstance(step_result, ActionStepError):
             yield step_result
@@ -197,9 +214,7 @@ class Runner:
         return ActionStep(step_status=StepStatus.FINISHED, content="Done")
 
     @classmethod
-    async def _invoke_tool_call(
-        cls, agent, model_response
-    ) -> list:
+    async def _invoke_tool_call(cls, agent, model_response) -> list:
         return []
 
 
@@ -258,11 +273,13 @@ def create_sub_agents_wrap(
         results = []
         for sa in sub_agents:
             results.append(
-                {"index": sa.get("index"), "prompt": sa.get("prompt", ""), "response": "sub result"}
+                {
+                    "index": sa.get("index"),
+                    "prompt": sa.get("prompt", ""),
+                    "response": "sub result",
+                }
             )
-        return InternalResponse(
-            data=json.dumps(results, ensure_ascii=False)
-        )
+        return InternalResponse(data=json.dumps(results, ensure_ascii=False))
 
     return create_sub_agents
 
@@ -273,7 +290,9 @@ def _inject_stub_modules():
     src_mod = types.ModuleType("src")
     src_agent_mod = types.ModuleType("src.agent")
     src_agent_run_mod = types.ModuleType("src.agent.run")
-    src_agent_multi_agent_tools_mod = types.ModuleType("src.agent.multi_agent_tools")
+    src_agent_multi_agent_tools_mod = types.ModuleType(
+        "src.agent.multi_agent_tools"
+    )
     src_agent_memory_mod = types.ModuleType("src.agent.memory")
     src_agent_schema_mod = types.ModuleType("src.agent.schema")
     src_agent_tools_mod = types.ModuleType("src.agent.tools")
@@ -288,7 +307,9 @@ def _inject_stub_modules():
     src_agent_run_mod.extract_messages_from_memory = None
 
     # Populate src.agent.multi_agent_tools
-    src_agent_multi_agent_tools_mod.create_sub_agents_wrap = create_sub_agents_wrap
+    src_agent_multi_agent_tools_mod.create_sub_agents_wrap = (
+        create_sub_agents_wrap
+    )
 
     # Populate src.agent.memory
     src_agent_memory_mod.ActionStep = ActionStep
@@ -337,7 +358,9 @@ def _inject_stub_modules():
     sys.modules["src"] = src_mod
     sys.modules["src.agent"] = src_agent_mod
     sys.modules["src.agent.run"] = src_agent_run_mod
-    sys.modules["src.agent.multi_agent_tools"] = src_agent_multi_agent_tools_mod
+    sys.modules["src.agent.multi_agent_tools"] = (
+        src_agent_multi_agent_tools_mod
+    )
     sys.modules["src.agent.memory"] = src_agent_memory_mod
     sys.modules["src.agent.schema"] = src_agent_schema_mod
     sys.modules["src.agent.tools"] = src_agent_tools_mod
@@ -358,7 +381,9 @@ _inject_stub_modules()
 
 def pytest_configure(config: pytest.Config):
     os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai_latest_experimental"
-    os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "span_only"
+    os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+        "span_only"
+    )
 
 
 for _m in list(sys.modules):
@@ -366,13 +391,13 @@ for _m in list(sys.modules):
         del sys.modules[_m]
 
 from opentelemetry.instrumentation.widesearch import WideSearchInstrumentor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 
 @pytest.fixture(scope="function", name="span_exporter")

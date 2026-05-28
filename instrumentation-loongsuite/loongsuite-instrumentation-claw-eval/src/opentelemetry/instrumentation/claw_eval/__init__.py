@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 OpenTelemetry claw-eval Instrumentation
 =======================================
@@ -32,14 +46,15 @@ import importlib
 import logging
 from typing import Any, Collection
 
+from wrapt import wrap_function_wrapper
+
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.claw_eval.config import (
     OTEL_INSTRUMENTATION_CLAW_EVAL_ENABLED,
 )
 from opentelemetry.instrumentation.claw_eval.package import _instruments
 from opentelemetry.instrumentation.claw_eval.version import __version__
-from wrapt import wrap_function_wrapper
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +124,6 @@ class ClawEvalInstrumentor(BaseInstrumentor):
             tracer_provider=tracer_provider,
         )
 
-
         from opentelemetry.instrumentation.claw_eval.internal.wrappers import (
             DoAutoCompactWrapper,
             EntryWrapper,
@@ -162,9 +176,7 @@ class ClawEvalInstrumentor(BaseInstrumentor):
                 ProviderChatWrapper(tracer),
             )
         except Exception as exc:
-            logger.warning(
-                "Could not wrap OpenAICompatProvider.chat: %s", exc
-            )
+            logger.warning("Could not wrap OpenAICompatProvider.chat: %s", exc)
 
         # --- Context compaction (CHAIN) ---
         try:
@@ -206,9 +218,7 @@ class ClawEvalInstrumentor(BaseInstrumentor):
                     JudgeWrapper(tracer, method),
                 )
             except Exception as exc:
-                logger.warning(
-                    "Could not wrap LLMJudge.%s: %s", method, exc
-                )
+                logger.warning("Could not wrap LLMJudge.%s: %s", method, exc)
 
         # --- Per-task grader evaluation helpers ---
         # Per-task ``tasks/T*/grader.py`` defines helpers like

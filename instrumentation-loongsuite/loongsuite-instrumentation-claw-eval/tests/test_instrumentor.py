@@ -17,10 +17,6 @@
 from __future__ import annotations
 
 import importlib
-import sys
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Import smoke tests
@@ -31,7 +27,9 @@ class TestImport:
     """Verify the instrumentation package is importable."""
 
     def test_import_instrumentor(self):
-        mod = importlib.import_module("opentelemetry.instrumentation.claw_eval")
+        mod = importlib.import_module(
+            "opentelemetry.instrumentation.claw_eval"
+        )
         assert hasattr(mod, "ClawEvalInstrumentor")
 
     def test_import_config(self):
@@ -64,15 +62,21 @@ class TestInstrumentationDependencies:
     """Verify the declared instrumentation dependencies."""
 
     def test_instrumentation_dependencies_returns_expected(self):
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         instr = ClawEvalInstrumentor()
         deps = instr.instrumentation_dependencies()
         assert tuple(deps) == ("claw-eval >= 0.1.0",)
 
     def test_dependencies_match_package_instruments(self):
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
-        from opentelemetry.instrumentation.claw_eval.package import _instruments
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
+        from opentelemetry.instrumentation.claw_eval.package import (
+            _instruments,
+        )
 
         instr = ClawEvalInstrumentor()
         assert tuple(instr.instrumentation_dependencies()) == _instruments
@@ -87,7 +91,9 @@ class TestInstrumentLifecycle:
     """Verify instrument() and uninstrument() can be called without error."""
 
     def test_instrument_uninstrument(self, tracer_provider):
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         instr = ClawEvalInstrumentor()
         # Should not raise even though claw_eval modules are mocks.
@@ -95,7 +101,9 @@ class TestInstrumentLifecycle:
         instr.uninstrument()
 
     def test_double_uninstrument_does_not_raise(self, tracer_provider):
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         instr = ClawEvalInstrumentor()
         instr.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
@@ -106,7 +114,10 @@ class TestInstrumentLifecycle:
     def test_instrument_wraps_cli_functions(self, tracer_provider):
         """After instrument(), CLI functions should have __wrapped__."""
         import claw_eval.cli as cli
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         original_cmd_run = cli.cmd_run
         original_cmd_batch = cli.cmd_batch
@@ -129,7 +140,10 @@ class TestInstrumentLifecycle:
 
     def test_instrument_wraps_run_task(self, tracer_provider):
         import claw_eval.runner.loop as loop
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         original = loop.run_task
         instr = ClawEvalInstrumentor()
@@ -144,7 +158,10 @@ class TestInstrumentLifecycle:
 
     def test_instrument_wraps_provider_chat(self, tracer_provider):
         import claw_eval.runner.providers.openai_compat as oc
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         instr = ClawEvalInstrumentor()
         instr.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
@@ -156,7 +173,10 @@ class TestInstrumentLifecycle:
 
     def test_instrument_wraps_compact(self, tracer_provider):
         import claw_eval.runner.compact as compact
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         original = compact.do_auto_compact
         instr = ClawEvalInstrumentor()
@@ -172,7 +192,10 @@ class TestInstrumentLifecycle:
     def test_instrument_wraps_dispatchers(self, tracer_provider):
         import claw_eval.runner.dispatcher as disp
         import claw_eval.runner.sandbox_dispatcher as sdisp
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         instr = ClawEvalInstrumentor()
         instr.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
@@ -185,7 +208,10 @@ class TestInstrumentLifecycle:
 
     def test_instrument_wraps_judge(self, tracer_provider):
         import claw_eval.graders.llm_judge as lj
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         instr = ClawEvalInstrumentor()
         instr.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
@@ -200,7 +226,10 @@ class TestInstrumentLifecycle:
     def test_instrument_wraps_grader_loaders(self, tracer_provider):
         import claw_eval.graders.base as base
         import claw_eval.graders.registry as reg
-        from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
+
+        from opentelemetry.instrumentation.claw_eval import (
+            ClawEvalInstrumentor,
+        )
 
         instr = ClawEvalInstrumentor()
         instr.instrument(tracer_provider=tracer_provider, skip_dep_check=True)

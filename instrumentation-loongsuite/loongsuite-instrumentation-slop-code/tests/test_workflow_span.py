@@ -36,7 +36,7 @@ class TestWorkflowSpan:
         config.pass_policy = MagicMock()
         config.pass_policy.value = "any"
 
-        result = mod.run_agent_on_problem(
+        mod.run_agent_on_problem(
             MagicMock(),  # problem_config
             "file_backup",  # problem_name
             config,  # config
@@ -46,7 +46,8 @@ class TestWorkflowSpan:
 
         spans = span_exporter.get_finished_spans()
         workflow_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "workflow"
         ]
         assert len(workflow_spans) == 1
@@ -56,7 +57,10 @@ class TestWorkflowSpan:
         assert span.attributes["gen_ai.system"] == "slop-code"
         assert span.attributes["gen_ai.span.kind"] == "CHAIN"
         assert span.attributes["slop_code.problem.name"] == "file_backup"
-        assert span.attributes["gen_ai.request.model"] == "anthropic/claude-3.5-sonnet"
+        assert (
+            span.attributes["gen_ai.request.model"]
+            == "anthropic/claude-3.5-sonnet"
+        )
         assert span.attributes["slop_code.agent.type"] == "claude_code"
         assert span.status.status_code == StatusCode.OK
 
@@ -64,7 +68,9 @@ class TestWorkflowSpan:
         """Exception in run_agent_on_problem should produce error workflow span."""
         import slop_code.entrypoints.problem_runner.worker as mod
 
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         original = mod.run_agent_on_problem
 
@@ -74,17 +80,24 @@ class TestWorkflowSpan:
         mod.run_agent_on_problem = failing_worker
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             with pytest.raises(ValueError, match="Problem not found"):
                 mod.run_agent_on_problem(
-                    MagicMock(), "missing_problem", MagicMock(), MagicMock(), "/tmp"
+                    MagicMock(),
+                    "missing_problem",
+                    MagicMock(),
+                    MagicMock(),
+                    "/tmp",
                 )
 
             spans = span_exporter.get_finished_spans()
             workflow_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "workflow"
             ]
             assert len(workflow_spans) == 1
@@ -93,7 +106,9 @@ class TestWorkflowSpan:
             instrumentor.uninstrument()
             mod.run_agent_on_problem = original
 
-    def test_workflow_span_with_none_config_fields(self, span_exporter, instrument):
+    def test_workflow_span_with_none_config_fields(
+        self, span_exporter, instrument
+    ):
         """Workflow span should handle None config fields gracefully."""
         import slop_code.entrypoints.problem_runner.worker as mod
 
@@ -108,7 +123,8 @@ class TestWorkflowSpan:
 
         spans = span_exporter.get_finished_spans()
         workflow_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "workflow"
         ]
         assert len(workflow_spans) == 1
@@ -116,7 +132,9 @@ class TestWorkflowSpan:
         assert span.attributes["slop_code.problem.name"] == "test_problem"
         assert "gen_ai.request.model" not in span.attributes
 
-    def test_workflow_span_pass_policy_with_value(self, span_exporter, instrument):
+    def test_workflow_span_pass_policy_with_value(
+        self, span_exporter, instrument
+    ):
         """Workflow span should extract pass_policy.value from enum-like objects."""
         import slop_code.entrypoints.problem_runner.worker as mod
 
@@ -136,11 +154,14 @@ class TestWorkflowSpan:
 
         spans = span_exporter.get_finished_spans()
         workflow_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "workflow"
         ]
         assert len(workflow_spans) == 1
-        assert workflow_spans[0].attributes["slop_code.pass_policy"] == "majority"
+        assert (
+            workflow_spans[0].attributes["slop_code.pass_policy"] == "majority"
+        )
 
     def test_workflow_span_none_config(self, span_exporter, instrument):
         """Workflow span should handle None config entirely."""
@@ -152,8 +173,12 @@ class TestWorkflowSpan:
 
         spans = span_exporter.get_finished_spans()
         workflow_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "workflow"
         ]
         assert len(workflow_spans) == 1
-        assert workflow_spans[0].attributes["slop_code.problem.name"] == "no_config_problem"
+        assert (
+            workflow_spans[0].attributes["slop_code.problem.name"]
+            == "no_config_problem"
+        )

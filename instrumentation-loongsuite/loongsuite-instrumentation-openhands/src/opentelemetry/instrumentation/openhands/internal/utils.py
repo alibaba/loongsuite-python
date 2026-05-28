@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Small attribute / argument extraction helpers shared by the wrappers."""
 
 from __future__ import annotations
@@ -115,8 +129,7 @@ def _to_jsonable(obj: Any, depth: int = 0, max_depth: int = 8) -> Any:
             d = {
                 k: v
                 for k, v in vars(obj).items()
-                if not k.startswith("_")
-                and not callable(v)
+                if not k.startswith("_") and not callable(v)
             }
             if d:
                 return _to_jsonable(d, depth + 1, max_depth)
@@ -161,10 +174,17 @@ def messages_to_genai_input(messages: Any) -> str:
             content = m.get("content")
         if isinstance(content, list):
             content = "".join(
-                safe_str(safe_get_attr(c, "text") or safe_get_attr(c, "content") or c)
+                safe_str(
+                    safe_get_attr(c, "text")
+                    or safe_get_attr(c, "content")
+                    or c
+                )
                 for c in content
             )
-        item: dict[str, Any] = {"role": safe_str(role) or "user", "content": safe_str(content)}
+        item: dict[str, Any] = {
+            "role": safe_str(role) or "user",
+            "content": safe_str(content),
+        }
         tool_calls = safe_get_attr(m, "tool_calls")
         if tool_calls:
             item["tool_calls"] = _to_jsonable(tool_calls)
@@ -182,7 +202,16 @@ def action_to_genai_output(action: Any) -> str:
     if thought:
         item["content"] = thought
     args: dict[str, Any] = {}
-    for key in ("command", "code", "path", "url", "content", "task_list", "name", "arguments"):
+    for key in (
+        "command",
+        "code",
+        "path",
+        "url",
+        "content",
+        "task_list",
+        "name",
+        "arguments",
+    ):
         v = safe_get_attr(action, key)
         if v not in (None, "", []):
             args[key] = _to_jsonable(v)
@@ -190,7 +219,10 @@ def action_to_genai_output(action: Any) -> str:
         item["tool_calls"] = [
             {
                 "type": "function",
-                "function": {"name": action_type or "agent.action", "arguments": args},
+                "function": {
+                    "name": action_type or "agent.action",
+                    "arguments": args,
+                },
             }
         ]
     return to_json_str([item])

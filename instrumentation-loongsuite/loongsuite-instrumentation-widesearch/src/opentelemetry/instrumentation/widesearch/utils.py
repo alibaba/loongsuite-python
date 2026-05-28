@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Utility functions for WideSearch instrumentation."""
 
 from __future__ import annotations
@@ -10,15 +24,16 @@ from opentelemetry.util.genai.extended_types import (
     EntryInvocation,
     ExecuteToolInvocation,
     InvokeAgentInvocation,
-    ReactStepInvocation,
 )
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
     OutputMessage,
     Text,
-    ToolCall as GenAIToolCall,
     ToolCallResponse,
+)
+from opentelemetry.util.genai.types import (
+    ToolCall as GenAIToolCall,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,7 +189,9 @@ def _step_to_output_messages(step: Any) -> List[OutputMessage]:
             )
         )
 
-    finish_reason = "tool_calls" if getattr(step, "tool_calls", None) else "stop"
+    finish_reason = (
+        "tool_calls" if getattr(step, "tool_calls", None) else "stop"
+    )
     return [
         OutputMessage(
             role="assistant",

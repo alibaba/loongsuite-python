@@ -118,9 +118,7 @@ def test_test_entry_to_messages_extracts_genai_content():
     inputs, system_instructions = _test_entry_to_messages(test_entry)
 
     assert [message.role for message in inputs] == ["user", "assistant"]
-    assert (
-        inputs[0].parts[0].content == "What is the weather in Paris?"
-    )
+    assert inputs[0].parts[0].content == "What is the weather in Paris?"
     assert inputs[1].parts[0].content == "I will check."
     assert [part.content for part in system_instructions] == [
         "Use the provided tools.",
@@ -188,9 +186,7 @@ def test_result_to_output_messages_extracts_last_inference_log_output():
     outputs = _result_to_output_messages(
         {
             "inference_log": {
-                "step_0": {
-                    "inference_output": {"content": "intermediate"}
-                },
+                "step_0": {"inference_output": {"content": "intermediate"}},
                 "step_1": {"inference_output": {"content": "final"}},
             }
         }

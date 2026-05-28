@@ -6,10 +6,16 @@
 import logging
 
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.slop_code.utils import SYSTEM_NAME, safe_get, set_optional_attr
+from opentelemetry.instrumentation.slop_code.utils import (
+    SYSTEM_NAME,
+    safe_get,
+    set_optional_attr,
+)
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from opentelemetry.util.genai.extended_semconv import gen_ai_extended_attributes
+from opentelemetry.util.genai.extended_semconv import (
+    gen_ai_extended_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +28,11 @@ class _TaskRunCheckpointWrapper:
 
     def __call__(self, wrapped, instance, args, kwargs):
         checkpoint = args[0] if args else kwargs.get("checkpoint")
-        is_first_checkpoint = args[2] if len(args) > 2 else kwargs.get("is_first_checkpoint", False)
+        is_first_checkpoint = (
+            args[2]
+            if len(args) > 2
+            else kwargs.get("is_first_checkpoint", False)
+        )
         checkpoint_name = safe_get(checkpoint, "name", "unknown")
         checkpoint_order = safe_get(checkpoint, "order")
         problem = safe_get(safe_get(instance, "run_spec"), "problem")
@@ -61,11 +71,25 @@ class _TaskRunCheckpointWrapper:
                 try:
                     result = wrapped(*args, **kwargs)
                     if result is not None:
-                        set_optional_attr(task_span, "slop_code.had_error", safe_get(result, "had_error"))
-                        set_optional_attr(task_span, "slop_code.passed_policy", safe_get(result, "passed_policy"))
-                        set_optional_attr(task_span, "output.value", str(result))
-                        set_optional_attr(task_span, "output.mime_type", "text/plain")
-                        set_optional_attr(entry_span, "output.value", str(result))
+                        set_optional_attr(
+                            task_span,
+                            "slop_code.had_error",
+                            safe_get(result, "had_error"),
+                        )
+                        set_optional_attr(
+                            task_span,
+                            "slop_code.passed_policy",
+                            safe_get(result, "passed_policy"),
+                        )
+                        set_optional_attr(
+                            task_span, "output.value", str(result)
+                        )
+                        set_optional_attr(
+                            task_span, "output.mime_type", "text/plain"
+                        )
+                        set_optional_attr(
+                            entry_span, "output.value", str(result)
+                        )
                     task_span.set_status(Status(StatusCode.OK))
                     entry_span.set_status(Status(StatusCode.OK))
                     return result

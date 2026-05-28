@@ -25,12 +25,11 @@ from __future__ import annotations
 import os
 import sys
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from opentelemetry.instrumentation.bfclv4.utils import GenAIHookHelper
-
 
 # ---------------------------------------------------------------------------
 # Helper factories
@@ -209,7 +208,9 @@ class TestGenerateResultsWrapper:
         ]
         assert len(entry_spans) >= 1
 
-    def test_entry_wrapper_with_session_id_env(self, handler_with_tracer, monkeypatch):
+    def test_entry_wrapper_with_session_id_env(
+        self, handler_with_tracer, monkeypatch
+    ):
         handler, exporter = handler_with_tracer
         from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
             GenerateResultsWrapper,
@@ -250,16 +251,17 @@ class TestBaseHandlerInferenceWrapper:
 
         test_entry = _make_test_entry()
 
-        def _wrapped(te, include_input_log=True, exclude_state_log=True):
-            return ("model_output", {"input_token_count": 10, "output_token_count": 20})
+        def _wrapped(entry, include_input_log=True, exclude_state_log=True):
+            return (
+                "model_output",
+                {"input_token_count": 10, "output_token_count": 20},
+            )
 
         result = wrapper(_wrapped, instance, (test_entry,), {})
         assert result[0] == "model_output"
 
         spans = exporter.get_finished_spans()
-        agent_spans = [
-            s for s in spans if "invoke_agent" in s.name
-        ]
+        agent_spans = [s for s in spans if "invoke_agent" in s.name]
         assert len(agent_spans) >= 1
         span = agent_spans[0]
         assert span.attributes.get("gen_ai.framework") == "bfclv4"
@@ -274,7 +276,7 @@ class TestBaseHandlerInferenceWrapper:
         helper = GenAIHookHelper()
         wrapper = BaseHandlerInferenceWrapper(helper)
 
-        def _wrapped(te):
+        def _wrapped(entry):
             return "pass"
 
         result = wrapper(_wrapped, None, ("not a dict",), {})
@@ -294,7 +296,7 @@ class TestBaseHandlerInferenceWrapper:
 
         test_entry = _make_test_entry()
 
-        def _wrapped(te, **kw):
+        def _wrapped(entry, **kw):
             return ("Error during inference: timeout", {})
 
         result = wrapper(_wrapped, instance, (test_entry,), {})
@@ -313,7 +315,7 @@ class TestBaseHandlerInferenceWrapper:
         instance.model_style = None
         test_entry = _make_test_entry()
 
-        def _wrapped(te, **kw):
+        def _wrapped(entry, **kw):
             raise RuntimeError("inference failed")
 
         with pytest.raises(RuntimeError, match="inference failed"):
@@ -335,7 +337,7 @@ class TestBaseHandlerInferenceWrapper:
             involved_classes=["MathAPI", "StringAPI"]
         )
 
-        def _wrapped(te, **kw):
+        def _wrapped(entry, **kw):
             return ("output", {})
 
         result = wrapper(_wrapped, instance, (test_entry,), {})
@@ -354,7 +356,7 @@ class TestBaseHandlerInferenceWrapper:
         instance.model_style = None
         test_entry = _make_test_entry()
 
-        def _wrapped(te, **kw):
+        def _wrapped(entry, **kw):
             return (
                 "output",
                 {
@@ -379,7 +381,7 @@ class TestBaseHandlerInferenceWrapper:
         instance.model_style = None
         test_entry = _make_test_entry()
 
-        def _wrapped(te, **kw):
+        def _wrapped(entry, **kw):
             return ([{"name": "get_weather", "arguments": {}}], {})
 
         result = wrapper(_wrapped, instance, (test_entry,), {})
@@ -611,7 +613,7 @@ class TestExecuteFuncCallWrapper:
                     {},
                 )
 
-            result = wrapper(
+            wrapper(
                 _wrapped,
                 None,
                 (func_calls, None, None, "model", "test_001"),
@@ -802,8 +804,7 @@ class TestWrapperHelpers:
 
         assert _test_category_from_id("simple_001") == "simple"
         assert (
-            _test_category_from_id("multi_turn_base_001")
-            == "multi_turn_base"
+            _test_category_from_id("multi_turn_base_001") == "multi_turn_base"
         )
         assert _test_category_from_id(None) is None
         assert _test_category_from_id("nounderscore") is None
@@ -913,9 +914,7 @@ class TestWrapperHelpers:
         assert result is not None
 
         # Truly empty dict with only role -> extras is empty -> returns None
-        result = _normalise_message_dict(
-            {"role": "user"}, default_role="user"
-        )
+        result = _normalise_message_dict({"role": "user"}, default_role="user")
         assert result is None
 
     def test_flatten_messages(self):
@@ -1008,15 +1007,19 @@ class TestWrapperHelpers:
         assert _test_entry_to_tool_definitions("not a dict") == []
 
     def test_tool_value_to_definitions_json_string(self):
+        import json
+
         from opentelemetry.instrumentation.bfclv4.internal.wrappers import (
             _tool_value_to_definitions,
         )
 
-        import json
-
         defs = _tool_value_to_definitions(
             json.dumps(
-                {"name": "test_func", "description": "A test", "parameters": {}}
+                {
+                    "name": "test_func",
+                    "description": "A test",
+                    "parameters": {},
+                }
             )
         )
         assert len(defs) == 1
@@ -1275,7 +1278,9 @@ class TestWrapperHelpers:
             _synth_tool_call_id,
         )
 
-        assert _synth_tool_call_id("test_001", "model", 0) == "test_001-model-0"
+        assert (
+            _synth_tool_call_id("test_001", "model", 0) == "test_001-model-0"
+        )
         assert _synth_tool_call_id(None, None, 1) == "no_id-no_model-1"
 
     def test_safe_str(self):
@@ -1289,6 +1294,7 @@ class TestWrapperHelpers:
         class _Bad:
             def __repr__(self):
                 raise RuntimeError("nope")
+
             def __str__(self):
                 raise RuntimeError("nope")
 
@@ -1354,7 +1360,12 @@ class TestWrapperHelpers:
 
         # Non-dict step_data should be skipped (continue)
         result = _extract_result_content(
-            {"inference_log": {"step_0": "not_a_dict", "step_1": {"inference_output": "final"}}}
+            {
+                "inference_log": {
+                    "step_0": "not_a_dict",
+                    "step_1": {"inference_output": "final"},
+                }
+            }
         )
         assert result == "final"
 
@@ -1438,7 +1449,11 @@ class TestWrapperHelpers:
         entry = {
             "id": "t1",
             "missed_function": [
-                {"name": "missed_fn", "description": "Missed", "parameters": {}},
+                {
+                    "name": "missed_fn",
+                    "description": "Missed",
+                    "parameters": {},
+                },
             ],
         }
         defs = _test_entry_to_tool_definitions(entry)
@@ -1589,9 +1604,7 @@ class TestWrapperHelpers:
         mock_module.MathAPI = MathAPI
         sys.modules["mock_exec_backend"] = mock_module
 
-        exec_cfg = sys.modules[
-            "bfcl_eval.constants.executable_backend_config"
-        ]
+        exec_cfg = sys.modules["bfcl_eval.constants.executable_backend_config"]
         exec_cfg.CLASS_FILE_PATH_MAPPING = {"MathAPI": "mock_exec_backend"}
 
         try:
@@ -1627,12 +1640,8 @@ class TestWrapperHelpers:
         mock_module.ToolClass = ToolClass
         sys.modules["mock_tool_backend"] = mock_module
 
-        exec_cfg = sys.modules[
-            "bfcl_eval.constants.executable_backend_config"
-        ]
-        exec_cfg.CLASS_FILE_PATH_MAPPING = {
-            "ToolClass": "mock_tool_backend"
-        }
+        exec_cfg = sys.modules["bfcl_eval.constants.executable_backend_config"]
+        exec_cfg.CLASS_FILE_PATH_MAPPING = {"ToolClass": "mock_tool_backend"}
 
         # Make sure the context var map doesn't have this tool
         token = _TOOL_DESCRIPTION_MAP.set({})
@@ -1664,9 +1673,7 @@ class TestWrapperHelpers:
             _lookup_tool_description,
         )
 
-        token = _TOOL_DESCRIPTION_MAP.set(
-            {"my_tool": "A tool description"}
-        )
+        token = _TOOL_DESCRIPTION_MAP.set({"my_tool": "A tool description"})
         try:
             result = _lookup_tool_description("my_tool")
             assert result == "A tool description"

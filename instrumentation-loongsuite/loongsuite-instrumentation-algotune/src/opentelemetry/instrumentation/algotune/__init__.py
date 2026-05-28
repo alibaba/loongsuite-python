@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 OpenTelemetry AlgoTune Instrumentation
 ======================================
@@ -74,16 +88,16 @@ import importlib
 import logging
 from typing import Any, Collection
 
-from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from wrapt import wrap_function_wrapper
 
+from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.algotune.config import (
     ALGOTUNE_OTEL_INSTRUMENT_TOGETHER,
     OTEL_INSTRUMENTATION_ALGOTUNE_ENABLED,
 )
 from opentelemetry.instrumentation.algotune.package import _instruments
 from opentelemetry.instrumentation.algotune.version import __version__
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +109,16 @@ __all__ = ["AlgoTuneInstrumentor"]
 _PATCH_SITES: list[tuple[str, str, str]] = [
     # (logical_name, module_path, qualified_attribute)
     ("main", "AlgoTuner.main", "main"),
-    ("run_task", "AlgoTuner.interfaces.llm_interface", "LLMInterface.run_task"),
-    ("get_response", "AlgoTuner.interfaces.llm_interface", "LLMInterface.get_response"),
+    (
+        "run_task",
+        "AlgoTuner.interfaces.llm_interface",
+        "LLMInterface.run_task",
+    ),
+    (
+        "get_response",
+        "AlgoTuner.interfaces.llm_interface",
+        "LLMInterface.get_response",
+    ),
     (
         "handle_function_call",
         "AlgoTuner.interfaces.llm_interface",
@@ -231,8 +253,8 @@ class AlgoTuneInstrumentor(BaseInstrumentor):
             LiteLLMExecuteQueryWrapper,
             LiteLLMQueryWrapper,
             MainWrapper,
-            RunTaskWrapper,
             RunnerEvalDatasetWrapper,
+            RunTaskWrapper,
             TogetherModelQueryWrapper,
         )
 

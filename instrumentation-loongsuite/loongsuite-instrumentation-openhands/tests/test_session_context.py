@@ -1,9 +1,22 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for opentelemetry.instrumentation.openhands.internal.session_context."""
 
 from __future__ import annotations
 
 from opentelemetry import context as otel_context
-
 from opentelemetry.instrumentation.openhands.internal.session_context import (
     AttachedSession,
     clear_all,
@@ -99,8 +112,14 @@ def test_clear_all():
 
 def test_store_and_get_tool_registry():
     tools = [
-        {"type": "function", "function": {"name": "execute_bash", "description": "Run bash"}},
-        {"type": "function", "function": {"name": "file_read", "description": "Read file"}},
+        {
+            "type": "function",
+            "function": {"name": "execute_bash", "description": "Run bash"},
+        },
+        {
+            "type": "function",
+            "function": {"name": "file_read", "description": "Read file"},
+        },
     ]
     store_tool_registry("s1", tools)
     reg = get_tool_registry("s1")
@@ -111,7 +130,10 @@ def test_store_and_get_tool_registry():
 
 def test_get_tool_definition_found():
     tools = [
-        {"type": "function", "function": {"name": "execute_bash", "description": "Run bash"}},
+        {
+            "type": "function",
+            "function": {"name": "execute_bash", "description": "Run bash"},
+        },
     ]
     store_tool_registry("s1", tools)
     td = get_tool_definition("s1", "execute_bash")
@@ -134,6 +156,7 @@ def test_get_tool_definition_no_name():
 
 def test_get_tool_definition_fallback_to_last_sid():
     from opentelemetry import context as ctx
+
     tools = [
         {"type": "function", "function": {"name": "bash"}},
     ]
@@ -147,6 +170,7 @@ def test_get_tool_definition_fallback_to_last_sid():
 
 def test_get_tool_registry_fallback_to_last_sid():
     from opentelemetry import context as ctx
+
     tools = [
         {"type": "function", "function": {"name": "bash"}},
     ]

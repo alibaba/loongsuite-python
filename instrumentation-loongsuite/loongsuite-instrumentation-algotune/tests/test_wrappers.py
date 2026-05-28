@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for ``opentelemetry.instrumentation.algotune.internal.wrappers``.
 
 Covers every wrapper class and all module-level helper functions.
@@ -21,14 +35,25 @@ from typing import Any
 from unittest import mock
 
 import pytest
+from AlgoTuner.interfaces.commands.handlers import CommandHandlers
 
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
+# Import stub classes from the injected AlgoTuner modules.
+from AlgoTuner.interfaces.llm_interface import LLMInterface
+from AlgoTuner.models.lite_llm_model import LiteLLMModel
+from AlgoTuner.models.together_model import TogetherModel
+from AlgoTuner.utils.evaluator.baseline_manager import BaselineManager
+from AlgoTuner.utils.evaluator.evaluation_orchestrator import (
+    EvaluationOrchestrator,
 )
 
+from opentelemetry import trace as trace_api
+
+# Import the wrappers module itself (not just its members) so that
+# mock.patch.object targets the correct module object even after
+# instrumentor tests reimport the package under a new identity.
+from opentelemetry.instrumentation.algotune.internal import (
+    wrappers as _wrappers_module,
+)
 from opentelemetry.instrumentation.algotune.internal.utils import (
     INST_LITELLM_ATTEMPTS_ATTR,
     INST_ROUND_ATTR,
@@ -64,22 +89,11 @@ from opentelemetry.instrumentation.algotune.internal.wrappers import (
     _task_json_value,
     _text_value,
 )
-
-# Import the wrappers module itself (not just its members) so that
-# mock.patch.object targets the correct module object even after
-# instrumentor tests reimport the package under a new identity.
-from opentelemetry.instrumentation.algotune.internal import (
-    wrappers as _wrappers_module,
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
 )
-
-# Import stub classes from the injected AlgoTuner modules.
-from AlgoTuner.interfaces.llm_interface import LLMInterface
-from AlgoTuner.interfaces.commands.handlers import CommandHandlers
-from AlgoTuner.utils.evaluator.evaluation_orchestrator import EvaluationOrchestrator
-from AlgoTuner.utils.evaluator.baseline_manager import BaselineManager
-from AlgoTuner.models.lite_llm_model import LiteLLMModel
-from AlgoTuner.models.together_model import TogetherModel
-
 
 # ---------------------------------------------------------------------------
 # Private fixture: independent tracer + exporter for direct wrapper tests.
@@ -309,6 +323,7 @@ class TestClearStepState:
 
     def test_handles_readonly_instance(self):
         """If setattr fails on the instance, should not raise."""
+
         # Frozen instances would fail; simulate with a class that rejects setattr.
         class ReadOnly:
             __slots__ = ()
@@ -359,34 +374,49 @@ class TestSetTaskInputOutput:
             _set_task_output(span, {"result": "ok"})
 
         spans = exporter.get_finished_spans()
-        assert spans[0].attributes.get("output.mime_type") == "application/json"
+        assert (
+            spans[0].attributes.get("output.mime_type") == "application/json"
+        )
         assert "ok" in spans[0].attributes.get("output.value", "")
 
 
 class TestAlgotuneCaptureSpanContentEnabled:
     def test_not_set_returns_false(self, monkeypatch):
-        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        monkeypatch.delenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+        )
         assert _algotune_capture_span_content_enabled() is False
 
     def test_true(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "TRUE")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "TRUE"
+        )
         assert _algotune_capture_span_content_enabled() is True
 
     def test_span_only(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         assert _algotune_capture_span_content_enabled() is True
 
     def test_span_and_event(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_AND_EVENT")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+            "SPAN_AND_EVENT",
+        )
         assert _algotune_capture_span_content_enabled() is True
 
     def test_event_only_not_included(self, monkeypatch):
         """EVENT_ONLY is not in the span-content-enabled set."""
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "EVENT_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "EVENT_ONLY"
+        )
         assert _algotune_capture_span_content_enabled() is False
 
     def test_false_value(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false"
+        )
         assert _algotune_capture_span_content_enabled() is False
 
 
@@ -421,13 +451,17 @@ class TestAlgotuneToolDefinitions:
 
 class TestAgentContentAttributes:
     def test_returns_empty_when_capture_disabled(self, monkeypatch):
-        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        monkeypatch.delenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+        )
         iface = LLMInterface()
         result = _agent_content_attributes(iface)
         assert result == {}
 
     def test_returns_attributes_when_capture_enabled(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         iface = LLMInterface()
         iface.state.messages = [
             {"role": "user", "content": "Hello"},
@@ -444,10 +478,14 @@ class TestAgentContentAttributes:
         assert "gen_ai.input.messages" in result
         assert "gen_ai.system_instructions" in result
 
-    def test_system_instruction_fallback_from_first_user_msg(self, monkeypatch):
+    def test_system_instruction_fallback_from_first_user_msg(
+        self, monkeypatch
+    ):
         """When no system role messages exist, the first message's content
         is used as a system instruction."""
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         iface = LLMInterface()
         iface.state.messages = [
             {"role": "user", "content": "Initial instructions here"},
@@ -458,7 +496,9 @@ class TestAgentContentAttributes:
         assert "gen_ai.system_instructions" in result
 
     def test_empty_messages(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         iface = LLMInterface()
         iface.state.messages = []
 
@@ -467,7 +507,9 @@ class TestAgentContentAttributes:
         assert result["algo.debug.output_messages.count"] == 0
 
     def test_output_value_attribute(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         iface = LLMInterface()
         iface.state.messages = [
             {"role": "assistant", "content": "final answer"},
@@ -478,7 +520,9 @@ class TestAgentContentAttributes:
 
     def test_non_dict_messages_skipped(self, monkeypatch):
         """Non-dict messages in the list should be skipped."""
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         iface = LLMInterface()
         iface.state.messages = [
             "not a dict",
@@ -491,7 +535,9 @@ class TestAgentContentAttributes:
 
     def test_none_state_messages(self, monkeypatch):
         """When state.messages is None, should handle gracefully."""
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         iface = LLMInterface()
         iface.state.messages = None
 
@@ -500,9 +546,12 @@ class TestAgentContentAttributes:
 
     def test_tool_definitions_with_types_module(self, monkeypatch):
         """When tool definitions exist, they should be included."""
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
 
         import types as t
+
         types_mod = t.ModuleType("AlgoTuner.interfaces.commands.types")
         fmt = t.SimpleNamespace(description="Edit cmd", example="edit f.py")
         types_mod.COMMAND_FORMATS = {"edit": fmt}
@@ -520,7 +569,9 @@ class TestAgentContentAttributes:
 
 class TestPublishAgentContentAttributes:
     def test_sets_attributes_on_span(self, monkeypatch, _otel):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         tracer, exporter = _otel
 
         iface = LLMInterface()
@@ -535,7 +586,9 @@ class TestPublishAgentContentAttributes:
         assert spans[0].attributes.get("algo.debug.input_messages.count") == 1
 
     def test_skips_none_span(self, monkeypatch):
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
 
         iface = LLMInterface()
         iface.state.messages = [{"role": "user", "content": "Hello"}]
@@ -544,7 +597,9 @@ class TestPublishAgentContentAttributes:
         _publish_agent_content_attributes(iface, None)
 
     def test_no_op_when_capture_disabled(self, monkeypatch, _otel):
-        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        monkeypatch.delenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+        )
         tracer, exporter = _otel
 
         iface = LLMInterface()
@@ -552,7 +607,9 @@ class TestPublishAgentContentAttributes:
             _publish_agent_content_attributes(iface, span)
 
         spans = exporter.get_finished_spans()
-        assert spans[0].attributes.get("algo.debug.input_messages.count") is None
+        assert (
+            spans[0].attributes.get("algo.debug.input_messages.count") is None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +627,9 @@ class TestMainWrapperDirect:
         assert result == "ok"
 
         spans = exporter.get_finished_spans()
-        entry = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+        entry = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+        ]
         assert len(entry) == 1
         s = entry[0]
         assert s.name == "enter_ai_application_system"
@@ -590,7 +649,9 @@ class TestMainWrapperDirect:
             sys.argv = original_argv
 
         spans = exporter.get_finished_spans()
-        entry = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+        entry = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+        ]
         s = entry[0]
         assert s.attributes.get("gen_ai.request.model") == "gpt-4o"
         assert s.attributes.get("algo.task.name") == "tsp"
@@ -606,7 +667,9 @@ class TestMainWrapperDirect:
             wrapper(raise_exit, None, (), {})
 
         spans = exporter.get_finished_spans()
-        entry = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+        entry = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+        ]
         assert len(entry) == 1
         s = entry[0]
         assert s.attributes.get("algotune.exit_code") == 1
@@ -623,7 +686,9 @@ class TestMainWrapperDirect:
             wrapper(raise_exit, None, (), {})
 
         spans = exporter.get_finished_spans()
-        entry = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+        entry = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+        ]
         assert len(entry) == 1
         # exit code 0 should NOT set error
         assert entry[0].status.status_code.name != "ERROR"
@@ -639,7 +704,9 @@ class TestMainWrapperDirect:
             wrapper(raise_err, None, (), {})
 
         spans = exporter.get_finished_spans()
-        entry = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+        entry = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+        ]
         assert len(entry) == 1
         assert entry[0].status.status_code.name == "ERROR"
 
@@ -654,7 +721,9 @@ class TestMainWrapperDirect:
             wrapper(raise_oom, None, (), {})
 
         spans = exporter.get_finished_spans()
-        entry = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+        entry = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+        ]
         assert len(entry) == 1
         assert entry[0].attributes.get("error.type") == "MemoryError"
         assert entry[0].status.status_code.name == "ERROR"
@@ -673,7 +742,9 @@ class TestRunTaskWrapperDirect:
         assert result == "done"
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert len(agent) == 1
         s = agent[0]
         assert s.name == "invoke_agent AlgoTuner"
@@ -691,8 +762,12 @@ class TestRunTaskWrapperDirect:
         wrapper(lambda *a, **k: None, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
-        assert agent[0].attributes.get("algo.agent.final_status") == "completed"
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
+        assert (
+            agent[0].attributes.get("algo.agent.final_status") == "completed"
+        )
 
     def test_agent_span_on_exception(self, _otel):
         tracer, exporter = _otel
@@ -706,10 +781,14 @@ class TestRunTaskWrapperDirect:
             wrapper(raise_err, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert len(agent) == 1
         assert agent[0].status.status_code.name == "ERROR"
-        assert agent[0].attributes.get("algo.agent.final_status") == "exception"
+        assert (
+            agent[0].attributes.get("algo.agent.final_status") == "exception"
+        )
 
     def test_agent_span_on_keyboard_interrupt(self, _otel):
         tracer, exporter = _otel
@@ -723,9 +802,14 @@ class TestRunTaskWrapperDirect:
             wrapper(raise_ki, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert len(agent) == 1
-        assert agent[0].attributes.get("algo.agent.final_status") == "KeyboardInterrupt"
+        assert (
+            agent[0].attributes.get("algo.agent.final_status")
+            == "KeyboardInterrupt"
+        )
 
     def test_agent_span_on_system_exit(self, _otel):
         tracer, exporter = _otel
@@ -739,9 +823,13 @@ class TestRunTaskWrapperDirect:
             wrapper(raise_se, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert len(agent) == 1
-        assert agent[0].attributes.get("algo.agent.final_status") == "SystemExit"
+        assert (
+            agent[0].attributes.get("algo.agent.final_status") == "SystemExit"
+        )
         assert agent[0].status.status_code.name == "ERROR"
 
     def test_agent_span_records_spend(self, _otel):
@@ -753,7 +841,9 @@ class TestRunTaskWrapperDirect:
         wrapper(lambda *a, **k: None, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert agent[0].attributes.get("algo.agent.spend_usd") == 1.23
 
     def test_agent_span_records_total_rounds(self, _otel):
@@ -769,7 +859,9 @@ class TestRunTaskWrapperDirect:
         wrapper(simulate_rounds, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert agent[0].attributes.get("algo.agent.total_rounds") == 5
 
     def test_agent_terminated_by_limit(self, _otel):
@@ -781,8 +873,13 @@ class TestRunTaskWrapperDirect:
         wrapper(lambda *a, **k: None, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
-        assert agent[0].attributes.get("algo.agent.final_status") == "terminated_by_limit"
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
+        assert (
+            agent[0].attributes.get("algo.agent.final_status")
+            == "terminated_by_limit"
+        )
 
     def test_agent_final_eval_success(self, _otel):
         tracer, exporter = _otel
@@ -794,7 +891,9 @@ class TestRunTaskWrapperDirect:
         wrapper(lambda *a, **k: None, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert agent[0].attributes.get("algo.agent.final_eval_success") is True
         assert agent[0].attributes.get("algo.agent.final_mean_speedup") == 3.5
 
@@ -806,7 +905,9 @@ class TestRunTaskWrapperDirect:
         wrapper(lambda *a, **k: None, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert len(agent) == 1
         # Model-related attributes should not be set if model_name is empty.
         assert agent[0].attributes.get("gen_ai.request.model") is None
@@ -845,9 +946,7 @@ class TestGetResponseWrapperDirect:
         wrapper = GetResponseWrapper(tracer)
         iface = self._make_instance()
 
-        result = wrapper(
-            lambda *a, **k: {"content": "hello"}, iface, (), {}
-        )
+        result = wrapper(lambda *a, **k: {"content": "hello"}, iface, (), {})
         assert result == {"content": "hello"}
 
         # STEP span is still open (handle_function_call should close it).
@@ -874,10 +973,15 @@ class TestGetResponseWrapperDirect:
         assert result is None
 
         spans = exporter.get_finished_spans()
-        step = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         assert len(step) == 1
         assert step[0].attributes.get("algo.step.response_empty") is True
-        assert step[0].attributes.get("gen_ai.react.finish_reason") == "empty_response_retry"
+        assert (
+            step[0].attributes.get("gen_ai.react.finish_reason")
+            == "empty_response_retry"
+        )
 
         # Instance STEP state should be cleared.
         assert getattr(iface, INST_STEP_SPAN_ATTR) is None
@@ -894,10 +998,15 @@ class TestGetResponseWrapperDirect:
             wrapper(raise_err, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        step = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         assert len(step) == 1
         assert step[0].status.status_code.name == "ERROR"
-        assert step[0].attributes.get("gen_ai.react.finish_reason") == "RuntimeError"
+        assert (
+            step[0].attributes.get("gen_ai.react.finish_reason")
+            == "RuntimeError"
+        )
 
     def test_round_counter_increments(self, _otel):
         tracer, exporter = _otel
@@ -912,7 +1021,9 @@ class TestGetResponseWrapperDirect:
         assert getattr(iface, INST_ROUND_ATTR) == 3
 
         spans = exporter.get_finished_spans()
-        step = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         assert len(step) == 3
         rounds = [s.attributes.get("gen_ai.react.round") for s in step]
         assert rounds == [1, 2, 3]
@@ -964,7 +1075,9 @@ class TestGetResponseWrapperDirect:
         wrapper(set_and_return_none, iface2, (), {})
 
         spans = exporter.get_finished_spans()
-        step = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         # Find the step for iface2 (last one).
         last = step[-1]
         assert last.attributes.get("algo.llm.retry_count") == 7
@@ -990,7 +1103,9 @@ class TestHandleFunctionCallWrapperDirect:
         # Close it via handle_function_call.
         result = wrapper_hfc(
             lambda *a, **k: {"command": "eval", "success": True},
-            iface, (), {},
+            iface,
+            (),
+            {},
         )
         assert result == {"command": "eval", "success": True}
         assert not step_span.is_recording()
@@ -1009,14 +1124,21 @@ class TestHandleFunctionCallWrapperDirect:
         wrapper_get(lambda *a, **k: {"text": "hi"}, iface, (), {})
         wrapper_hfc(
             lambda *a, **k: {"command": "edit", "success": True},
-            iface, (), {},
+            iface,
+            (),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        step = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         assert len(step) == 1
         assert step[0].attributes.get("algo.step.command_name") == "edit"
-        assert step[0].attributes.get("gen_ai.react.finish_reason") == "tool_executed"
+        assert (
+            step[0].attributes.get("gen_ai.react.finish_reason")
+            == "tool_executed"
+        )
 
     def test_closes_step_on_exception(self, _otel):
         tracer, exporter = _otel
@@ -1037,10 +1159,15 @@ class TestHandleFunctionCallWrapperDirect:
             wrapper_hfc(raise_err, iface, (), {})
 
         spans = exporter.get_finished_spans()
-        step = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         assert len(step) == 1
         assert step[0].status.status_code.name == "ERROR"
-        assert step[0].attributes.get("gen_ai.react.finish_reason") == "RuntimeError"
+        assert (
+            step[0].attributes.get("gen_ai.react.finish_reason")
+            == "RuntimeError"
+        )
 
     def test_no_step_span_is_noop(self, _otel):
         wrapper_hfc = HandleFunctionCallWrapper()
@@ -1050,7 +1177,9 @@ class TestHandleFunctionCallWrapperDirect:
 
         result = wrapper_hfc(
             lambda *a, **k: {"command": "edit", "success": True},
-            iface, (), {},
+            iface,
+            (),
+            {},
         )
         assert result == {"command": "edit", "success": True}
 
@@ -1071,11 +1200,15 @@ class TestHandleFunctionCallWrapperDirect:
 
         wrapper_hfc(
             lambda *a, **k: {"command": "run", "success": True},
-            iface, (), {},
+            iface,
+            (),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        step = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         assert step[0].attributes.get("algo.llm.retry_count") == 4
 
 
@@ -1087,13 +1220,17 @@ class TestHandleCommandWrapperDirect:
         pc = types.SimpleNamespace(command="edit", args={"file": "sol.py"})
         handler = CommandHandlers()
 
-        result = wrapper(
+        wrapper(
             lambda *a, **k: {"success": True, "message": "ok"},
-            handler, (pc,), {},
+            handler,
+            (pc,),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
         assert len(tool) == 1
         s = tool[0]
         assert s.name == "execute_tool edit"
@@ -1111,12 +1248,18 @@ class TestHandleCommandWrapperDirect:
 
         wrapper(
             lambda *a, **k: {"success": True, "message": "ok"},
-            handler, (error_cmd,), {},
+            handler,
+            (error_cmd,),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
-        assert tool[0].attributes.get("algotune.command.error_response") is True
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
+        assert (
+            tool[0].attributes.get("algotune.command.error_response") is True
+        )
 
     def test_tool_span_records_failure(self, _otel):
         tracer, exporter = _otel
@@ -1127,11 +1270,15 @@ class TestHandleCommandWrapperDirect:
 
         wrapper(
             lambda *a, **k: {"success": False, "message": "command failed"},
-            handler, (pc,), {},
+            handler,
+            (pc,),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
         assert tool[0].attributes.get("algo.command.success") is False
         assert tool[0].status.status_code.name == "ERROR"
 
@@ -1149,7 +1296,9 @@ class TestHandleCommandWrapperDirect:
             wrapper(raise_err, handler, (pc,), {})
 
         spans = exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
         assert tool[0].status.status_code.name == "ERROR"
 
     def test_tool_span_unknown_command(self, _otel):
@@ -1160,11 +1309,16 @@ class TestHandleCommandWrapperDirect:
         handler = CommandHandlers()
 
         wrapper(
-            lambda *a, **k: {"success": True}, handler, (pc,), {},
+            lambda *a, **k: {"success": True},
+            handler,
+            (pc,),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
         assert tool[0].name == "execute_tool unknown"
 
     def test_tool_span_snapshot_detected(self, _otel):
@@ -1179,37 +1333,51 @@ class TestHandleCommandWrapperDirect:
                 "success": True,
                 "data": {"snapshot_saved": True},
             },
-            handler, (pc,), {},
+            handler,
+            (pc,),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
         assert tool[0].attributes.get("algo.snapshot.saved") is True
 
     def test_tool_span_with_content_capture(self, _otel, monkeypatch):
         """When content capture is enabled, tool call arguments and results are captured."""
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true"
+        )
 
         # Re-import the module to pick up the changed config.
         for m in list(sys.modules):
             if m.startswith("opentelemetry.instrumentation.algotune"):
                 del sys.modules[m]
 
-        from opentelemetry.instrumentation.algotune.internal.wrappers import HandleCommandWrapper as HCW
+        from opentelemetry.instrumentation.algotune.internal.wrappers import (
+            HandleCommandWrapper as HCW,
+        )
 
         tracer, exporter = _otel
         wrapper = HCW(tracer)
 
-        pc = types.SimpleNamespace(command="edit", args={"file": "sol.py", "content": "print('hi')"})
+        pc = types.SimpleNamespace(
+            command="edit", args={"file": "sol.py", "content": "print('hi')"}
+        )
         handler = CommandHandlers()
 
         wrapper(
             lambda *a, **k: {"success": True, "message": "file edited"},
-            handler, (pc,), {},
+            handler,
+            (pc,),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
         assert len(tool) == 1
         # Arguments should be captured.
         assert tool[0].attributes.get("gen_ai.tool.call.arguments") is not None
@@ -1217,7 +1385,9 @@ class TestHandleCommandWrapperDirect:
         assert tool[0].attributes.get("gen_ai.tool.call.result") is not None
 
         # Restore module state.
-        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        monkeypatch.delenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+        )
         for m in list(sys.modules):
             if m.startswith("opentelemetry.instrumentation.algotune"):
                 del sys.modules[m]
@@ -1230,19 +1400,29 @@ class TestRunnerEvalDatasetWrapperDirect:
         handler = CommandHandlers()
 
         result_obj = types.SimpleNamespace(
-            success=True, status="ok", message="done",
-            data={"num_evaluated": 5, "mean_speedup": 2.0,
-                  "num_valid": 4, "num_invalid": 0, "num_timeout": 1},
+            success=True,
+            status="ok",
+            message="done",
+            data={
+                "num_evaluated": 5,
+                "mean_speedup": 2.0,
+                "num_valid": 4,
+                "num_invalid": 0,
+                "num_timeout": 1,
+            },
         )
 
         wrapper(
             lambda *a, **k: result_obj,
-            handler, ("train", "agent"), {},
+            handler,
+            ("train", "agent"),
+            {},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.dataset_eval"
         ]
         assert len(task) == 1
@@ -1258,16 +1438,24 @@ class TestRunnerEvalDatasetWrapperDirect:
         handler = CommandHandlers()
 
         result_obj = types.SimpleNamespace(
-            success=True, status="ok", message="done",
-            data={"num_evaluated": 10, "mean_speedup": 1.5,
-                  "num_valid": 8, "num_invalid": 1, "num_timeout": 1},
+            success=True,
+            status="ok",
+            message="done",
+            data={
+                "num_evaluated": 10,
+                "mean_speedup": 1.5,
+                "num_valid": 8,
+                "num_invalid": 1,
+                "num_timeout": 1,
+            },
         )
 
         wrapper(lambda *a, **k: result_obj, handler, ("train",), {})
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.dataset_eval"
         ]
         s = task[0]
@@ -1290,7 +1478,8 @@ class TestRunnerEvalDatasetWrapperDirect:
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.dataset_eval"
         ]
         assert task[0].status.status_code.name == "ERROR"
@@ -1301,19 +1490,23 @@ class TestRunnerEvalDatasetWrapperDirect:
         handler = CommandHandlers()
 
         result_obj = types.SimpleNamespace(
-            success=True, status="ok", message="done",
+            success=True,
+            status="ok",
+            message="done",
             data={},
         )
 
         wrapper(
             lambda *a, **k: result_obj,
-            handler, (),
+            handler,
+            (),
             {"data_subset": "test", "command_source": "manual"},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.dataset_eval"
         ]
         assert task[0].attributes.get("algo.eval.subset") == "test"
@@ -1326,14 +1519,18 @@ class TestRunnerEvalDatasetWrapperDirect:
         handler.interface = types.SimpleNamespace(max_samples=5)
 
         result_obj = types.SimpleNamespace(
-            success=True, status="ok", message="done", data={},
+            success=True,
+            status="ok",
+            message="done",
+            data={},
         )
 
         wrapper(lambda *a, **k: result_obj, handler, ("train",), {})
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.dataset_eval"
         ]
         assert task[0].attributes.get("algo.eval.test_mode") is True
@@ -1346,20 +1543,29 @@ class TestEvaluateSingleWrapperDirect:
         orch = EvaluationOrchestrator()
 
         result_obj = types.SimpleNamespace(
-            speedup=2.0, solver_time_ms=150.0, is_valid=True,
+            speedup=2.0,
+            solver_time_ms=150.0,
+            is_valid=True,
             execution=types.SimpleNamespace(
                 timeout_occurred=False, error_type=None
             ),
         )
 
         wrapper(
-            lambda *a, **k: result_obj, orch, (),
-            {"problem_id": "tsp_001", "problem_index": 3, "baseline_time_ms": 500.0},
+            lambda *a, **k: result_obj,
+            orch,
+            (),
+            {
+                "problem_id": "tsp_001",
+                "problem_index": 3,
+                "baseline_time_ms": 500.0,
+            },
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.problem_eval"
         ]
         assert len(task) == 1
@@ -1375,20 +1581,25 @@ class TestEvaluateSingleWrapperDirect:
         orch = EvaluationOrchestrator()
 
         result_obj = types.SimpleNamespace(
-            speedup=2.0, solver_time_ms=150.0, is_valid=True,
+            speedup=2.0,
+            solver_time_ms=150.0,
+            is_valid=True,
             execution=types.SimpleNamespace(
                 timeout_occurred=False, error_type=None
             ),
         )
 
         wrapper(
-            lambda *a, **k: result_obj, orch, (),
+            lambda *a, **k: result_obj,
+            orch,
+            (),
             {"problem_id": "sort_002", "problem_index": 1},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.problem_eval"
         ]
         s = task[0]
@@ -1409,7 +1620,8 @@ class TestEvaluateSingleWrapperDirect:
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.problem_eval"
         ]
         assert task[0].status.status_code.name == "ERROR"
@@ -1420,20 +1632,25 @@ class TestEvaluateSingleWrapperDirect:
         orch = EvaluationOrchestrator()
 
         result_obj = types.SimpleNamespace(
-            speedup=0.0, solver_time_ms=0.0, is_valid=False,
+            speedup=0.0,
+            solver_time_ms=0.0,
+            is_valid=False,
             execution=types.SimpleNamespace(
                 timeout_occurred=True, error_type="TIMEOUT"
             ),
         )
 
         wrapper(
-            lambda *a, **k: result_obj, orch, (),
+            lambda *a, **k: result_obj,
+            orch,
+            (),
             {"problem_id": "timeout_prob"},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.problem_eval"
         ]
         s = task[0]
@@ -1451,23 +1668,31 @@ class TestEvaluateSingleWrapperDirect:
             value = "RUNTIME_ERROR"
 
         result_obj = types.SimpleNamespace(
-            speedup=None, solver_time_ms=None, is_valid=False,
+            speedup=None,
+            solver_time_ms=None,
+            is_valid=False,
             execution=types.SimpleNamespace(
                 timeout_occurred=False, error_type=ErrorType()
             ),
         )
 
         wrapper(
-            lambda *a, **k: result_obj, orch, (),
+            lambda *a, **k: result_obj,
+            orch,
+            (),
             {"problem_id": "enum_err"},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.problem_eval"
         ]
-        assert task[0].attributes.get("algo.problem.error_type") == "RUNTIME_ERROR"
+        assert (
+            task[0].attributes.get("algo.problem.error_type")
+            == "RUNTIME_ERROR"
+        )
 
     def test_task_span_dict_result(self, _otel):
         """Result as a dict (not dataclass) should also work via _safe_get."""
@@ -1483,13 +1708,16 @@ class TestEvaluateSingleWrapperDirect:
         }
 
         wrapper(
-            lambda *a, **k: result, orch, (),
+            lambda *a, **k: result,
+            orch,
+            (),
             {"problem_id": "dict_result"},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.problem_eval"
         ]
         assert task[0].attributes.get("algo.problem.speedup") == 1.5
@@ -1503,14 +1731,18 @@ class TestGetBaselineTimesWrapperDirect:
 
         result = wrapper(
             lambda *a, **k: {"p1": 100.0, "p2": 200.0},
-            mgr, ("train",), {},
+            mgr,
+            ("train",),
+            {},
         )
         assert result == {"p1": 100.0, "p2": 200.0}
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
-            if s.attributes.get("gen_ai.task.name") == "benchmark.baseline_generation"
+            s
+            for s in spans
+            if s.attributes.get("gen_ai.task.name")
+            == "benchmark.baseline_generation"
         ]
         assert len(task) == 1
         s = task[0]
@@ -1527,13 +1759,17 @@ class TestGetBaselineTimesWrapperDirect:
 
         wrapper(
             lambda *a, **k: {"p1": 100.0},
-            mgr, ("train",), {},
+            mgr,
+            ("train",),
+            {},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
-            if s.attributes.get("gen_ai.task.name") == "benchmark.baseline_generation"
+            s
+            for s in spans
+            if s.attributes.get("gen_ai.task.name")
+            == "benchmark.baseline_generation"
         ]
         assert task[0].attributes.get("algo.baseline.cache_hit") is True
 
@@ -1550,8 +1786,10 @@ class TestGetBaselineTimesWrapperDirect:
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
-            if s.attributes.get("gen_ai.task.name") == "benchmark.baseline_generation"
+            s
+            for s in spans
+            if s.attributes.get("gen_ai.task.name")
+            == "benchmark.baseline_generation"
         ]
         assert len(task) == 1
         s = task[0]
@@ -1573,8 +1811,10 @@ class TestGetBaselineTimesWrapperDirect:
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
-            if s.attributes.get("gen_ai.task.name") == "benchmark.baseline_generation"
+            s
+            for s in spans
+            if s.attributes.get("gen_ai.task.name")
+            == "benchmark.baseline_generation"
         ]
         assert task[0].status.status_code.name == "ERROR"
 
@@ -1585,13 +1825,17 @@ class TestGetBaselineTimesWrapperDirect:
 
         wrapper(
             lambda *a, **k: {},
-            mgr, (), {"subset": "test_set"},
+            mgr,
+            (),
+            {"subset": "test_set"},
         )
 
         spans = exporter.get_finished_spans()
         task = [
-            s for s in spans
-            if s.attributes.get("gen_ai.task.name") == "benchmark.baseline_generation"
+            s
+            for s in spans
+            if s.attributes.get("gen_ai.task.name")
+            == "benchmark.baseline_generation"
         ]
         assert task[0].attributes.get("algo.baseline.subset") == "test_set"
 
@@ -1606,7 +1850,9 @@ class TestLiteLLMQueryWrapperDirect:
         assert result == "llm_response"
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert len(llm) == 0
 
     def test_attempt_counter_reset(self, _otel):
@@ -1630,7 +1876,7 @@ class TestLiteLLMQueryWrapperDirect:
             return "ok"
 
         # We need an active recording span for publish to work.
-        with tracer.start_as_current_span("step") as span:
+        with tracer.start_as_current_span("step"):
             wrapper(simulate_retries, model, (), {})
 
         spans = exporter.get_finished_spans()
@@ -1665,7 +1911,7 @@ class TestLiteLLMExecuteQueryWrapperDirect:
         model = LiteLLMModel()
         setattr(model, "_otel_algo_litellm_call_attempts", 0)
 
-        with tracer.start_as_current_span("step") as span:
+        with tracer.start_as_current_span("step"):
             wrapper(lambda *a, **k: "ok", model, (), {})
             wrapper(lambda *a, **k: "ok", model, (), {})
 
@@ -1690,13 +1936,17 @@ class TestTogetherModelQueryWrapperDirect:
                     "total_tokens": 150,
                 },
             },
-            model, (), {},
+            model,
+            (),
+            {},
         )
 
         assert result["cost"] == 0.01
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert len(llm) == 1
         s = llm[0]
         assert s.name == "chat together/llama-70b"
@@ -1719,11 +1969,15 @@ class TestTogetherModelQueryWrapperDirect:
                     "total_tokens": 300,
                 },
             },
-            model, (), {},
+            model,
+            (),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         s = llm[0]
         assert s.attributes.get("gen_ai.usage.input_tokens") == 200
         assert s.attributes.get("gen_ai.usage.output_tokens") == 100
@@ -1743,7 +1997,9 @@ class TestTogetherModelQueryWrapperDirect:
         wrapper(lambda *a, **k: {}, model, (), {})
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         s = llm[0]
         assert s.attributes.get("gen_ai.request.temperature") == 0.5
         assert s.attributes.get("gen_ai.request.top_p") == 0.8
@@ -1761,7 +2017,9 @@ class TestTogetherModelQueryWrapperDirect:
             wrapper(raise_err, model, (), {})
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert llm[0].status.status_code.name == "ERROR"
 
     def test_together_no_usage(self, _otel):
@@ -1772,7 +2030,9 @@ class TestTogetherModelQueryWrapperDirect:
         wrapper(lambda *a, **k: {"message": "ok"}, model, (), {})
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         s = llm[0]
         assert s.attributes.get("gen_ai.usage.input_tokens") is None
         assert s.attributes.get("gen_ai.usage.output_tokens") is None
@@ -1786,7 +2046,9 @@ class TestTogetherModelQueryWrapperDirect:
         wrapper(lambda *a, **k: {}, model, (), {})
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         s = llm[0]
         assert s.attributes.get("gen_ai.request.temperature") is None
         assert s.attributes.get("gen_ai.request.top_p") is None
@@ -1801,18 +2063,24 @@ class TestTogetherModelQueryWrapperDirect:
         assert result == "plain string"
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert len(llm) == 1
 
     def test_together_with_content_capture(self, _otel, monkeypatch):
         """When content capture is enabled, output messages are captured."""
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true"
+        )
 
         for m in list(sys.modules):
             if m.startswith("opentelemetry.instrumentation.algotune"):
                 del sys.modules[m]
 
-        from opentelemetry.instrumentation.algotune.internal.wrappers import TogetherModelQueryWrapper as TMQW
+        from opentelemetry.instrumentation.algotune.internal.wrappers import (
+            TogetherModelQueryWrapper as TMQW,
+        )
 
         tracer, exporter = _otel
         wrapper = TMQW(tracer)
@@ -1820,15 +2088,21 @@ class TestTogetherModelQueryWrapperDirect:
 
         wrapper(
             lambda *a, **k: {"message": "hello world", "usage": {}},
-            model, (), {},
+            model,
+            (),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert len(llm) == 1
         assert llm[0].attributes.get("gen_ai.output.messages") is not None
 
-        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        monkeypatch.delenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+        )
         for m in list(sys.modules):
             if m.startswith("opentelemetry.instrumentation.algotune"):
                 del sys.modules[m]
@@ -1843,7 +2117,9 @@ class TestTogetherModelQueryWrapperDirect:
         wrapper(lambda *a, **k: {}, model, (), {})
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert llm[0].name == "chat unknown"
 
     def test_together_none_default_params(self, _otel):
@@ -1856,7 +2132,9 @@ class TestTogetherModelQueryWrapperDirect:
         wrapper(lambda *a, **k: {}, model, (), {})
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert len(llm) == 1
 
     def test_together_cost_none(self, _otel):
@@ -1867,11 +2145,15 @@ class TestTogetherModelQueryWrapperDirect:
 
         wrapper(
             lambda *a, **k: {"cost": None, "usage": {}},
-            model, (), {},
+            model,
+            (),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert llm[0].attributes.get("algo.llm.response_cost_usd") is None
 
     def test_together_total_tokens_fallback(self, _otel):
@@ -1884,11 +2166,15 @@ class TestTogetherModelQueryWrapperDirect:
             lambda *a, **k: {
                 "usage": {"prompt_tokens": 10, "completion_tokens": 5},
             },
-            model, (), {},
+            model,
+            (),
+            {},
         )
 
         spans = exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert llm[0].attributes.get("gen_ai.usage.total_tokens") == 15
 
 
@@ -1904,7 +2190,9 @@ class TestIntegrationMainWrapper:
         main()
 
         spans = span_exporter.get_finished_spans()
-        entry = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+        entry = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+        ]
         assert len(entry) == 1
         s = entry[0]
         assert s.name == "enter_ai_application_system"
@@ -1917,7 +2205,9 @@ class TestIntegrationRunTask:
         iface.run_task()
 
         spans = span_exporter.get_finished_spans()
-        agent = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+        agent = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
+        ]
         assert len(agent) == 1
         s = agent[0]
         assert s.attributes["gen_ai.request.model"] == "openai/gpt-4o"
@@ -1943,9 +2233,14 @@ class TestIntegrationGetResponseAndHandleFunctionCall:
         assert getattr(iface, INST_STEP_SPAN_ATTR) is None
 
         spans = span_exporter.get_finished_spans()
-        step_spans = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"]
+        step_spans = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
+        ]
         assert len(step_spans) == 1
-        assert step_spans[0].attributes.get("gen_ai.react.finish_reason") == "tool_executed"
+        assert (
+            step_spans[0].attributes.get("gen_ai.react.finish_reason")
+            == "tool_executed"
+        )
 
 
 class TestIntegrationHandleCommand:
@@ -1955,7 +2250,9 @@ class TestIntegrationHandleCommand:
         handler.handle_command(pc)
 
         spans = span_exporter.get_finished_spans()
-        tool = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"]
+        tool = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
+        ]
         assert len(tool) == 1
         assert tool[0].name == "execute_tool edit"
 
@@ -1967,7 +2264,8 @@ class TestIntegrationEvalDataset:
 
         spans = span_exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.dataset_eval"
         ]
         assert len(task) == 1
@@ -1981,7 +2279,8 @@ class TestIntegrationEvaluateSingle:
 
         spans = span_exporter.get_finished_spans()
         task = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.task.name") == "benchmark.problem_eval"
         ]
         assert len(task) == 1
@@ -1995,8 +2294,10 @@ class TestIntegrationBaseline:
 
         spans = span_exporter.get_finished_spans()
         task = [
-            s for s in spans
-            if s.attributes.get("gen_ai.task.name") == "benchmark.baseline_generation"
+            s
+            for s in spans
+            if s.attributes.get("gen_ai.task.name")
+            == "benchmark.baseline_generation"
         ]
         assert len(task) == 1
 
@@ -2007,7 +2308,9 @@ class TestIntegrationLiteLLM:
         model.query()
 
         spans = span_exporter.get_finished_spans()
-        llm = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"]
+        llm = [
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
+        ]
         assert len(llm) == 0
 
     def test_execute_query_increments_counter(self, span_exporter, instrument):
@@ -2403,9 +2706,7 @@ class TestRunTaskContentCapture:
 
         spans = exporter.get_finished_spans()
         agent = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "AGENT"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
         ]
         assert len(agent) == 1
         s = agent[0]
@@ -2442,9 +2743,7 @@ class TestHandleCommandContentCapture:
 
         spans = exporter.get_finished_spans()
         tool = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "TOOL"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
         ]
         assert len(tool) == 1
         s = tool[0]
@@ -2480,9 +2779,7 @@ class TestHandleCommandContentCapture:
 
         spans = exporter.get_finished_spans()
         tool = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "TOOL"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
         ]
         assert tool[0].attributes.get("gen_ai.tool.call.arguments") is None
         assert tool[0].attributes.get("gen_ai.tool.call.result") is None
@@ -2502,11 +2799,11 @@ class TestHandleCommandContentCapture:
 
         spans = exporter.get_finished_spans()
         tool = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "TOOL"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
         ]
-        assert tool[0].attributes.get("algotune.command.error_response") is True
+        assert (
+            tool[0].attributes.get("algotune.command.error_response") is True
+        )
 
 
 class TestTogetherModelContentCapture:
@@ -2538,9 +2835,7 @@ class TestTogetherModelContentCapture:
 
         spans = exporter.get_finished_spans()
         llm = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "LLM"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
         ]
         assert len(llm) == 1
         s = llm[0]
@@ -2568,9 +2863,7 @@ class TestTogetherModelContentCapture:
 
         spans = exporter.get_finished_spans()
         llm = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "LLM"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
         ]
         s = llm[0]
         assert s.attributes.get("gen_ai.usage.total_tokens") == 150
@@ -2586,9 +2879,7 @@ class TestTogetherModelContentCapture:
 
         spans = exporter.get_finished_spans()
         llm = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "LLM"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "LLM"
         ]
         assert len(llm) == 1
 
@@ -2774,9 +3065,7 @@ class TestGetBaselineTimesEdgeCases:
         wrapper = GetBaselineTimesWrapper(tracer)
         mgr = BaselineManager()
 
-        result = wrapper(
-            lambda *a, **k: "not_a_dict", mgr, ("train",), {}
-        )
+        result = wrapper(lambda *a, **k: "not_a_dict", mgr, ("train",), {})
         assert result == "not_a_dict"
 
         spans = exporter.get_finished_spans()
@@ -2810,7 +3099,9 @@ class TestGetBaselineTimesEdgeCases:
             == "benchmark.baseline_generation"
         ]
         assert task[0].status.status_code.name == "ERROR"
-        fatal = [e for e in task[0].events if e.name == "baseline.fatal_failure"]
+        fatal = [
+            e for e in task[0].events if e.name == "baseline.fatal_failure"
+        ]
         assert fatal[0].attributes["exit_code"] == 1
 
 
@@ -2828,9 +3119,7 @@ class TestMainWrapperEdgeCases:
 
         spans = exporter.get_finished_spans()
         entry = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
         ]
         assert len(entry) == 1
         # code=None => not isinstance(None, int) => code=0 => no error status
@@ -2850,9 +3139,7 @@ class TestRunTaskWrapperEdgeCases:
 
         spans = exporter.get_finished_spans()
         agent = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "AGENT"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
         ]
         assert agent[0].attributes.get("algo.agent.final_eval_success") is True
         # final_mean_speedup should not be set because metrics is not a dict.
@@ -2870,9 +3157,7 @@ class TestRunTaskWrapperEdgeCases:
 
         spans = exporter.get_finished_spans()
         agent = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "AGENT"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
         ]
         # Should not crash; attribute not set due to ValueError.
         assert agent[0].attributes.get("algo.agent.final_mean_speedup") is None
@@ -2891,9 +3176,7 @@ class TestRunTaskWrapperEdgeCases:
 
         spans = exporter.get_finished_spans()
         agent = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "AGENT"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
         ]
         assert len(agent) == 1
         assert agent[0].status.status_code.name != "ERROR"
@@ -2913,11 +3196,11 @@ class TestRunTaskWrapperEdgeCases:
 
         spans = exporter.get_finished_spans()
         agent = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "AGENT"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "AGENT"
         ]
-        assert agent[0].attributes.get("algo.agent.final_status") == "completed"
+        assert (
+            agent[0].attributes.get("algo.agent.final_status") == "completed"
+        )
 
 
 class TestGetResponseEdgeCases:
@@ -2939,9 +3222,7 @@ class TestGetResponseEdgeCases:
 
         spans = exporter.get_finished_spans()
         step = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "STEP"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
         ]
         assert len(step) == 1
         assert step[0].status.status_code.name == "ERROR"
@@ -2968,9 +3249,7 @@ class TestGetResponseEdgeCases:
 
         spans = exporter.get_finished_spans()
         step = [
-            s
-            for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "STEP"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "STEP"
         ]
         assert len(step) == 1
         assert step[0].status.status_code.name == "ERROR"

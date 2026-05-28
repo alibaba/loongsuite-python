@@ -88,7 +88,10 @@ class GenAIHookHelper:
                     span.set_attribute(
                         gen_ai_attributes.GEN_AI_SYSTEM_INSTRUCTIONS,
                         gen_ai_json_dumps(
-                            [dataclasses.asdict(s) for s in system_instructions]
+                            [
+                                dataclasses.asdict(s)
+                                for s in system_instructions
+                            ]
                         ),
                     )
 
@@ -100,7 +103,9 @@ class GenAIHookHelper:
                     span.set_attribute(key, value)
                 except Exception:  # noqa: BLE001
                     logger.debug(
-                        "bfclv4: failed to set attribute %s", key, exc_info=True
+                        "bfclv4: failed to set attribute %s",
+                        key,
+                        exc_info=True,
                     )
 
 

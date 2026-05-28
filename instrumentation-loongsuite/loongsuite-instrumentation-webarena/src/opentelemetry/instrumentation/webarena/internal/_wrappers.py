@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """``wrapt`` hooks that emit WebArena GenAI spans.
 
 Span hierarchy (per task)::
@@ -37,17 +51,6 @@ from typing import Any, Callable
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace as trace_api
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
-)
-from opentelemetry.trace import (
-    SpanKind,
-    Status,
-    StatusCode,
-    Tracer,
-    set_span_in_context,
-)
-
 from opentelemetry.instrumentation.webarena.config import (
     capture_message_content,
 )
@@ -82,6 +85,16 @@ from opentelemetry.instrumentation.webarena.internal._attrs import (
     truncate,
     truncate_content,
 )
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.trace import (
+    SpanKind,
+    Status,
+    StatusCode,
+    Tracer,
+    set_span_in_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +113,7 @@ def _read_config_file(options: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     try:
         import json as _json  # noqa: PLC0415
+
         with open(cfg_file, "r", encoding="utf-8") as f:
             data = _json.load(f)
         if isinstance(data, dict):
@@ -126,14 +140,42 @@ def _json_dumps(value: Any) -> str:
 
 # WebArena browser action types as tool definitions for gen_ai.tool.definitions
 _BROWSER_TOOL_DEFINITIONS = [
-    {"type": "function", "name": "click", "description": "Click on a web element by ID"},
-    {"type": "function", "name": "type", "description": "Type text into a web element"},
-    {"type": "function", "name": "hover", "description": "Hover over a web element"},
-    {"type": "function", "name": "scroll", "description": "Scroll the page up or down"},
+    {
+        "type": "function",
+        "name": "click",
+        "description": "Click on a web element by ID",
+    },
+    {
+        "type": "function",
+        "name": "type",
+        "description": "Type text into a web element",
+    },
+    {
+        "type": "function",
+        "name": "hover",
+        "description": "Hover over a web element",
+    },
+    {
+        "type": "function",
+        "name": "scroll",
+        "description": "Scroll the page up or down",
+    },
     {"type": "function", "name": "goto", "description": "Navigate to a URL"},
-    {"type": "function", "name": "go_back", "description": "Go back to the previous page"},
-    {"type": "function", "name": "go_forward", "description": "Go forward to the next page"},
-    {"type": "function", "name": "stop", "description": "Stop and return the answer"},
+    {
+        "type": "function",
+        "name": "go_back",
+        "description": "Go back to the previous page",
+    },
+    {
+        "type": "function",
+        "name": "go_forward",
+        "description": "Go forward to the next page",
+    },
+    {
+        "type": "function",
+        "name": "stop",
+        "description": "Stop and return the answer",
+    },
 ]
 
 
@@ -154,7 +196,14 @@ def _set_agent_content_attrs(
                 if intro:
                     span.set_attribute(
                         "gen_ai.system_instructions",
-                        _json_dumps([{"type": "text", "content": truncate_content(str(intro))}]),
+                        _json_dumps(
+                            [
+                                {
+                                    "type": "text",
+                                    "content": truncate_content(str(intro)),
+                                }
+                            ]
+                        ),
                     )
 
         # gen_ai.input.messages — intent as user message
@@ -166,10 +215,19 @@ def _set_agent_content_attrs(
             input_content = f"Task: {intent}\nPrevious action: {previous}"
             span.set_attribute(
                 "gen_ai.input.messages",
-                _json_dumps([{
-                    "role": "user",
-                    "parts": [{"type": "text", "content": truncate_content(input_content)}],
-                }]),
+                _json_dumps(
+                    [
+                        {
+                            "role": "user",
+                            "parts": [
+                                {
+                                    "type": "text",
+                                    "content": truncate_content(input_content),
+                                }
+                            ],
+                        }
+                    ]
+                ),
             )
 
         # gen_ai.tool.definitions — browser action types
@@ -225,10 +283,19 @@ def _open_task_spans(
     if intent and capture_message_content():
         entry_span.set_attribute(
             "gen_ai.input.messages",
-            _json_dumps([{
-                "role": "user",
-                "parts": [{"type": "text", "content": truncate_content(intent)}],
-            }]),
+            _json_dumps(
+                [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "type": "text",
+                                "content": truncate_content(intent),
+                            }
+                        ],
+                    }
+                ]
+            ),
         )
 
     entry_token = otel_context.attach(set_span_in_context(entry_span))
@@ -335,10 +402,19 @@ class EnvResetWrapper:
                     if obs_text:
                         entry.set_attribute(
                             "gen_ai.output.messages",
-                            _json_dumps([{
-                                "role": "assistant",
-                                "parts": [{"type": "text", "content": obs_text}],
-                            }]),
+                            _json_dumps(
+                                [
+                                    {
+                                        "role": "assistant",
+                                        "parts": [
+                                            {
+                                                "type": "text",
+                                                "content": obs_text,
+                                            }
+                                        ],
+                                    }
+                                ]
+                            ),
                         )
                 except Exception:  # noqa: BLE001
                     pass
@@ -409,7 +485,9 @@ class NextActionWrapper:
             instr_path = getattr(
                 instance.prompt_constructor, "instruction_path", None
             )
-            instr_stem = getattr(instr_path, "stem", None) if instr_path else None
+            instr_stem = (
+                getattr(instr_path, "stem", None) if instr_path else None
+            )
         except Exception:  # noqa: BLE001
             instr_stem = None
         agent_name = (
@@ -488,17 +566,32 @@ class NextActionWrapper:
             atype = action_type_name(action)
             span.set_attribute(WEBARENA_ACTION_TYPE, atype)
             raw_pred = (
-                action.get("raw_prediction") if isinstance(action, dict) else None
+                action.get("raw_prediction")
+                if isinstance(action, dict)
+                else None
             )
             if capture_message_content():
                 if raw_pred:
                     span.set_attribute(
                         "gen_ai.output.messages",
-                        _json_dumps([{
-                            "role": "assistant",
-                            "parts": [{"type": "text", "content": truncate_content(str(raw_pred))}],
-                            "finish_reason": "stop" if atype == "STOP" else "action",
-                        }]),
+                        _json_dumps(
+                            [
+                                {
+                                    "role": "assistant",
+                                    "parts": [
+                                        {
+                                            "type": "text",
+                                            "content": truncate_content(
+                                                str(raw_pred)
+                                            ),
+                                        }
+                                    ],
+                                    "finish_reason": "stop"
+                                    if atype == "STOP"
+                                    else "action",
+                                }
+                            ]
+                        ),
                     )
 
             if atype == "NONE":
@@ -544,7 +637,9 @@ class PromptConstructWrapper:
     ) -> Any:
         trajectory = args[0] if len(args) >= 1 else kwargs.get("trajectory")
         intent = args[1] if len(args) >= 2 else kwargs.get("intent")
-        meta_data = args[2] if len(args) >= 3 else kwargs.get("meta_data") or {}
+        meta_data = (
+            args[2] if len(args) >= 3 else kwargs.get("meta_data") or {}
+        )
 
         with self._tracer.start_as_current_span(
             "run_task build_prompt_context", kind=SpanKind.INTERNAL
@@ -606,9 +701,7 @@ class PromptConstructWrapper:
                         "webarena.prompt.messages_count", len(prompt)
                     )
                 elif isinstance(prompt, str):
-                    span.set_attribute(
-                        "webarena.prompt.length", len(prompt)
-                    )
+                    span.set_attribute("webarena.prompt.length", len(prompt))
             except Exception:  # noqa: BLE001
                 pass
 
@@ -695,9 +788,7 @@ class EnvStepWrapper:
             if isinstance(action, dict):
                 eid = action.get("element_id")
                 if eid:
-                    span.set_attribute(
-                        WEBARENA_BROWSER_ELEMENT_ID, str(eid)
-                    )
+                    span.set_attribute(WEBARENA_BROWSER_ELEMENT_ID, str(eid))
 
             if capture_message_content():
                 span.set_attribute(
@@ -800,9 +891,7 @@ class ConstructAgentWrapper:
             f"create_agent {FRAMEWORK_NAME}", kind=SpanKind.INTERNAL
         ) as span:
             _set_common_attrs(span, "AGENT")
-            span.set_attribute(
-                GenAI.GEN_AI_OPERATION_NAME, "create_agent"
-            )
+            span.set_attribute(GenAI.GEN_AI_OPERATION_NAME, "create_agent")
             span.set_attribute(
                 GenAI.GEN_AI_AGENT_NAME,
                 truncate(f"{agent_type}:{instr_path}"),
@@ -815,7 +904,9 @@ class ConstructAgentWrapper:
             )
             try:
                 aid = hashlib.md5(
-                    f"{provider}:{model}:{instr_path}:{action_set}".encode("utf-8")
+                    f"{provider}:{model}:{instr_path}:{action_set}".encode(
+                        "utf-8"
+                    )
                 ).hexdigest()[:16]
                 span.set_attribute(GenAI.GEN_AI_AGENT_ID, aid)
             except Exception:  # noqa: BLE001
@@ -835,6 +926,7 @@ class ConstructAgentWrapper:
                 try:
                     if instr_path:
                         import pathlib  # noqa: PLC0415
+
                         p = pathlib.Path(instr_path)
                         if p.exists():
                             with open(p, "r", encoding="utf-8") as f:
@@ -843,7 +935,16 @@ class ConstructAgentWrapper:
                             if intro:
                                 span.set_attribute(
                                     "gen_ai.system_instructions",
-                                    _json_dumps([{"type": "text", "content": truncate_content(str(intro))}]),
+                                    _json_dumps(
+                                        [
+                                            {
+                                                "type": "text",
+                                                "content": truncate_content(
+                                                    str(intro)
+                                                ),
+                                            }
+                                        ]
+                                    ),
                                 )
                 except Exception:  # noqa: BLE001
                     pass
@@ -939,10 +1040,12 @@ class HuggingFaceCompletionWrapper:
                     )
                 except Exception:  # noqa: BLE001
                     pass
-            if capture_message_content() and isinstance(prompt, str) and prompt:
-                span.set_attribute(
-                    "input.value", truncate_content(prompt)
-                )
+            if (
+                capture_message_content()
+                and isinstance(prompt, str)
+                and prompt
+            ):
+                span.set_attribute("input.value", truncate_content(prompt))
 
             try:
                 generation = wrapped(*args, **kwargs)

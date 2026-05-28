@@ -72,9 +72,7 @@ def _iter_handler_classes() -> List[type]:
             MODEL_CONFIG_MAPPING,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.debug(
-            "bfclv4: cannot import MODEL_CONFIG_MAPPING: %s", exc
-        )
+        logger.debug("bfclv4: cannot import MODEL_CONFIG_MAPPING: %s", exc)
         return []
 
     classes: List[type] = []

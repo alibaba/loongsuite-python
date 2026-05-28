@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for the V0 wrapper classes to cover uncovered lines in v0_wrappers.py.
 
 Focuses on: RunControllerWrapper, RunAgentUntilDoneWrapper,
@@ -12,10 +26,13 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 
 def _spans_by_kind(exporter, kind: str):
@@ -44,7 +61,9 @@ def _reset():
 @pytest.fixture
 def instrumented(tracer_provider, stub_openhands_v0_modules):
     from opentelemetry.instrumentation.openhands import OpenHandsInstrumentor
-    from opentelemetry.instrumentation.openhands.internal import session_context
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
     inst = OpenHandsInstrumentor()
@@ -90,7 +109,9 @@ def test_run_controller_basic(instrumented):
     entry = entries[0]
     assert entry.attributes.get("gen_ai.session.id") == "rc-sid"
     assert entry.attributes.get("gen_ai.span.kind") == "ENTRY"
-    assert "hello world" in (entry.attributes.get("openhands.initial_message.preview") or "")
+    assert "hello world" in (
+        entry.attributes.get("openhands.initial_message.preview") or ""
+    )
 
 
 def test_run_controller_with_config_model(instrumented):
@@ -113,7 +134,10 @@ def test_run_controller_with_config_model(instrumented):
 
     asyncio.run(_scenario())
     entries = _spans_by_kind(exporter, "ENTRY")
-    assert any(e.attributes.get("gen_ai.request.model") == "qwen-turbo" for e in entries)
+    assert any(
+        e.attributes.get("gen_ai.request.model") == "qwen-turbo"
+        for e in entries
+    )
 
 
 def test_run_controller_no_sid(instrumented):
@@ -142,7 +166,9 @@ def test_run_controller_positional_args(instrumented):
 
     asyncio.run(_scenario())
     entries = _spans_by_kind(exporter, "ENTRY")
-    assert any(e.attributes.get("gen_ai.session.id") == "pos-sid" for e in entries)
+    assert any(
+        e.attributes.get("gen_ai.session.id") == "pos-sid" for e in entries
+    )
 
 
 def test_run_controller_exception(instrumented):
@@ -154,7 +180,9 @@ def test_run_controller_exception(instrumented):
     try:
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(
-                main_mod.run_controller(config=None, initial_user_action=None, sid="err-sid")
+                main_mod.run_controller(
+                    config=None, initial_user_action=None, sid="err-sid"
+                )
             )
     finally:
         main_mod._test_raise_cancelled = False
@@ -174,18 +202,33 @@ def test_run_agent_until_done_no_lifecycle(instrumented):
     import openhands.controller.agent_controller as ctrl_mod
     import openhands.core.loop as loop_mod
     import openhands.runtime.base as rt_base
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
 
     ctrl = ctrl_mod.AgentController.__new__(ctrl_mod.AgentController)
     ctrl.id = "no-lc-sid"
-    ctrl.agent = type("Agent", (), {
-        "name": "CodeActAgent",
-        "llm": type("LLM", (), {"config": type("C", (), {"model": "m"})(), "model": None})(),
-        "tools": [],
-    })()
-    ctrl.state = type("State", (), {"agent_state": type("AS", (), {"value": "running"})(), "history": []})()
+    ctrl.agent = type(
+        "Agent",
+        (),
+        {
+            "name": "CodeActAgent",
+            "llm": type(
+                "LLM",
+                (),
+                {"config": type("C", (), {"model": "m"})(), "model": None},
+            )(),
+            "tools": [],
+        },
+    )()
+    ctrl.state = type(
+        "State",
+        (),
+        {"agent_state": type("AS", (), {"value": "running"})(), "history": []},
+    )()
     ctrl._pending_action = None
     ctrl.is_delegate = False
     # Clear lifecycle flags so the wrapper takes the non-lifecycle path
@@ -261,7 +304,9 @@ def test_step_noop_when_not_running(instrumented):
     steps = _spans_by_kind(exporter, "STEP")
     # Warmup STEP is created at init time. The _step call should be noop.
     # The warmup is closed by close().
-    warmup_count = sum(1 for s in steps if s.attributes.get("gen_ai.react.round") == 1)
+    warmup_count = sum(
+        1 for s in steps if s.attributes.get("gen_ai.react.round") == 1
+    )
     assert warmup_count >= 1  # warmup STEP exists but actual _step was noop
 
 
@@ -310,7 +355,7 @@ def test_step_empty_body_detection(instrumented):
     ctrl = ctrl_mod.AgentController(sid="empty-sid")
 
     # Override _step to do nothing (no history growth)
-    original_step = type(ctrl)._step
+    type(ctrl)._step
 
     async def _noop_step(self):
         pass  # No history growth, no pending action
@@ -323,10 +368,12 @@ def test_step_empty_body_detection(instrumented):
         # First call: warmup step is reused (not consumed yet)
         # We need to consume the warmup, then the next call creates
         # a new step that does no work
-        await ctrl._step()  # This reuses warmup and does work (appends to history)
+        await (
+            ctrl._step()
+        )  # This reuses warmup and does work (appends to history)
         # Now create another step that does no work
         # Save current history len
-        pre_len = len(ctrl.state.history)
+        len(ctrl.state.history)
         # The next _step call will create a new STEP span
         # But the wrapped _step body will append to history (that's in the stub)
         # So to make it "empty", we need to prevent the append...
@@ -462,7 +509,7 @@ def test_runtime_sid_from_event_stream(instrumented):
     import openhands.controller.agent_controller as ctrl_mod
     import openhands.runtime.base as rt_base
 
-    ctrl = ctrl_mod.AgentController(sid="es-sid")
+    ctrl_mod.AgentController(sid="es-sid")
 
     class ESRuntime:
         sid = None
@@ -476,7 +523,9 @@ def test_runtime_sid_from_event_stream(instrumented):
     # We can't easily hook this through the instrumentor patching since
     # the wrapper is on rt_base.Runtime.run_action. Let's just test
     # the _runtime_sid helper directly.
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import _runtime_sid
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _runtime_sid,
+    )
 
     rt = ESRuntime()
     assert _runtime_sid(rt) == "es-sid"
@@ -502,7 +551,6 @@ def test_init_wrapper_delegate_skipped(instrumented):
     # The init wrapper already ran for ctrl. For ctrl2, calling __init__ manually:
     # Actually, since AgentController.__init__ is wrapped, we can test by
     # creating a controller with is_delegate=True set in init
-    original_init = ctrl_mod.AgentController.__init__
     # The delegate check happens after __init__ completes
     # So we need an agent that starts as delegate
     ctrl3 = ctrl_mod.AgentController(sid="delegate-sid-3")
@@ -538,7 +586,6 @@ def test_close_wrapper_captures_io(instrumented):
     """close() captures final I/O attributes on AGENT/ENTRY spans."""
     inst, exporter = instrumented
     import openhands.controller.agent_controller as ctrl_mod
-    import openhands.runtime.base as rt_base
 
     class MessageAction:
         content = "user request"
@@ -604,11 +651,10 @@ def test_llm_init_wrapper_idempotent(instrumented):
     inst, exporter = instrumented
     import openhands.llm.llm as llm_mod
 
-    llm = llm_mod.LLM()
-    first_completion = llm._completion
+    llm_mod.LLM()
 
     # Create another LLM instance — the init wrapper runs again
-    llm2 = llm_mod.LLM()
+    llm_mod.LLM()
     # Both should be bridged but the flag prevents double-wrapping
 
 
@@ -626,7 +672,7 @@ def test_llm_init_wrapper_no_completion(instrumented):
 
     llm_mod.LLM.__init__.__wrapped__ = _init_no_completion
     try:
-        llm = llm_mod.LLM()
+        llm_mod.LLM()
         # Should not raise
     finally:
         llm_mod.LLM.__init__.__wrapped__ = original_init
@@ -666,7 +712,10 @@ def test_tool_description_from_registry(instrumented):
     tools = _spans_by_kind(exporter, "TOOL")
     assert len(tools) >= 1
     tool = tools[0]
-    assert tool.attributes.get("gen_ai.tool.description") == "Run a bash command on the runtime sandbox."
+    assert (
+        tool.attributes.get("gen_ai.tool.description")
+        == "Run a bash command on the runtime sandbox."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -724,7 +773,9 @@ def test_multi_controller_isolated_agents(instrumented):
 
 
 def test_set_common():
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import _set_common
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _set_common,
+    )
 
     provider = TracerProvider()
     exporter = InMemorySpanExporter()
@@ -750,6 +801,7 @@ def test_open_entry_with_existing_context(instrumented):
     creates AGENT as child of the existing context (no new ENTRY)."""
     inst, exporter = instrumented
     import openhands.controller.agent_controller as ctrl_mod
+
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         store_context,
     )
@@ -774,7 +826,7 @@ def test_open_entry_with_existing_context(instrumented):
 
     # The controller should have reused the existing context
     # and not created a new lifecycle ENTRY
-    lifecycle_entry = getattr(ctrl, "_otel_oh_entry_span", "NOTFOUND")
+    getattr(ctrl, "_otel_oh_entry_span", "NOTFOUND")
     # After close, it's reset to None
     span.end()
 
@@ -793,49 +845,70 @@ def test_run_agent_until_done_non_lifecycle_with_tools(instrumented):
     import openhands.controller.agent_controller as ctrl_mod
     import openhands.core.loop as loop_mod
     import openhands.runtime.base as rt_base
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
 
     # Build controller WITHOUT lifecycle spans (no __init__ wrapper)
     ctrl = ctrl_mod.AgentController.__new__(ctrl_mod.AgentController)
     ctrl.id = "nlc-tools-sid"
-    ctrl.agent = type("Agent", (), {
-        "name": "CodeActAgent",
-        "llm": type("LLM", (), {
-            "config": type("C", (), {"model": "gpt-4"})(),
-            "model": None,
-        })(),
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "execute_bash",
-                    "description": "Run bash",
-                    "parameters": {"type": "object"},
+    ctrl.agent = type(
+        "Agent",
+        (),
+        {
+            "name": "CodeActAgent",
+            "llm": type(
+                "LLM",
+                (),
+                {
+                    "config": type("C", (), {"model": "gpt-4"})(),
+                    "model": None,
                 },
-            },
-        ],
-    })()
+            )(),
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "execute_bash",
+                        "description": "Run bash",
+                        "parameters": {"type": "object"},
+                    },
+                },
+            ],
+        },
+    )()
 
     class AS:
         value = "finished"
 
-    ctrl.state = type("State", (), {
-        "agent_state": AS(),
-        "history": [
-            type("MessageAction", (), {"content": "do it", "source": "user"})(),
-            type("AgentFinishAction", (), {
-                "final_thought": "all done",
-                "outputs": {},
-                "thought": None,
-                "tool_call_metadata": None,
-                "action": "finish",
-            })(),
-        ],
-        "last_error": None,
-        "iteration": 3,
-    })()
+    ctrl.state = type(
+        "State",
+        (),
+        {
+            "agent_state": AS(),
+            "history": [
+                type(
+                    "MessageAction", (), {"content": "do it", "source": "user"}
+                )(),
+                type(
+                    "AgentFinishAction",
+                    (),
+                    {
+                        "final_thought": "all done",
+                        "outputs": {},
+                        "thought": None,
+                        "tool_call_metadata": None,
+                        "action": "finish",
+                    },
+                )(),
+            ],
+            "last_error": None,
+            "iteration": 3,
+        },
+    )()
     ctrl._pending_action = None
     ctrl.is_delegate = False
     ctrl._otel_oh_owns_lifecycle = False
@@ -878,24 +951,39 @@ def test_run_agent_until_done_non_lifecycle_error(instrumented):
     import openhands.controller.agent_controller as ctrl_mod
     import openhands.core.loop as loop_mod
     import openhands.runtime.base as rt_base
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
 
     ctrl = ctrl_mod.AgentController.__new__(ctrl_mod.AgentController)
     ctrl.id = "nlc-err-sid"
-    ctrl.agent = type("Agent", (), {
-        "name": "CodeActAgent",
-        "llm": type("LLM", (), {
-            "config": type("C", (), {"model": "m"})(),
-            "model": None,
-        })(),
-        "tools": [],
-    })()
-    ctrl.state = type("State", (), {
-        "agent_state": type("AS", (), {"value": "running"})(),
-        "history": [],
-    })()
+    ctrl.agent = type(
+        "Agent",
+        (),
+        {
+            "name": "CodeActAgent",
+            "llm": type(
+                "LLM",
+                (),
+                {
+                    "config": type("C", (), {"model": "m"})(),
+                    "model": None,
+                },
+            )(),
+            "tools": [],
+        },
+    )()
+    ctrl.state = type(
+        "State",
+        (),
+        {
+            "agent_state": type("AS", (), {"value": "running"})(),
+            "history": [],
+        },
+    )()
     ctrl._pending_action = None
     ctrl.is_delegate = False
     ctrl._otel_oh_owns_lifecycle = False
@@ -910,9 +998,12 @@ def test_run_agent_until_done_non_lifecycle_error(instrumented):
 
     loop_mod._test_inner_callback = _boom
     try:
+
         async def _scenario():
             with pytest.raises(RuntimeError, match="agent crash"):
-                await loop_mod.run_agent_until_done(ctrl, rt_base.Runtime(), None, [])
+                await loop_mod.run_agent_until_done(
+                    ctrl, rt_base.Runtime(), None, []
+                )
 
         asyncio.run(_scenario())
     finally:
@@ -937,9 +1028,12 @@ def test_run_agent_until_done_lifecycle_path_error(instrumented):
 
     loop_mod._test_inner_callback = _boom
     try:
+
         async def _scenario():
             try:
-                await loop_mod.run_agent_until_done(ctrl, rt_base.Runtime(), None, [])
+                await loop_mod.run_agent_until_done(
+                    ctrl, rt_base.Runtime(), None, []
+                )
             except ValueError:
                 pass
             await ctrl.close()
@@ -984,19 +1078,19 @@ def test_run_agent_until_done_lifecycle_captures_io(instrumented):
 
 def test_close_entry_agent_direct_with_error():
     """Call _close_entry_and_agent_for_controller directly with error."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _close_entry_and_agent_for_controller,
-        _OWNS_FLAG,
-        _ENTRY_SPAN_ATTR,
-        _AGENT_SPAN_ATTR,
-        _AGENT_CTX_ATTR,
-        _STEP_SPAN_ATTR,
-    )
+    from opentelemetry import context as otel_context
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         clear_all,
         store_context,
     )
-    from opentelemetry import context as otel_context
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _AGENT_CTX_ATTR,
+        _AGENT_SPAN_ATTR,
+        _ENTRY_SPAN_ATTR,
+        _OWNS_FLAG,
+        _STEP_SPAN_ATTR,
+        _close_entry_and_agent_for_controller,
+    )
 
     clear_all()
     provider = TracerProvider()
@@ -1011,15 +1105,23 @@ def test_close_entry_agent_direct_with_error():
     class Ctrl:
         id = "close-err-sid"
         agent = None
-        state = type("State", (), {
-            "agent_state": type("AS", (), {"value": "error"})(),
-            "history": [
-                type("MessageAction", (), {
-                    "content": "hello",
-                    "source": "user",
-                })(),
-            ],
-        })()
+        state = type(
+            "State",
+            (),
+            {
+                "agent_state": type("AS", (), {"value": "error"})(),
+                "history": [
+                    type(
+                        "MessageAction",
+                        (),
+                        {
+                            "content": "hello",
+                            "source": "user",
+                        },
+                    )(),
+                ],
+            },
+        )()
 
     ctrl = Ctrl()
     setattr(ctrl, _OWNS_FLAG, True)
@@ -1071,18 +1173,18 @@ def test_close_entry_agent_no_owns_flag():
 
 def test_close_entry_agent_captures_history_and_agent_state():
     """_close_entry_and_agent closes with proper attribute capture."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _close_entry_and_agent_for_controller,
-        _OWNS_FLAG,
-        _ENTRY_SPAN_ATTR,
-        _AGENT_SPAN_ATTR,
-        _AGENT_CTX_ATTR,
-        _STEP_SPAN_ATTR,
-    )
+    from opentelemetry import context as otel_context
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         clear_all,
     )
-    from opentelemetry import context as otel_context
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _AGENT_CTX_ATTR,
+        _AGENT_SPAN_ATTR,
+        _ENTRY_SPAN_ATTR,
+        _OWNS_FLAG,
+        _STEP_SPAN_ATTR,
+        _close_entry_and_agent_for_controller,
+    )
 
     clear_all()
     provider = TracerProvider()
@@ -1095,22 +1197,40 @@ def test_close_entry_agent_captures_history_and_agent_state():
 
     class Ctrl:
         id = "hist-sid"
-        agent = type("Agent", (), {
-            "get_system_message": lambda self: type("SM", (), {"content": "sys"})(),
-        })()
-        state = type("State", (), {
-            "agent_state": type("AS", (), {"value": "finished"})(),
-            "history": [
-                type("MessageAction", (), {"content": "user msg", "source": "user"})(),
-                type("AgentFinishAction", (), {
-                    "final_thought": "done",
-                    "outputs": {},
-                    "thought": None,
-                    "tool_call_metadata": None,
-                    "action": "finish",
-                })(),
-            ],
-        })()
+        agent = type(
+            "Agent",
+            (),
+            {
+                "get_system_message": lambda self: type(
+                    "SM", (), {"content": "sys"}
+                )(),
+            },
+        )()
+        state = type(
+            "State",
+            (),
+            {
+                "agent_state": type("AS", (), {"value": "finished"})(),
+                "history": [
+                    type(
+                        "MessageAction",
+                        (),
+                        {"content": "user msg", "source": "user"},
+                    )(),
+                    type(
+                        "AgentFinishAction",
+                        (),
+                        {
+                            "final_thought": "done",
+                            "outputs": {},
+                            "thought": None,
+                            "tool_call_metadata": None,
+                            "action": "finish",
+                        },
+                    )(),
+                ],
+            },
+        )()
 
     ctrl = Ctrl()
     setattr(ctrl, _OWNS_FLAG, True)
@@ -1178,7 +1298,9 @@ def test_step_error_path(instrumented):
     error_steps = [s for s in steps if s.status.status_code.name == "ERROR"]
     assert len(error_steps) >= 1
     error_step = error_steps[0]
-    assert error_step.attributes.get("gen_ai.react.finish_reason") == "ValueError"
+    assert (
+        error_step.attributes.get("gen_ai.react.finish_reason") == "ValueError"
+    )
 
 
 def test_step_empty_body_no_work_detection(instrumented):
@@ -1205,12 +1327,14 @@ def test_step_empty_body_no_work_detection(instrumented):
     steps = _spans_by_kind(exporter, "STEP")
     # Find the empty step
     empty_steps = [
-        s for s in steps
-        if s.attributes.get("openhands.step.empty") is True
+        s for s in steps if s.attributes.get("openhands.step.empty") is True
     ]
     assert len(empty_steps) >= 1
     empty_step = empty_steps[0]
-    assert empty_step.attributes.get("gen_ai.react.finish_reason") == "noop_step_body"
+    assert (
+        empty_step.attributes.get("gen_ai.react.finish_reason")
+        == "noop_step_body"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1262,7 +1386,8 @@ def test_step_warmup_consumed_marker(instrumented):
 
     steps = _spans_by_kind(exporter, "STEP")
     warmup_consumed = [
-        s for s in steps
+        s
+        for s in steps
         if s.attributes.get("openhands.step.warmup_consumed") is True
     ]
     assert len(warmup_consumed) >= 1
@@ -1389,17 +1514,17 @@ def test_runtime_tool_with_path_preview(instrumented):
 
 def test_open_entry_agent_direct():
     """Call _open_entry_and_agent_for_controller directly and verify."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _open_entry_and_agent_for_controller,
-        _close_entry_and_agent_for_controller,
-        _OWNS_FLAG,
-        _ENTRY_SPAN_ATTR,
-        _AGENT_SPAN_ATTR,
-        _STEP_SPAN_ATTR,
-    )
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         clear_all,
         get_tool_registry,
+    )
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _AGENT_SPAN_ATTR,
+        _ENTRY_SPAN_ATTR,
+        _OWNS_FLAG,
+        _STEP_SPAN_ATTR,
+        _close_entry_and_agent_for_controller,
+        _open_entry_and_agent_for_controller,
     )
 
     clear_all()
@@ -1411,26 +1536,38 @@ def test_open_entry_agent_direct():
     class Ctrl:
         id = "open-direct-sid"
         is_delegate = False
-        agent = type("Agent", (), {
-            "name": "CodeActAgent",
-            "llm": type("LLM", (), {
-                "config": type("C", (), {"model": "qwen3"})(),
-                "model": None,
-            })(),
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "execute_bash",
-                        "description": "Run bash",
+        agent = type(
+            "Agent",
+            (),
+            {
+                "name": "CodeActAgent",
+                "llm": type(
+                    "LLM",
+                    (),
+                    {
+                        "config": type("C", (), {"model": "qwen3"})(),
+                        "model": None,
                     },
-                },
-            ],
-        })()
-        state = type("State", (), {
-            "agent_state": type("AS", (), {"value": "running"})(),
-            "history": [],
-        })()
+                )(),
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "execute_bash",
+                            "description": "Run bash",
+                        },
+                    },
+                ],
+            },
+        )()
+        state = type(
+            "State",
+            (),
+            {
+                "agent_state": type("AS", (), {"value": "running"})(),
+                "history": [],
+            },
+        )()
 
     ctrl = Ctrl()
     _open_entry_and_agent_for_controller(tracer, ctrl)
@@ -1462,8 +1599,8 @@ def test_open_entry_agent_direct():
 def test_open_entry_agent_idempotent():
     """Second call with _OWNS_FLAG=True is a no-op."""
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _open_entry_and_agent_for_controller,
         _OWNS_FLAG,
+        _open_entry_and_agent_for_controller,
     )
 
     provider = TracerProvider()
@@ -1489,14 +1626,14 @@ def test_open_entry_agent_idempotent():
 
 def test_open_entry_with_existing_context_no_new_entry():
     """When context already exists for sid, no new ENTRY is created."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _open_entry_and_agent_for_controller,
-        _close_entry_and_agent_for_controller,
-        _ENTRY_SPAN_ATTR,
-    )
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         clear_all,
         store_context,
+    )
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _ENTRY_SPAN_ATTR,
+        _close_entry_and_agent_for_controller,
+        _open_entry_and_agent_for_controller,
     )
     from opentelemetry.trace import set_span_in_context
 
@@ -1543,7 +1680,10 @@ def test_llm_patch_completion_with_unwrapped(instrumented):
 
     # Verify both are bridged
     assert getattr(llm._completion, "_otel_oh_ctx_bridged", False) is True
-    assert getattr(llm._completion_unwrapped, "_otel_oh_ctx_bridged", False) is True
+    assert (
+        getattr(llm._completion_unwrapped, "_otel_oh_ctx_bridged", False)
+        is True
+    )
 
     # Call the bridged functions to ensure they work
     result = llm._completion("test")
@@ -1596,7 +1736,10 @@ def test_llm_patch_completion_no_unwrapped(instrumented):
     # _completion should be bridged
     assert getattr(inst._completion, "_otel_oh_ctx_bridged", False) is True
     # _completion_unwrapped should remain absent
-    assert not hasattr(inst, "_completion_unwrapped") or inst._completion_unwrapped is None
+    assert (
+        not hasattr(inst, "_completion_unwrapped")
+        or inst._completion_unwrapped is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1665,8 +1808,9 @@ def test_close_wrapper_with_error(instrumented):
     agents = _spans_by_kind(exporter, "AGENT")
     entries = _spans_by_kind(exporter, "ENTRY")
     # The error should be propagated to the spans
-    assert any(a.status.status_code.name == "ERROR" for a in agents) or \
-           any(e.status.status_code.name == "ERROR" for e in entries)
+    assert any(a.status.status_code.name == "ERROR" for a in agents) or any(
+        e.status.status_code.name == "ERROR" for e in entries
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1748,6 +1892,7 @@ def test_action_event_to_parts_dict_args():
                     }
                 }
             ]
+
         model_response = _MR()
 
     class Ev:
@@ -1854,6 +1999,7 @@ def test_tool_call_arguments_model_response_dict_choice():
                     }
                 }
             ]
+
         model_response = _MR()
 
     class Action:
@@ -1874,7 +2020,14 @@ def test_tool_call_arguments_model_response_no_tool_calls():
         tool_call_id = "tc1"
 
         class _MR:
-            choices = [type("Ch", (), {"message": type("M", (), {"tool_calls": None})()})()]
+            choices = [
+                type(
+                    "Ch",
+                    (),
+                    {"message": type("M", (), {"tool_calls": None})()},
+                )()
+            ]
+
         model_response = _MR()
 
     class Action:
@@ -1942,6 +2095,7 @@ def test_agent_to_system_instructions_method_raises():
 def test_outer_spans_disabled(instrumented):
     """When OUTER_SPANS is False, no ENTRY/AGENT/STEP/TOOL spans are created."""
     import opentelemetry.instrumentation.openhands.config as cfg
+
     inst, exporter = instrumented
     import openhands.controller.agent_controller as ctrl_mod
     import openhands.runtime.base as rt_base
@@ -1950,6 +2104,7 @@ def test_outer_spans_disabled(instrumented):
     cfg.OTEL_INSTRUMENTATION_OPENHANDS_OUTER_SPANS = False
     # Also need to update the module-level import in v0_wrappers
     import opentelemetry.instrumentation.openhands.internal.v0_wrappers as vw
+
     vw.OTEL_INSTRUMENTATION_OPENHANDS_OUTER_SPANS = False
     try:
         ctrl = ctrl_mod.AgentController(sid="disabled-sid")
@@ -1980,6 +2135,7 @@ def test_outer_spans_disabled_run_controller(instrumented):
     """run_controller with OUTER_SPANS=False passes through."""
     import opentelemetry.instrumentation.openhands.config as cfg
     import opentelemetry.instrumentation.openhands.internal.v0_wrappers as vw
+
     inst, exporter = instrumented
     import openhands.core.main as main_mod
 
@@ -1987,13 +2143,17 @@ def test_outer_spans_disabled_run_controller(instrumented):
     cfg.OTEL_INSTRUMENTATION_OPENHANDS_OUTER_SPANS = False
     vw.OTEL_INSTRUMENTATION_OPENHANDS_OUTER_SPANS = False
     try:
+
         async def _go():
-            await main_mod.run_controller(config=None, initial_user_action=None, sid="dis-rc")
+            await main_mod.run_controller(
+                config=None, initial_user_action=None, sid="dis-rc"
+            )
 
         asyncio.run(_go())
         # No ENTRY span from run_controller
         entries = [
-            s for s in exporter.get_finished_spans()
+            s
+            for s in exporter.get_finished_spans()
             if s.attributes.get("gen_ai.span.kind") == "ENTRY"
         ]
         assert len(entries) == 0
@@ -2006,11 +2166,15 @@ def test_outer_spans_disabled_run_agent_until_done(instrumented):
     """run_agent_until_done with OUTER_SPANS=False passes through."""
     import opentelemetry.instrumentation.openhands.config as cfg
     import opentelemetry.instrumentation.openhands.internal.v0_wrappers as vw
+
     inst, exporter = instrumented
+    import openhands.controller.agent_controller as ctrl_mod
     import openhands.core.loop as loop_mod
     import openhands.runtime.base as rt_base
-    import openhands.controller.agent_controller as ctrl_mod
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
     original = cfg.OTEL_INSTRUMENTATION_OPENHANDS_OUTER_SPANS
@@ -2025,11 +2189,14 @@ def test_outer_spans_disabled_run_agent_until_done(instrumented):
         ctrl._otel_oh_agent_ctx = None
 
         async def _go():
-            await loop_mod.run_agent_until_done(ctrl, rt_base.Runtime(), None, [])
+            await loop_mod.run_agent_until_done(
+                ctrl, rt_base.Runtime(), None, []
+            )
 
         asyncio.run(_go())
         agents = [
-            s for s in exporter.get_finished_spans()
+            s
+            for s in exporter.get_finished_spans()
             if s.attributes.get("gen_ai.span.kind") == "AGENT"
         ]
         assert len(agents) == 0
@@ -2052,7 +2219,10 @@ def test_non_lifecycle_attr_based_tools(instrumented):
     import openhands.controller.agent_controller as ctrl_mod
     import openhands.core.loop as loop_mod
     import openhands.runtime.base as rt_base
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
 
@@ -2067,18 +2237,30 @@ def test_non_lifecycle_attr_based_tools(instrumented):
 
     ctrl = ctrl_mod.AgentController.__new__(ctrl_mod.AgentController)
     ctrl.id = "attr-tools-sid"
-    ctrl.agent = type("Agent", (), {
-        "name": "CodeActAgent",
-        "llm": type("LLM", (), {
-            "config": type("C", (), {"model": "m"})(),
-            "model": None,
-        })(),
-        "tools": [Tool()],
-    })()
-    ctrl.state = type("State", (), {
-        "agent_state": type("AS", (), {"value": "running"})(),
-        "history": [],
-    })()
+    ctrl.agent = type(
+        "Agent",
+        (),
+        {
+            "name": "CodeActAgent",
+            "llm": type(
+                "LLM",
+                (),
+                {
+                    "config": type("C", (), {"model": "m"})(),
+                    "model": None,
+                },
+            )(),
+            "tools": [Tool()],
+        },
+    )()
+    ctrl.state = type(
+        "State",
+        (),
+        {
+            "agent_state": type("AS", (), {"value": "running"})(),
+            "history": [],
+        },
+    )()
     ctrl._pending_action = None
     ctrl.is_delegate = False
     ctrl._otel_oh_owns_lifecycle = False
@@ -2105,13 +2287,13 @@ def test_non_lifecycle_attr_based_tools(instrumented):
 
 def test_open_entry_agent_attr_based_tools():
     """_open_entry_and_agent_for_controller with attr-based tools."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _open_entry_and_agent_for_controller,
-        _close_entry_and_agent_for_controller,
-    )
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         clear_all,
         get_tool_registry,
+    )
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _close_entry_and_agent_for_controller,
+        _open_entry_and_agent_for_controller,
     )
 
     clear_all()
@@ -2132,15 +2314,23 @@ def test_open_entry_agent_attr_based_tools():
     class Ctrl:
         id = "attr-open-sid"
         is_delegate = False
-        agent = type("Agent", (), {
-            "name": "A",
-            "llm": None,
-            "tools": [Tool()],
-        })()
-        state = type("State", (), {
-            "agent_state": None,
-            "history": [],
-        })()
+        agent = type(
+            "Agent",
+            (),
+            {
+                "name": "A",
+                "llm": None,
+                "tools": [Tool()],
+            },
+        )()
+        state = type(
+            "State",
+            (),
+            {
+                "agent_state": None,
+                "history": [],
+            },
+        )()
 
     ctrl = Ctrl()
     _open_entry_and_agent_for_controller(tracer, ctrl)
@@ -2163,11 +2353,12 @@ def test_open_entry_agent_attr_based_tools():
 def test_runtime_tool_with_attr_based_tool_def(instrumented):
     """TOOL span gets description from attr-based tool definition."""
     inst, exporter = instrumented
+    import openhands.controller.agent_controller as ctrl_mod
+    import openhands.runtime.base as rt_base
+
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         store_tool_registry,
     )
-    import openhands.controller.agent_controller as ctrl_mod
-    import openhands.runtime.base as rt_base
 
     ctrl = ctrl_mod.AgentController(sid="attr-def-sid")
     runtime = rt_base.Runtime(sid="attr-def-sid")
@@ -2203,7 +2394,9 @@ def test_runtime_tool_with_attr_based_tool_def(instrumented):
     tools = _spans_by_kind(exporter, "TOOL")
     assert len(tools) >= 1
     tool = tools[0]
-    assert tool.attributes.get("gen_ai.tool.description") == "Run a bash command"
+    assert (
+        tool.attributes.get("gen_ai.tool.description") == "Run a bash command"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2215,12 +2408,15 @@ def test_runtime_tool_with_attr_based_tool_def(instrumented):
 
 def test_open_entry_agent_entry_start_failure():
     """_open_entry_and_agent handles ENTRY span creation failure."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _open_entry_and_agent_for_controller,
-        _OWNS_FLAG,
-    )
-    from opentelemetry.instrumentation.openhands.internal.session_context import clear_all
     from unittest.mock import MagicMock
+
+    from opentelemetry.instrumentation.openhands.internal.session_context import (
+        clear_all,
+    )
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _OWNS_FLAG,
+        _open_entry_and_agent_for_controller,
+    )
 
     clear_all()
 
@@ -2244,11 +2440,13 @@ def test_open_entry_agent_entry_start_failure():
 
 def test_open_entry_agent_agent_start_failure():
     """_open_entry_and_agent handles AGENT span creation failure."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _open_entry_and_agent_for_controller,
-        _OWNS_FLAG,
+    from opentelemetry.instrumentation.openhands.internal.session_context import (
+        clear_all,
     )
-    from opentelemetry.instrumentation.openhands.internal.session_context import clear_all
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _OWNS_FLAG,
+        _open_entry_and_agent_for_controller,
+    )
 
     clear_all()
     provider = TracerProvider()
@@ -2256,7 +2454,7 @@ def test_open_entry_agent_agent_start_failure():
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     real_tracer = provider.get_tracer(__name__)
 
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import MagicMock
 
     call_count = [0]
     entry_span = real_tracer.start_span("test-entry")
@@ -2293,11 +2491,12 @@ def test_open_entry_agent_agent_start_failure():
 
 def test_open_entry_agent_setattr_failure():
     """_open_entry_and_agent cleans up spans when setattr fails."""
+    from opentelemetry.instrumentation.openhands.internal.session_context import (
+        clear_all,
+    )
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _open_entry_and_agent_for_controller,
-        _OWNS_FLAG,
     )
-    from opentelemetry.instrumentation.openhands.internal.session_context import clear_all
 
     clear_all()
     provider = TracerProvider()
@@ -2312,12 +2511,23 @@ def test_open_entry_agent_setattr_failure():
         def __init__(self):
             self.id = "slot-fail-sid"
             self.is_delegate = False
-            self.agent = type("Agent", (), {
-                "name": "A", "llm": None, "tools": [],
-            })()
-            self.state = type("State", (), {
-                "agent_state": None, "history": [],
-            })()
+            self.agent = type(
+                "Agent",
+                (),
+                {
+                    "name": "A",
+                    "llm": None,
+                    "tools": [],
+                },
+            )()
+            self.state = type(
+                "State",
+                (),
+                {
+                    "agent_state": None,
+                    "history": [],
+                },
+            )()
 
     ctrl = SlottedCtrl()
     # Should not raise — catches the AttributeError from setattr
@@ -2337,17 +2547,20 @@ def test_open_entry_agent_setattr_failure():
 
 def test_close_entry_agent_with_broken_span():
     """_close handles gracefully when span methods raise."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _close_entry_and_agent_for_controller,
-        _OWNS_FLAG,
-        _ENTRY_SPAN_ATTR,
-        _AGENT_SPAN_ATTR,
-        _AGENT_CTX_ATTR,
-        _STEP_SPAN_ATTR,
-    )
-    from opentelemetry.instrumentation.openhands.internal.session_context import clear_all
     from unittest.mock import MagicMock
+
     from opentelemetry import context as otel_context
+    from opentelemetry.instrumentation.openhands.internal.session_context import (
+        clear_all,
+    )
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _AGENT_CTX_ATTR,
+        _AGENT_SPAN_ATTR,
+        _ENTRY_SPAN_ATTR,
+        _OWNS_FLAG,
+        _STEP_SPAN_ATTR,
+        _close_entry_and_agent_for_controller,
+    )
 
     clear_all()
 
@@ -2372,10 +2585,14 @@ def test_close_entry_agent_with_broken_span():
     class Ctrl:
         id = "broken-span-sid"
         agent = None
-        state = type("State", (), {
-            "agent_state": type("AS", (), {"value": "running"})(),
-            "history": [],
-        })()
+        state = type(
+            "State",
+            (),
+            {
+                "agent_state": type("AS", (), {"value": "running"})(),
+                "history": [],
+            },
+        )()
 
     ctrl = Ctrl()
     setattr(ctrl, _OWNS_FLAG, True)
@@ -2406,8 +2623,9 @@ def test_close_entry_agent_with_broken_span():
 def test_init_wrapper_open_entry_failure(instrumented):
     """Init wrapper logs error when _open_entry_and_agent fails."""
     inst, exporter = instrumented
-    import openhands.controller.agent_controller as ctrl_mod
     from unittest.mock import patch
+
+    import openhands.controller.agent_controller as ctrl_mod
 
     # Make _open_entry_and_agent raise
     with patch(
@@ -2415,7 +2633,7 @@ def test_init_wrapper_open_entry_failure(instrumented):
         side_effect=RuntimeError("open failed"),
     ):
         # Should not raise — error is caught and logged
-        ctrl = ctrl_mod.AgentController(sid="init-fail-sid")
+        ctrl_mod.AgentController(sid="init-fail-sid")
 
 
 # ---------------------------------------------------------------------------
@@ -2427,8 +2645,9 @@ def test_init_wrapper_open_entry_failure(instrumented):
 def test_close_wrapper_close_entry_failure(instrumented):
     """Close wrapper logs error when _close_entry_and_agent fails."""
     inst, exporter = instrumented
-    import openhands.controller.agent_controller as ctrl_mod
     from unittest.mock import patch
+
+    import openhands.controller.agent_controller as ctrl_mod
 
     ctrl = ctrl_mod.AgentController(sid="close-fail-sid")
 
@@ -2436,6 +2655,7 @@ def test_close_wrapper_close_entry_failure(instrumented):
         "opentelemetry.instrumentation.openhands.internal.v0_wrappers._close_entry_and_agent_for_controller",
         side_effect=RuntimeError("close failed"),
     ):
+
         async def _go():
             # Should not raise — error is caught and logged
             await ctrl.close()
@@ -2560,7 +2780,10 @@ def test_history_to_input_messages_schema_action_event():
     result = _history_to_input_messages_schema([CmdRunAction()])
     assert result[0]["role"] == "assistant"
     parts = result[0]["parts"]
-    assert any(p.get("type") == "text" and "running command" in p.get("content", "") for p in parts)
+    assert any(
+        p.get("type") == "text" and "running command" in p.get("content", "")
+        for p in parts
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2644,11 +2867,13 @@ def test_init_wrapper_delegate_at_init_time(instrumented):
     entries = _spans_by_kind(exporter, "ENTRY")
     agents = _spans_by_kind(exporter, "AGENT")
     delegate_entries = [
-        e for e in entries
+        e
+        for e in entries
         if e.attributes.get("gen_ai.session.id") == "delegate-init-sid"
     ]
     delegate_agents = [
-        a for a in agents
+        a
+        for a in agents
         if a.attributes.get("gen_ai.session.id") == "delegate-init-sid"
     ]
     assert len(delegate_entries) == 0
@@ -2670,11 +2895,11 @@ def test_init_wrapper_init_raises(instrumented):
 
     class BadInit:
         """Trigger init failure by patching."""
+
         pass
 
     # Actually we need the stub's __init__ to raise. Since we can't easily
     # modify it, let's test via a subclass.
-    original_init = ctrl_mod.AgentController.__init__
 
     # Let's test the exception re-raise by creating a controller that fails
     # Actually the init wrapper is `type(ctrl).__init__` which is wrapped.
@@ -2693,16 +2918,16 @@ def test_init_wrapper_init_raises(instrumented):
 
 def test_runtime_run_action_fallback_span():
     """When start_span with explicit context fails, falls back to AttachedSession."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        RuntimeRunActionWrapper,
-        _set_common,
-    )
+    from unittest.mock import MagicMock
+
+    from opentelemetry import context as otel_context
     from opentelemetry.instrumentation.openhands.internal.session_context import (
         clear_all,
         store_context,
     )
-    from opentelemetry import context as otel_context
-    from unittest.mock import MagicMock, patch
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        RuntimeRunActionWrapper,
+    )
 
     clear_all()
     provider = TracerProvider()
@@ -2737,6 +2962,7 @@ def test_runtime_run_action_fallback_span():
                 content = ""
                 observation = "run"
                 error = None
+
             return Obs()
 
     store_context("fallback-rt-sid", otel_context.get_current())
@@ -2744,7 +2970,7 @@ def test_runtime_run_action_fallback_span():
     # Call wrapper directly — wrapping protocol:
     # wrapper(wrapped, instance, args, kwargs)
     runtime = Runtime()
-    result = wrapper(runtime.run_action, runtime, (Action(),), {})
+    wrapper(runtime.run_action, runtime, (Action(),), {})
 
     # Should have created a fallback span via AttachedSession
     assert call_count[0] == 2  # First failed, second succeeded
@@ -2758,11 +2984,13 @@ def test_runtime_run_action_fallback_span():
 
 def test_non_lifecycle_attr_based_tools_nameless():
     """Attr-based tool without name is skipped in tool definitions."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _open_entry_and_agent_for_controller,
-        _close_entry_and_agent_for_controller,
+    from opentelemetry.instrumentation.openhands.internal.session_context import (
+        clear_all,
     )
-    from opentelemetry.instrumentation.openhands.internal.session_context import clear_all
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _close_entry_and_agent_for_controller,
+        _open_entry_and_agent_for_controller,
+    )
 
     clear_all()
     provider = TracerProvider()
@@ -2790,11 +3018,15 @@ def test_non_lifecycle_attr_based_tools_nameless():
     class Ctrl:
         id = "nameless-sid"
         is_delegate = False
-        agent = type("Agent", (), {
-            "name": "A",
-            "llm": None,
-            "tools": [NamelessTool(), NamedTool()],
-        })()
+        agent = type(
+            "Agent",
+            (),
+            {
+                "name": "A",
+                "llm": None,
+                "tools": [NamelessTool(), NamedTool()],
+            },
+        )()
         state = type("State", (), {"agent_state": None, "history": []})()
 
     ctrl = Ctrl()
@@ -2802,13 +3034,15 @@ def test_non_lifecycle_attr_based_tools_nameless():
 
     # Only valid_tool should appear in definitions
     finished = exporter.get_finished_spans()
-    agent_spans = [s for s in finished if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+    [s for s in finished if s.attributes.get("gen_ai.span.kind") == "AGENT"]
     _close_entry_and_agent_for_controller(ctrl)
 
     # The AGENT span should have tool_definitions with only valid_tool
     # (opened span won't be in finished_spans until ended — use close first)
     finished2 = exporter.get_finished_spans()
-    agent_spans2 = [s for s in finished2 if s.attributes.get("gen_ai.span.kind") == "AGENT"]
+    agent_spans2 = [
+        s for s in finished2 if s.attributes.get("gen_ai.span.kind") == "AGENT"
+    ]
     assert len(agent_spans2) >= 1
     defs = agent_spans2[0].attributes.get("gen_ai.tool.definitions", "")
     assert "valid_tool" in defs
@@ -2828,24 +3062,36 @@ def test_will_step_be_noop_state_check():
     )
 
     class Ctrl:
-        state = type("S", (), {
-            "agent_state": type("AS", (), {"value": "finished"})(),
-        })()
+        state = type(
+            "S",
+            (),
+            {
+                "agent_state": type("AS", (), {"value": "finished"})(),
+            },
+        )()
 
     assert AgentControllerStepWrapper._will_step_be_noop(Ctrl()) is True
 
     class Ctrl2:
-        state = type("S", (), {
-            "agent_state": type("AS", (), {"value": "running"})(),
-        })()
+        state = type(
+            "S",
+            (),
+            {
+                "agent_state": type("AS", (), {"value": "running"})(),
+            },
+        )()
         _pending_action_info = ("action", "ts")
 
     assert AgentControllerStepWrapper._will_step_be_noop(Ctrl2()) is True
 
     class Ctrl3:
-        state = type("S", (), {
-            "agent_state": type("AS", (), {"value": "running"})(),
-        })()
+        state = type(
+            "S",
+            (),
+            {
+                "agent_state": type("AS", (), {"value": "running"})(),
+            },
+        )()
 
     assert AgentControllerStepWrapper._will_step_be_noop(Ctrl3()) is False
 
@@ -2866,7 +3112,9 @@ def test_snapshot_for_work_detection_exceptions():
         def state(self):
             raise RuntimeError("broken")
 
-    hl, pid = AgentControllerStepWrapper._snapshot_for_work_detection(BrokenState())
+    hl, pid = AgentControllerStepWrapper._snapshot_for_work_detection(
+        BrokenState()
+    )
     assert hl == 0
     assert pid is None
 
@@ -2878,7 +3126,9 @@ def test_snapshot_for_work_detection_exceptions():
         def _pending_action_info(self):
             raise RuntimeError("pending broken")
 
-    hl, pid = AgentControllerStepWrapper._snapshot_for_work_detection(BrokenPending())
+    hl, pid = AgentControllerStepWrapper._snapshot_for_work_detection(
+        BrokenPending()
+    )
     assert hl == 3
     assert pid is None
 
@@ -2901,25 +3151,50 @@ def test_tool_call_arguments_tc_id_mismatch():
 
         class _MR:
             choices = [
-                type("Ch", (), {
-                    "message": type("M", (), {
-                        "tool_calls": [
-                            type("TC", (), {
-                                "id": "other_id",  # doesn't match
-                                "function": type("Fn", (), {
-                                    "arguments": '{"cmd": "wrong"}',
-                                })(),
-                            })(),
-                            type("TC", (), {
-                                "id": "wanted_id",  # matches
-                                "function": type("Fn", (), {
-                                    "arguments": '{"cmd": "right"}',
-                                })(),
-                            })(),
-                        ],
-                    })(),
-                })(),
+                type(
+                    "Ch",
+                    (),
+                    {
+                        "message": type(
+                            "M",
+                            (),
+                            {
+                                "tool_calls": [
+                                    type(
+                                        "TC",
+                                        (),
+                                        {
+                                            "id": "other_id",  # doesn't match
+                                            "function": type(
+                                                "Fn",
+                                                (),
+                                                {
+                                                    "arguments": '{"cmd": "wrong"}',
+                                                },
+                                            )(),
+                                        },
+                                    )(),
+                                    type(
+                                        "TC",
+                                        (),
+                                        {
+                                            "id": "wanted_id",  # matches
+                                            "function": type(
+                                                "Fn",
+                                                (),
+                                                {
+                                                    "arguments": '{"cmd": "right"}',
+                                                },
+                                            )(),
+                                        },
+                                    )(),
+                                ],
+                            },
+                        )(),
+                    },
+                )(),
             ]
+
         model_response = _MR()
 
     class Action:
@@ -2958,12 +3233,13 @@ def test_llm_patch_completion_none():
 
 def test_close_open_step_span_end_fails():
     """_close_open_step handles span.end() failure."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _close_open_step,
-        _STEP_SPAN_ATTR,
-        _AGENT_CTX_ATTR,
-    )
     from unittest.mock import MagicMock
+
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _AGENT_CTX_ATTR,
+        _STEP_SPAN_ATTR,
+        _close_open_step,
+    )
 
     bad_span = MagicMock()
     bad_span.end.side_effect = RuntimeError("end failed")
@@ -2989,15 +3265,15 @@ def test_close_open_step_span_end_fails():
 
 def test_llm_init_wrapper_patch_completion_raises():
     """LLMInitWrapper.__call__ handles _patch_completion failure."""
+    from unittest.mock import MagicMock, patch
+
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         LLMInitWrapper,
     )
-    from unittest.mock import MagicMock, patch
 
     tracer = MagicMock()
     wrapper = LLMInitWrapper(tracer)
 
-    call_count = [0]
     original_result = object()
 
     def _wrapped(*a, **kw):
@@ -3025,10 +3301,8 @@ def test_llm_init_wrapper_patch_completion_raises():
 def test_init_wrapper_init_body_raises(instrumented):
     """Init wrapper re-raises when original __init__ raises."""
     inst, exporter = instrumented
-    import openhands.controller.agent_controller as ctrl_mod
 
     # Save the current _step counter
-    initial_close = ctrl_mod.AgentController.close_calls
 
     # Make the controller raise during init via our flag mechanism
     # Actually the conftest stub __init__ doesn't support error injection.
@@ -3041,10 +3315,11 @@ def test_init_wrapper_init_body_raises(instrumented):
     # If wrapped raises, the except re-raises.
     # Since we can't easily make the stub __init__ raise without modifying conftest,
     # let's test the wrapper class directly.
+    from unittest.mock import MagicMock
+
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         AgentControllerInitWrapper,
     )
-    from unittest.mock import MagicMock
 
     tracer = MagicMock()
     wrapper = AgentControllerInitWrapper(tracer)
@@ -3066,12 +3341,12 @@ def test_init_wrapper_init_body_raises(instrumented):
 
 def test_close_open_step_setattr_fails():
     """_close_open_step handles setattr failure for step span."""
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _close_open_step,
-        _STEP_SPAN_ATTR,
-        _AGENT_CTX_ATTR,
-    )
     from unittest.mock import MagicMock
+
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _STEP_SPAN_ATTR,
+        _close_open_step,
+    )
 
     class SlottedCtrl:
         __slots__ = ("id", _STEP_SPAN_ATTR)
@@ -3098,7 +3373,10 @@ def test_non_lifecycle_nameless_attr_tool(instrumented):
     import openhands.controller.agent_controller as ctrl_mod
     import openhands.core.loop as loop_mod
     import openhands.runtime.base as rt_base
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
 
@@ -3121,15 +3399,27 @@ def test_non_lifecycle_nameless_attr_tool(instrumented):
 
     ctrl = ctrl_mod.AgentController.__new__(ctrl_mod.AgentController)
     ctrl.id = "nameless-nlc-sid"
-    ctrl.agent = type("Agent", (), {
-        "name": "A",
-        "llm": type("L", (), {"config": type("C", (), {"model": "m"})(), "model": None})(),
-        "tools": [NamelessTool(), NamedTool()],
-    })()
-    ctrl.state = type("State", (), {
-        "agent_state": type("AS", (), {"value": "running"})(),
-        "history": [],
-    })()
+    ctrl.agent = type(
+        "Agent",
+        (),
+        {
+            "name": "A",
+            "llm": type(
+                "L",
+                (),
+                {"config": type("C", (), {"model": "m"})(), "model": None},
+            )(),
+            "tools": [NamelessTool(), NamedTool()],
+        },
+    )()
+    ctrl.state = type(
+        "State",
+        (),
+        {
+            "agent_state": type("AS", (), {"value": "running"})(),
+            "history": [],
+        },
+    )()
     ctrl._pending_action = None
     ctrl.is_delegate = False
     ctrl._otel_oh_owns_lifecycle = False
@@ -3387,6 +3677,7 @@ def test_observation_to_result_none():
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _observation_to_result,
     )
+
     assert _observation_to_result(None) == {}
 
 
@@ -3576,6 +3867,7 @@ def test_first_preview_field_none():
 
 def test_final_state_to_output_with_agent_finish():
     import json
+
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _final_state_to_output,
     )
@@ -3604,6 +3896,7 @@ def test_final_state_to_output_with_agent_finish():
 
 def test_final_state_to_output_with_error():
     import json
+
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _final_state_to_output,
     )
@@ -3627,6 +3920,7 @@ def test_final_state_to_output_none():
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _final_state_to_output,
     )
+
     assert _final_state_to_output(None) == ""
 
 
@@ -3638,6 +3932,7 @@ def test_final_state_to_output_none():
 
 def test_state_to_input_messages_observation_events():
     import json
+
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _state_to_input_messages,
     )
@@ -3662,6 +3957,7 @@ def test_state_to_input_messages_observation_events():
 
 def test_state_to_input_messages_message_action():
     import json
+
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _state_to_input_messages,
     )
@@ -3698,7 +3994,6 @@ def test_state_to_input_messages_non_list():
 
 
 def test_agent_to_system_instructions_via_method():
-    import json
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _agent_to_system_instructions,
     )
@@ -3719,7 +4014,6 @@ def test_agent_to_system_instructions_via_method():
 
 
 def test_agent_to_system_instructions_via_history():
-    import json
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _agent_to_system_instructions,
     )
@@ -3748,7 +4042,10 @@ def test_step_agent_ctx_fallback_from_session(instrumented):
     """When AGENT ctx attr is None but session has context, use session context."""
     inst, exporter = instrumented
     import openhands.controller.agent_controller as ctrl_mod
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     ctrl = ctrl_mod.AgentController(sid="ctx-fallback-sid")
     # Ensure warmup consumed so next step creates new span
@@ -3845,16 +4142,24 @@ def test_history_to_input_messages_schema_folding():
     )
 
     # Class names must end with "Action" for the code to detect them properly
-    CmdRunAction = type("CmdRunAction", (), {
-        "thought": "first thought",
-        "action": "run",
-        "tool_call_metadata": None,
-    })
-    CmdRunActionSecond = type("CmdRunAction", (), {
-        "thought": "second thought",
-        "action": "run",
-        "tool_call_metadata": None,
-    })
+    CmdRunAction = type(
+        "CmdRunAction",
+        (),
+        {
+            "thought": "first thought",
+            "action": "run",
+            "tool_call_metadata": None,
+        },
+    )
+    CmdRunActionSecond = type(
+        "CmdRunAction",
+        (),
+        {
+            "thought": "second thought",
+            "action": "run",
+            "tool_call_metadata": None,
+        },
+    )
 
     history = [CmdRunAction(), CmdRunActionSecond()]
     result = _history_to_input_messages_schema(history)
@@ -3930,16 +4235,17 @@ def test_init_wrapper_with_populated_history(instrumented):
 
 def test_open_entry_agent_with_history():
     """When called directly with populated history, entry_input_messages is set."""
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
+    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
+        _close_entry_and_agent_for_controller,
+        _open_entry_and_agent_for_controller,
+    )
     from opentelemetry.sdk.trace import TracerProvider as _TP
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor as _SSP
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
         InMemorySpanExporter as _IME,
-    )
-
-    from opentelemetry.instrumentation.openhands.internal import session_context
-    from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
-        _close_entry_and_agent_for_controller,
-        _open_entry_and_agent_for_controller,
     )
 
     session_context.clear_all()
@@ -3949,34 +4255,56 @@ def test_open_entry_agent_with_history():
     tracer = prov.get_tracer("test")
 
     # Build controller with a populated history containing user message
-    MessageAction = type("MessageAction", (), {
-        "source": "user",
-        "content": "hello world",
-        "message": None,
-    })
+    MessageAction = type(
+        "MessageAction",
+        (),
+        {
+            "source": "user",
+            "content": "hello world",
+            "message": None,
+        },
+    )
 
-    ctrl = type("Ctrl", (), {
-        "id": "hist-entry-sid",
-        "agent": type("Agent", (), {
-            "name": "TestAgent",
-            "llm": type("LLM", (), {
-                "config": type("Cfg", (), {"model": "gpt-4"})(),
-                "model": None,
-            })(),
-            "tools": [],
-        })(),
-        "state": type("State", (), {
-            "agent_state": type("AS", (), {"value": "running"})(),
-            "history": [MessageAction()],
-        })(),
-        "is_delegate": False,
-    })()
+    ctrl = type(
+        "Ctrl",
+        (),
+        {
+            "id": "hist-entry-sid",
+            "agent": type(
+                "Agent",
+                (),
+                {
+                    "name": "TestAgent",
+                    "llm": type(
+                        "LLM",
+                        (),
+                        {
+                            "config": type("Cfg", (), {"model": "gpt-4"})(),
+                            "model": None,
+                        },
+                    )(),
+                    "tools": [],
+                },
+            )(),
+            "state": type(
+                "State",
+                (),
+                {
+                    "agent_state": type("AS", (), {"value": "running"})(),
+                    "history": [MessageAction()],
+                },
+            )(),
+            "is_delegate": False,
+        },
+    )()
 
     _open_entry_and_agent_for_controller(tracer, ctrl)
     _close_entry_and_agent_for_controller(ctrl)
 
     spans = exp.get_finished_spans()
-    entries = [s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"]
+    entries = [
+        s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+    ]
     assert len(entries) == 1
     # The ENTRY span should have input messages set
     input_msgs = entries[0].attributes.get("gen_ai.input.messages", "")

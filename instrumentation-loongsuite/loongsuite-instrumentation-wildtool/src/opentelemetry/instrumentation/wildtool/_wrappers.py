@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Wrapper classes for WildToolBench instrumentation.
 
 Each wrapper corresponds to one patch point and manages the lifecycle
@@ -309,7 +323,7 @@ def _extract_output_from_inference_log(inference_log):
 
 def _step_log_sort_key(key: str) -> int:
     try:
-        return int(key[len("step_"):])
+        return int(key[len("step_") :])
     except (TypeError, ValueError):
         return -1
 
@@ -348,7 +362,9 @@ class WildToolEntryWrapper:
         _set_message_attributes(invocation)
         try:
             result = wrapped(*args, **kwargs)
-            invocation.output_messages = _task_results_to_output_messages(result)
+            invocation.output_messages = _task_results_to_output_messages(
+                result
+            )
             _set_message_attributes(invocation)
             self._handler.stop_entry(invocation)
             return result
@@ -386,7 +402,8 @@ class WildToolAgentWrapper:
         tools = test_entry.get("english_tools")
         if isinstance(tools, list) and tools:
             attributes["gen_ai.tool.definitions"] = json.dumps(
-                tools, ensure_ascii=False,
+                tools,
+                ensure_ascii=False,
             )
 
         invocation = InvokeAgentInvocation(
@@ -401,11 +418,13 @@ class WildToolAgentWrapper:
         _set_message_attributes(invocation)
         try:
             result = wrapped(*args, **kwargs)
-            invocation.output_messages = _task_results_to_output_messages(result)
+            invocation.output_messages = _task_results_to_output_messages(
+                result
+            )
             _set_message_attributes(invocation)
             total_input = 0
             total_output = 0
-            for task_result in (result or []):
+            for task_result in result or []:
                 if isinstance(task_result, dict):
                     total_input += sum(
                         task_result.get("input_token_count", [])
@@ -538,9 +557,11 @@ class WildToolChainWrapper:
 
     @staticmethod
     def _extract_input_value(inference_data) -> Optional[str]:
-        msgs = inference_data.get("messages") if isinstance(
-            inference_data, dict
-        ) else None
+        msgs = (
+            inference_data.get("messages")
+            if isinstance(inference_data, dict)
+            else None
+        )
         if not isinstance(msgs, list):
             return None
         for m in reversed(msgs):
@@ -579,9 +600,7 @@ class WildToolChainWrapper:
         current_step.finish_reason = reason
 
     @staticmethod
-    def _derive_step_finish_reason(
-        label, error_reason: str
-    ) -> Optional[str]:
+    def _derive_step_finish_reason(label, error_reason: str) -> Optional[str]:
         """Map wtb inference_log error_reason → gen_ai.react.finish_reason."""
         if label != "error":
             return None
@@ -625,9 +644,11 @@ class WildToolChainWrapper:
 
         # tool name → description (for gen_ai.tool.description)
         tool_desc_map = {}
-        tools = inference_data.get("tools") if isinstance(
-            inference_data, dict
-        ) else None
+        tools = (
+            inference_data.get("tools")
+            if isinstance(inference_data, dict)
+            else None
+        )
         if isinstance(tools, list):
             for tool in tools:
                 if not isinstance(tool, dict):
@@ -644,9 +665,11 @@ class WildToolChainWrapper:
         # wtb only embeds them in messages (not in inference_answer) for the
         # tool_call branch.
         observation_by_call_id = {}
-        messages = inference_data.get("messages") if isinstance(
-            inference_data, dict
-        ) else None
+        messages = (
+            inference_data.get("messages")
+            if isinstance(inference_data, dict)
+            else None
+        )
         if isinstance(messages, list):
             for msg in messages:
                 if not isinstance(msg, dict) or msg.get("role") != "tool":
@@ -658,12 +681,14 @@ class WildToolChainWrapper:
                 if content is None:
                     continue
                 observation_by_call_id[tid] = (
-                    content if isinstance(content, str) else _stringify(content)
+                    content
+                    if isinstance(content, str)
+                    else _stringify(content)
                 )
 
         for key in sorted(k for k in inference_log if k.startswith("step_")):
             try:
-                step_idx = int(key[len("step_"):])
+                step_idx = int(key[len("step_") :])
             except ValueError:
                 continue
             round_num = step_idx + 1

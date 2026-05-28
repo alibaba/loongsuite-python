@@ -21,7 +21,6 @@ import sys
 import types
 from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -54,7 +53,9 @@ class ContentBlock:
     name: str | None = None
     input: Any = None
     tool_use_id: str | None = None
-    content: list | None = None  # for tool_result blocks containing inner blocks
+    content: list | None = (
+        None  # for tool_result blocks containing inner blocks
+    )
 
 
 @dataclass
@@ -128,7 +129,9 @@ class ToolSpec:
 # ---------------------------------------------------------------------------
 
 
-def _make_module(name: str, parent: types.ModuleType | None = None) -> types.ModuleType:
+def _make_module(
+    name: str, parent: types.ModuleType | None = None
+) -> types.ModuleType:
     """Create a fake module and register it in sys.modules."""
     mod = types.ModuleType(name)
     mod.__package__ = name
@@ -179,8 +182,25 @@ def _install_mock_claw_eval() -> dict[str, types.ModuleType]:
     def run_task(task, provider, *args, **kwargs):
         # Simulate a minimal agent loop: call provider.chat once
         msgs = [
-            Message(role="system", content=[ContentBlock(type="text", text="You are a helpful assistant.")]),
-            Message(role="user", content=[ContentBlock(type="text", text=getattr(getattr(task, "prompt", None), "text", ""))]),
+            Message(
+                role="system",
+                content=[
+                    ContentBlock(
+                        type="text", text="You are a helpful assistant."
+                    )
+                ],
+            ),
+            Message(
+                role="user",
+                content=[
+                    ContentBlock(
+                        type="text",
+                        text=getattr(
+                            getattr(task, "prompt", None), "text", ""
+                        ),
+                    )
+                ],
+            ),
         ]
         response, usage = provider.chat(msgs)
         return {"task_id": getattr(task, "task_id", ""), "response": response}
@@ -203,7 +223,9 @@ def _install_mock_claw_eval() -> dict[str, types.ModuleType]:
         def chat(self, messages, *args, **kwargs):
             response = Message(
                 role="assistant",
-                content=[ContentBlock(type="text", text="Hello from the model")],
+                content=[
+                    ContentBlock(type="text", text="Hello from the model")
+                ],
             )
             usage = Usage(input_tokens=100, output_tokens=50)
             return response, usage
@@ -356,7 +378,9 @@ def instrument(tracer_provider):
     from opentelemetry.instrumentation.claw_eval import ClawEvalInstrumentor
 
     instrumentor = ClawEvalInstrumentor()
-    instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+    instrumentor.instrument(
+        tracer_provider=tracer_provider, skip_dep_check=True
+    )
     yield instrumentor
     instrumentor.uninstrument()
 

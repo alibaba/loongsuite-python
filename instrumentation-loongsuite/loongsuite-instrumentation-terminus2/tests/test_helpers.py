@@ -21,16 +21,16 @@ import json
 import pytest
 
 from opentelemetry.instrumentation.terminus2 import (
+    _GEN_AI_REACT_FINISH_REASON,
     _commands_to_arguments_json,
+    _current_step_span,
+    _current_step_token,
     _end_current_step,
     _infer_provider_name,
     _text_messages_json,
-    _current_step_span,
-    _current_step_token,
-    _GEN_AI_REACT_FINISH_REASON,
 )
-from .conftest import Command
 
+from .conftest import Command
 
 # ═══════════════════════════════════════════════════════════════════════════
 # _commands_to_arguments_json
@@ -144,7 +144,14 @@ class TestInferProviderName:
     # -- OpenAI variants --
     @pytest.mark.parametrize(
         "model",
-        ["gpt-4o", "gpt-3.5-turbo", "GPT-4-turbo", "o1-mini", "o3-preview", "o4-mini"],
+        [
+            "gpt-4o",
+            "gpt-3.5-turbo",
+            "GPT-4-turbo",
+            "o1-mini",
+            "o3-preview",
+            "o4-mini",
+        ],
     )
     def test_openai_models(self, model):
         assert _infer_provider_name(model) == "openai"
@@ -173,7 +180,9 @@ class TestInferProviderName:
         assert _infer_provider_name(model) == "mistral"
 
     # -- Alibaba --
-    @pytest.mark.parametrize("model", ["qwen-72b", "qwen-turbo", "Qwen2.5-Coder"])
+    @pytest.mark.parametrize(
+        "model", ["qwen-72b", "qwen-turbo", "Qwen2.5-Coder"]
+    )
     def test_alibaba_models(self, model):
         assert _infer_provider_name(model) == "alibaba"
 
@@ -239,9 +248,13 @@ class TestEndCurrentStep:
         spans = span_exporter.get_finished_spans()
         assert len(spans) == 1
         assert spans[0].name == "test-step"
-        assert spans[0].attributes.get(_GEN_AI_REACT_FINISH_REASON) == "complete"
+        assert (
+            spans[0].attributes.get(_GEN_AI_REACT_FINISH_REASON) == "complete"
+        )
 
-    def test_ends_span_without_finish_reason(self, tracer_provider, span_exporter):
+    def test_ends_span_without_finish_reason(
+        self, tracer_provider, span_exporter
+    ):
         """When finish_reason is None, no finish_reason attribute is set."""
         from opentelemetry import trace as trace_api
 
@@ -258,7 +271,8 @@ class TestEndCurrentStep:
 
     def test_detaches_context_token(self, tracer_provider):
         """Should detach the context token and clear the ContextVar."""
-        from opentelemetry import context as context_api, trace as trace_api
+        from opentelemetry import context as context_api
+        from opentelemetry import trace as trace_api
 
         tracer = trace_api.get_tracer("test", tracer_provider=tracer_provider)
         span = tracer.start_span("test-step-token")

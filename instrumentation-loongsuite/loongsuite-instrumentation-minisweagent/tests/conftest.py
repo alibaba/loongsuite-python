@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Shared fixtures for mini-swe-agent instrumentation tests.
 
 Creates stub ``minisweagent`` packages in ``sys.modules`` so that the
@@ -22,7 +36,10 @@ os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai_latest_experimental"
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
-def _make_module(name: str, parent: types.ModuleType | None = None) -> types.ModuleType:
+
+def _make_module(
+    name: str, parent: types.ModuleType | None = None
+) -> types.ModuleType:
     """Create a stub module and register it in ``sys.modules``."""
     mod = types.ModuleType(name)
     mod.__package__ = name
@@ -35,9 +52,16 @@ def _make_module(name: str, parent: types.ModuleType | None = None) -> types.Mod
 
 # ── Stub minisweagent package tree ───────────────────────────────────
 
+
 class _StubConfig:
     """Mimics ``minisweagent`` agent/model config objects."""
-    def __init__(self, model_name: str = "gpt-4o", step_limit: int = 0, cost_limit: float = 0):
+
+    def __init__(
+        self,
+        model_name: str = "gpt-4o",
+        step_limit: int = 0,
+        cost_limit: float = 0,
+    ):
         self.model_name = model_name
         self.step_limit = step_limit
         self.cost_limit = cost_limit
@@ -45,6 +69,7 @@ class _StubConfig:
 
 class _StubModel:
     """Mimics ``minisweagent`` model with a config attribute."""
+
     def __init__(self, config: _StubConfig | None = None):
         self.config = config or _StubConfig()
 
@@ -74,7 +99,9 @@ class _StubDefaultAgent:
 class _StubEnvironment:
     """Mimics ``minisweagent.environments.Environment``."""
 
-    def execute(self, action: dict, cwd: str = "", **kwargs: Any) -> dict[str, Any]:  # noqa: ARG002
+    def execute(
+        self, action: dict, cwd: str = "", **kwargs: Any
+    ) -> dict[str, Any]:  # noqa: ARG002
         return {"output": "ok", "exit_code": 0}
 
 
@@ -105,6 +132,7 @@ BASH_TOOL: dict[str, Any] = {
 
 # ── Fixture: inject stubs into sys.modules ───────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def _patch_minisweagent_modules():
     """Register fake ``minisweagent`` modules before every test, and
@@ -128,7 +156,9 @@ def _patch_minisweagent_modules():
     # minisweagent.models / .models.utils / .models.utils.actions_toolcall
     models = _make_module("minisweagent.models", parent=mini)
     models_utils = _make_module("minisweagent.models.utils", parent=models)
-    actions_tc = _make_module("minisweagent.models.utils.actions_toolcall", parent=models_utils)
+    actions_tc = _make_module(
+        "minisweagent.models.utils.actions_toolcall", parent=models_utils
+    )
     actions_tc.BASH_TOOL = BASH_TOOL  # type: ignore[attr-defined]
 
     # minisweagent.exceptions
@@ -150,13 +180,17 @@ def _patch_minisweagent_modules():
 
     # Also reset the instrumentor class-level cached original
     try:
-        from opentelemetry.instrumentation.minisweagent import MiniSweAgentInstrumentor
+        from opentelemetry.instrumentation.minisweagent import (
+            MiniSweAgentInstrumentor,
+        )
+
         MiniSweAgentInstrumentor._original_get_environment = None
     except Exception:
         pass
 
 
 # ── Re-export helpers so tests can use them directly ─────────────────
+
 
 @pytest.fixture()
 def stub_agent():
@@ -178,7 +212,11 @@ def stub_agent():
                     }
                 ],
             },
-            {"role": "tool", "tool_call_id": "tc_1", "content": "file1.py\nfile2.py"},
+            {
+                "role": "tool",
+                "tool_call_id": "tc_1",
+                "content": "file1.py\nfile2.py",
+            },
             {"role": "assistant", "content": "Done."},
         ],
         model=_StubModel(_StubConfig(model_name="gpt-4o")),

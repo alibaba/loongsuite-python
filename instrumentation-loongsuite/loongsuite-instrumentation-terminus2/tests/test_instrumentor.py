@@ -24,47 +24,44 @@ import json
 import pytest
 
 from opentelemetry.instrumentation.terminus2 import (
-    Terminus2Instrumentor,
-    _FRAMEWORK,
     _AGENT_NAME,
-    _GEN_AI_SPAN_KIND,
-    _GEN_AI_OPERATION_NAME,
+    _FRAMEWORK,
     _GEN_AI_FRAMEWORK,
-    _GEN_AI_REQUEST_MODEL,
-    _GEN_AI_PROVIDER_NAME,
     _GEN_AI_INPUT_MESSAGES,
+    _GEN_AI_OPERATION_NAME,
     _GEN_AI_OUTPUT_MESSAGES,
-    _GEN_AI_TOOL_NAME,
-    _GEN_AI_TOOL_DESCRIPTION,
-    _GEN_AI_TOOL_TYPE,
+    _GEN_AI_PROVIDER_NAME,
+    _GEN_AI_REACT_FINISH_REASON,
+    _GEN_AI_REACT_ROUND,
+    _GEN_AI_REQUEST_MODEL,
+    _GEN_AI_SPAN_KIND,
+    _GEN_AI_SYSTEM_INSTRUCTIONS,
     _GEN_AI_TOOL_CALL_ARGUMENTS,
     _GEN_AI_TOOL_CALL_RESULT,
     _GEN_AI_TOOL_DEFINITIONS,
-    _GEN_AI_SYSTEM_INSTRUCTIONS,
-    _GEN_AI_REACT_ROUND,
-    _GEN_AI_REACT_FINISH_REASON,
-    _SPAN_KIND_ENTRY,
-    _SPAN_KIND_AGENT,
-    _SPAN_KIND_TOOL,
-    _SPAN_KIND_STEP,
-    _SPAN_KIND_TASK,
-    _SPAN_KIND_CHAIN,
+    _GEN_AI_TOOL_DESCRIPTION,
+    _GEN_AI_TOOL_NAME,
+    _GEN_AI_TOOL_TYPE,
     _OP_ENTER,
-    _OP_INVOKE_AGENT,
     _OP_EXECUTE_TOOL,
+    _OP_INVOKE_AGENT,
     _OP_REACT,
     _OP_RUN_TASK,
     _OP_TASK,
-    _TOOL_TYPE_EXTENSION,
-    _TERMINAL_TOOL_NAME,
+    _SPAN_KIND_AGENT,
+    _SPAN_KIND_CHAIN,
+    _SPAN_KIND_ENTRY,
+    _SPAN_KIND_STEP,
+    _SPAN_KIND_TASK,
+    _SPAN_KIND_TOOL,
     _TERMINAL_TOOL_DESCRIPTION,
-    _try_wrap,
-    _try_unwrap,
-    _TERMINUS2_MARKER,
+    _TERMINAL_TOOL_NAME,
+    _TOOL_TYPE_EXTENSION,
+    Terminus2Instrumentor,
     _end_current_step,
-    _current_step_span,
-    _current_step_token,
     _react_round_counter,
+    _try_unwrap,
+    _try_wrap,
 )
 from opentelemetry.trace import StatusCode
 
@@ -77,7 +74,6 @@ from .conftest import (
     TerminusJSONPlainParser,
     TerminusXMLPlainParser,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Lifecycle
@@ -197,7 +193,9 @@ class TestEntrySpan:
         assert s.status.status_code == StatusCode.ERROR
         assert len(s.events) > 0  # exception event recorded
 
-    def test_entry_span_with_failure_mode_enum(self, instrument, span_exporter):
+    def test_entry_span_with_failure_mode_enum(
+        self, instrument, span_exporter
+    ):
         """failure_mode with a .value attribute (e.g. enum) should be serialized."""
         from enum import Enum
 
@@ -224,7 +222,9 @@ class TestEntrySpan:
         entry = [s for s in spans if s.name == "enter_ai_application_system"]
         assert _GEN_AI_INPUT_MESSAGES not in entry[0].attributes
 
-    def test_entry_span_instruction_via_kwargs(self, instrument, span_exporter):
+    def test_entry_span_instruction_via_kwargs(
+        self, instrument, span_exporter
+    ):
         """Instruction passed as keyword argument should be captured."""
         agent = Terminus2()
         agent.perform_task(instruction="hello via kwarg")
@@ -405,9 +405,7 @@ class TestToolSpan:
 
         spans = span_exporter.get_finished_spans()
         tool_spans = [
-            s
-            for s in spans
-            if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
+            s for s in spans if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
         ]
         assert len(tool_spans) == 1
         s = tool_spans[0]
@@ -430,10 +428,7 @@ class TestToolSpan:
         assert args_parsed[0]["duration_sec"] == 3.0
 
         # Result should be terminal output
-        assert (
-            s.attributes[_GEN_AI_TOOL_CALL_RESULT]
-            == "total 42\ndrwxr-xr-x"
-        )
+        assert s.attributes[_GEN_AI_TOOL_CALL_RESULT] == "total 42\ndrwxr-xr-x"
         assert s.attributes["terminus2.terminal.timeout"] is False
         assert s.status.status_code == StatusCode.OK
 
@@ -445,9 +440,7 @@ class TestToolSpan:
 
         spans = span_exporter.get_finished_spans()
         tool_spans = [
-            s
-            for s in spans
-            if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
+            s for s in spans if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
         ]
         assert tool_spans[0].attributes["terminus2.terminal.timeout"] is True
 
@@ -460,9 +453,7 @@ class TestToolSpan:
 
         spans = span_exporter.get_finished_spans()
         tool_spans = [
-            s
-            for s in spans
-            if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
+            s for s in spans if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
         ]
         assert _GEN_AI_TOOL_CALL_RESULT not in tool_spans[0].attributes
 
@@ -475,9 +466,7 @@ class TestToolSpan:
 
         spans = span_exporter.get_finished_spans()
         tool_spans = [
-            s
-            for s in spans
-            if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
+            s for s in spans if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
         ]
         assert len(tool_spans) == 1
         assert tool_spans[0].status.status_code == StatusCode.ERROR
@@ -489,9 +478,7 @@ class TestToolSpan:
 
         spans = span_exporter.get_finished_spans()
         tool_spans = [
-            s
-            for s in spans
-            if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
+            s for s in spans if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
         ]
         assert tool_spans[0].attributes["terminus2.commands.count"] == 0
 
@@ -657,9 +644,7 @@ class TestTaskSpan:
         parser.parse_response("some LLM response")
 
         spans = span_exporter.get_finished_spans()
-        task_spans = [
-            s for s in spans if s.name == "run_task parse_response"
-        ]
+        task_spans = [s for s in spans if s.name == "run_task parse_response"]
         assert len(task_spans) == 1
         s = task_spans[0]
 
@@ -698,9 +683,7 @@ class TestTaskSpan:
         parser.parse_response("<xml>response</xml>")
 
         spans = span_exporter.get_finished_spans()
-        task_spans = [
-            s for s in spans if s.name == "run_task parse_response"
-        ]
+        task_spans = [s for s in spans if s.name == "run_task parse_response"]
         assert len(task_spans) == 1
         s = task_spans[0]
 
@@ -718,9 +701,7 @@ class TestTaskSpan:
             parser.parse_response("not json")
 
         spans = span_exporter.get_finished_spans()
-        task_spans = [
-            s for s in spans if s.name == "run_task parse_response"
-        ]
+        task_spans = [s for s in spans if s.name == "run_task parse_response"]
         assert len(task_spans) == 1
         assert task_spans[0].status.status_code == StatusCode.ERROR
 
@@ -731,9 +712,7 @@ class TestTaskSpan:
         parser.parse_response(None)
 
         spans = span_exporter.get_finished_spans()
-        task_spans = [
-            s for s in spans if s.name == "run_task parse_response"
-        ]
+        task_spans = [s for s in spans if s.name == "run_task parse_response"]
         assert len(task_spans) == 1
         # None is not None => input messages should not be set (but the
         # code checks ``if response_text is not None``). None IS None, so
@@ -753,9 +732,7 @@ class TestTaskSpan:
         parser.parse_response("test")
 
         spans = span_exporter.get_finished_spans()
-        task_spans = [
-            s for s in spans if s.name == "run_task parse_response"
-        ]
+        task_spans = [s for s in spans if s.name == "run_task parse_response"]
         s = task_spans[0]
         assert s.attributes["terminus2.parse.error"] == "something broke"
         assert s.attributes["terminus2.parse.warning"] == "also this warning"
@@ -857,9 +834,7 @@ class TestParentChildRelationships:
 
         spans = span_exporter.get_finished_spans()
         entry = [s for s in spans if s.name == "enter_ai_application_system"]
-        agent_s = [
-            s for s in spans if s.name == f"invoke_agent {_AGENT_NAME}"
-        ]
+        agent_s = [s for s in spans if s.name == f"invoke_agent {_AGENT_NAME}"]
 
         assert len(entry) == 1
         assert len(agent_s) == 1
@@ -882,8 +857,12 @@ class TestParentChildRelationships:
         cmds = [Command(keystrokes="pwd")]
 
         def loop_body(
-            self, initial_prompt, session=None, chat=None,
-            logging_dir=None, original_instruction=""
+            self,
+            initial_prompt,
+            session=None,
+            chat=None,
+            logging_dir=None,
+            original_instruction="",
         ):
             self._handle_llm_interaction()
             self._execute_commands(cmds)
@@ -919,9 +898,7 @@ class TestParentChildRelationships:
         ]
         step_spans = [s for s in spans if s.name == "react step"]
         tool_spans = [
-            s
-            for s in spans
-            if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
+            s for s in spans if s.name == f"execute_tool {_TERMINAL_TOOL_NAME}"
         ]
 
         assert len(agent_spans) == 1

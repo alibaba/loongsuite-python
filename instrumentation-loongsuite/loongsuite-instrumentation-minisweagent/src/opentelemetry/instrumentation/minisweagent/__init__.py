@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 LoongSuite mini-swe-agent Instrumentation
 =========================================
@@ -40,11 +54,12 @@ from __future__ import annotations
 import logging
 from typing import Any, Collection
 
+from wrapt import wrap_function_wrapper
+
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.minisweagent.package import _instruments
 from opentelemetry.instrumentation.minisweagent.version import __version__
-from wrapt import wrap_function_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +110,14 @@ class MiniSweAgentInstrumentor(BaseInstrumentor):
             import minisweagent.environments as _envs_mod
 
             if self.__class__._original_get_environment is None:
-                self.__class__._original_get_environment = _envs_mod.get_environment
+                self.__class__._original_get_environment = (
+                    _envs_mod.get_environment
+                )
 
             def _wrapped_get_environment(*args: Any, **kw: Any) -> Any:
-                env = MiniSweAgentInstrumentor._original_get_environment(*args, **kw)
+                env = MiniSweAgentInstrumentor._original_get_environment(
+                    *args, **kw
+                )
                 return TracingEnvironment(env, tracer)
 
             _envs_mod.get_environment = _wrapped_get_environment
@@ -108,7 +127,9 @@ class MiniSweAgentInstrumentor(BaseInstrumentor):
         try:
             patch_mini_cli_app_module()
         except Exception as exc:
-            logger.warning("Could not patch minisweagent.run.mini.app (ENTRY): %s", exc)
+            logger.warning(
+                "Could not patch minisweagent.run.mini.app (ENTRY): %s", exc
+            )
 
         # --- wrapt: DefaultAgent.run / DefaultAgent.step ---
         try:
@@ -155,7 +176,9 @@ class MiniSweAgentInstrumentor(BaseInstrumentor):
             try:
                 import minisweagent.environments as _envs_mod
 
-                _envs_mod.get_environment = self.__class__._original_get_environment
+                _envs_mod.get_environment = (
+                    self.__class__._original_get_environment
+                )
                 self.__class__._original_get_environment = None
             except Exception as exc:
                 logger.debug("Could not restore get_environment: %s", exc)

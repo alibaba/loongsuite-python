@@ -50,6 +50,7 @@ if _TERMINUS2_SRC.is_dir() and str(_TERMINUS2_SRC) not in sys.path:
 @dataclass
 class Command:
     """Stub for ``terminal_bench`` Command object."""
+
     keystrokes: str = ""
     duration_sec: Optional[float] = None
 
@@ -57,6 +58,7 @@ class Command:
 @dataclass
 class ParseResult:
     """Stub for the result returned by parser.parse_response."""
+
     commands: list = field(default_factory=list)
     is_task_complete: bool = False
     error: Optional[str] = None
@@ -66,6 +68,7 @@ class ParseResult:
 @dataclass
 class AgentResult:
     """Stub for the result returned by Terminus2.perform_task."""
+
     failure_mode: Any = None
     timestamped_markers: list = field(default_factory=list)
 
@@ -218,9 +221,7 @@ def _inject_stub_modules():
     sys.modules["terminal_bench"] = terminal_bench_mod
     sys.modules["terminal_bench.agents"] = terminal_bench_agents_mod
     sys.modules["terminal_bench.agents.terminus_2"] = terminus_2_pkg_mod
-    sys.modules[
-        "terminal_bench.agents.terminus_2.terminus_2"
-    ] = terminus_2_mod
+    sys.modules["terminal_bench.agents.terminus_2.terminus_2"] = terminus_2_mod
     sys.modules[
         "terminal_bench.agents.terminus_2.terminus_json_plain_parser"
     ] = json_parser_mod

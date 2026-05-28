@@ -1,11 +1,25 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for error/edge-case scenarios."""
 
 import json
 
 import pytest
-from opentelemetry.trace import StatusCode
-
 from wtb.model_handler.base_handler import BaseHandler
+
+from opentelemetry.trace import StatusCode
 
 
 class _StubHandler(BaseHandler):
@@ -38,15 +52,16 @@ class _StubHandler(BaseHandler):
 
 class TestErrorScenarios:
     def test_action_name_mismatch(
-        self, span_exporter, instrument, simple_test_entry,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
         tool_call_response_factory,
     ):
         """When model calls wrong tool, CHAIN span should still be OK with error label."""
         handler = _StubHandler()
         # Model calls wrong_tool instead of get_weather
-        resp0 = tool_call_response_factory(
-            "wrong_tool", {"x": 1}, "call_bad"
-        )
+        resp0 = tool_call_response_factory("wrong_tool", {"x": 1}, "call_bad")
         handler._step_responses = [resp0]
 
         handler.inference_multi_turn(simple_test_entry)
@@ -61,11 +76,17 @@ class TestErrorScenarios:
         assert chain.status.status_code == StatusCode.OK
 
     def test_empty_response(
-        self, span_exporter, instrument, simple_test_entry,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
         make_completion,
     ):
         """When model returns no content and no tool_calls, process terminates gracefully."""
-        from tests.conftest import FakeChatCompletion, _make_chat_completion_response
+        from tests.conftest import (
+            FakeChatCompletion,
+            _make_chat_completion_response,
+        )
 
         handler = _StubHandler()
         resp = FakeChatCompletion(
@@ -82,7 +103,10 @@ class TestErrorScenarios:
         assert attrs.get("wildtool.action_name_label") == "error"
 
     def test_request_tool_call_exception_sets_error(
-        self, span_exporter, instrument, simple_test_entry,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
     ):
         """Exception in _request_tool_call should produce ERROR on STEP span and propagate."""
         handler = _StubHandler()
@@ -101,7 +125,9 @@ class TestErrorScenarios:
         assert chain_spans[0].status.status_code == StatusCode.ERROR
 
     def test_entry_span_captures_retry_error_path(
-        self, span_exporter, instrument,
+        self,
+        span_exporter,
+        instrument,
     ):
         """multi_threaded_inference catches non-rate-limit errors and returns error dict.
         ENTRY span should still complete successfully (not raise)."""

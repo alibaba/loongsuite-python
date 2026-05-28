@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """wrapt hooks for DefaultAgent.run / DefaultAgent.step (ARMS / util-genai semantics)."""
 
 from __future__ import annotations
@@ -6,8 +20,6 @@ import logging
 from typing import Any, Callable
 
 from opentelemetry import context as context_api
-from opentelemetry.trace import Tracer
-
 from opentelemetry.instrumentation.minisweagent.config import (
     ENTRY_SPAN_ACTIVE,
     OTEL_MINISWEAGENT_TASK_PREVIEW_MAX_LEN,
@@ -15,6 +27,7 @@ from opentelemetry.instrumentation.minisweagent.config import (
 from opentelemetry.instrumentation.minisweagent.internal.conversation import (
     build_invoke_agent_payload,
 )
+from opentelemetry.trace import Tracer
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +81,22 @@ class DefaultAgentRunWrapper:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Any:
-        from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler  # noqa: PLC0415
-        from opentelemetry.util.genai.extended_types import EntryInvocation, InvokeAgentInvocation  # noqa: PLC0415
-        from opentelemetry.util.genai.types import Error as GenAIError, InputMessage, Text  # noqa: PLC0415
+        from opentelemetry.util.genai.extended_handler import (
+            get_extended_telemetry_handler,  # noqa: PLC0415
+        )
+        from opentelemetry.util.genai.extended_types import (  # noqa: PLC0415
+            EntryInvocation,
+            InvokeAgentInvocation,
+        )
+        from opentelemetry.util.genai.types import (  # noqa: PLC0415
+            Error as GenAIError,
+        )
+        from opentelemetry.util.genai.types import InputMessage, Text
 
         task = args[0] if args else kwargs.get("task", "") or ""
-        agent_name = f"{instance.__class__.__module__}.{instance.__class__.__name__}"
+        agent_name = (
+            f"{instance.__class__.__module__}.{instance.__class__.__name__}"
+        )
 
         han = get_extended_telemetry_handler()
 
@@ -89,7 +112,9 @@ class DefaultAgentRunWrapper:
             entry_token = ENTRY_SPAN_ACTIVE.set(True)
             han.start_entry(entry_inv, context=context_api.get_current())
 
-        inv = InvokeAgentInvocation(provider="minisweagent", agent_name=agent_name)
+        inv = InvokeAgentInvocation(
+            provider="minisweagent", agent_name=agent_name
+        )
         inv.request_model = _request_model_from_agent(instance)
         inv.attributes.setdefault("gen_ai.framework", "minisweagent")
         pv = _task_preview(str(task))
@@ -104,13 +129,17 @@ class DefaultAgentRunWrapper:
             try:
                 _populate_invoke_from_agent(inv, instance)
             except Exception:
-                logger.debug("populate invoke_agent on error failed", exc_info=True)
+                logger.debug(
+                    "populate invoke_agent on error failed", exc_info=True
+                )
             if isinstance(exc, Exception):
                 han.fail_invoke_agent(
                     inv, GenAIError(message=str(exc), type=type(exc))
                 )
                 if entry_inv is not None:
-                    han.fail_entry(entry_inv, GenAIError(message=str(exc), type=type(exc)))
+                    han.fail_entry(
+                        entry_inv, GenAIError(message=str(exc), type=type(exc))
+                    )
             else:
                 han.stop_invoke_agent(inv)
                 if entry_inv is not None:
@@ -127,8 +156,8 @@ class DefaultAgentRunWrapper:
                     inv.attributes["minisweagent.exit_status"] = str(es)
                 sub = result.get("submission")
                 if sub is not None:
-                    inv.attributes["minisweagent.submission.preview"] = _task_preview(
-                        str(sub)
+                    inv.attributes["minisweagent.submission.preview"] = (
+                        _task_preview(str(sub))
                     )
         finally:
             han.stop_invoke_agent(inv)
@@ -170,9 +199,16 @@ class DefaultAgentStepWrapper:
         kwargs: dict[str, Any],
     ) -> Any:
         from minisweagent.exceptions import InterruptAgentFlow  # noqa: PLC0415
-        from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler  # noqa: PLC0415
-        from opentelemetry.util.genai.extended_types import ReactStepInvocation  # noqa: PLC0415
-        from opentelemetry.util.genai.types import Error as GenAIError  # noqa: PLC0415
+
+        from opentelemetry.util.genai.extended_handler import (
+            get_extended_telemetry_handler,  # noqa: PLC0415
+        )
+        from opentelemetry.util.genai.extended_types import (
+            ReactStepInvocation,  # noqa: PLC0415
+        )
+        from opentelemetry.util.genai.types import (
+            Error as GenAIError,  # noqa: PLC0415
+        )
 
         if self._limits_exceeded(instance):
             return wrapped(*args, **kwargs)

@@ -39,7 +39,6 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from opentelemetry.instrumentation.bfclv4.internal.attributes import (
     BFCL_NUM_THREADS,
-    BFCL_OSS_BACKEND,
     BFCL_QUERY_MODE,
     BFCL_RUN_IDS,
     BFCL_TEST_CASE_COUNT,
@@ -154,7 +153,6 @@ _TOOL_DESCRIPTION_MAP: ContextVar[dict[str, str]] = ContextVar(
 )
 
 
-
 def _json_attr(value: Any) -> str:
     try:
         import json
@@ -167,7 +165,9 @@ def _json_attr(value: Any) -> str:
 def _message_dict(role: str, content: Any) -> dict:
     return {
         "role": role,
-        "parts": [{"type": "text", "content": truncate_text(_safe_str(content))}],
+        "parts": [
+            {"type": "text", "content": truncate_text(_safe_str(content))}
+        ],
     }
 
 
@@ -278,7 +278,9 @@ def _flatten_messages(value: Any, default_role: str = "user") -> List[dict]:
 def _messages_to_input(messages: List[dict]) -> List[InputMessage]:
     result: List[InputMessage] = []
     for msg in messages:
-        parts = [Text(content=p.get("content", "")) for p in msg.get("parts", [])]
+        parts = [
+            Text(content=p.get("content", "")) for p in msg.get("parts", [])
+        ]
         if not parts:
             continue
         result.append(InputMessage(role=msg.get("role", "user"), parts=parts))
@@ -290,7 +292,9 @@ def _messages_to_output(
 ) -> List[OutputMessage]:
     result: List[OutputMessage] = []
     for msg in messages:
-        parts = [Text(content=p.get("content", "")) for p in msg.get("parts", [])]
+        parts = [
+            Text(content=p.get("content", "")) for p in msg.get("parts", [])
+        ]
         if not parts:
             continue
         result.append(
@@ -317,7 +321,9 @@ def _test_entry_to_messages(test_entry: Any):
     ):
         value = test_entry.get(key)
         if value not in (None, "", [], {}):
-            system_instructions.append(Text(content=truncate_text(_safe_str(value))))
+            system_instructions.append(
+                Text(content=truncate_text(_safe_str(value)))
+            )
 
     _append_question_messages(
         test_entry.get("question"),
@@ -406,7 +412,11 @@ def _tool_value_to_definitions(value: Any) -> list:
         nested.setdefault("type", value.get("type", "function"))
         return _tool_value_to_definitions(nested)
 
-    name = value.get("name") or value.get("function_name") or value.get("tool_name")
+    name = (
+        value.get("name")
+        or value.get("function_name")
+        or value.get("tool_name")
+    )
     if not name:
         return []
 
@@ -419,7 +429,9 @@ def _tool_value_to_definitions(value: Any) -> list:
     return [
         FunctionToolDefinition(
             name=str(name),
-            description=_safe_str(description) if description is not None else None,
+            description=_safe_str(description)
+            if description is not None
+            else None,
             parameters=parameters,
         )
     ]
@@ -456,7 +468,11 @@ def _tool_description_map(test_entry: Any) -> dict[str, str]:
             )
         except Exception:  # noqa: BLE001
             CLASS_FILE_PATH_MAPPING = {}
-        for class_name in involved_classes if isinstance(involved_classes, (list, tuple)) else []:
+        for class_name in (
+            involved_classes
+            if isinstance(involved_classes, (list, tuple))
+            else []
+        ):
             module_name = CLASS_FILE_PATH_MAPPING.get(class_name)
             if not module_name:
                 continue
@@ -465,7 +481,9 @@ def _tool_description_map(test_entry: Any) -> dict[str, str]:
                 cls = getattr(module, class_name)
             except Exception:  # noqa: BLE001
                 continue
-            for method_name, method in inspect.getmembers(cls, predicate=inspect.isfunction):
+            for method_name, method in inspect.getmembers(
+                cls, predicate=inspect.isfunction
+            ):
                 if method_name.startswith("_") or method_name in descriptions:
                     continue
                 doc = inspect.getdoc(method)
@@ -656,18 +674,24 @@ def _emit_synthetic_tool_spans(
                     span.set_attribute(BFCL_TOOL_INDEX, index)
                     span.set_attribute(BFCL_SYNTHETIC_TOOL_CALL, True)
                     if test_entry_id is not None:
-                        span.set_attribute(BFCL_TEST_ENTRY_ID, str(test_entry_id))
+                        span.set_attribute(
+                            BFCL_TEST_ENTRY_ID, str(test_entry_id)
+                        )
                     _set_tool_call_span_attrs(
                         span,
                         arguments=_normalise_tool_arguments(arguments),
                         description=description,
                         tool_name=tool_name,
-                        tool_call_id=_synth_tool_call_id(test_entry_id, model_name, index),
+                        tool_call_id=_synth_tool_call_id(
+                            test_entry_id, model_name, index
+                        ),
                         tool_type="function",
                     )
             emitted += 1
         except Exception:  # noqa: BLE001
-            logger.debug("bfclv4 synthetic TOOL span emission failed", exc_info=True)
+            logger.debug(
+                "bfclv4 synthetic TOOL span emission failed", exc_info=True
+            )
     return emitted
 
 
@@ -711,7 +735,9 @@ class GenerateResultsWrapper:
             _bfcl_gen.ThreadPoolExecutor = ContextPropagatingExecutor
 
         backend_value = (
-            _safe_get(cli_args, "backend", None) if cli_args is not None else None
+            _safe_get(cli_args, "backend", None)
+            if cli_args is not None
+            else None
         )
         previous_backend_env = os.environ.get(OSS_BACKEND_ENV)
         if backend_value:
@@ -723,13 +749,13 @@ class GenerateResultsWrapper:
                 session_id_default = f"{model_name}@{int(time.time())}"
             except Exception:  # noqa: BLE001
                 session_id_default = None
-        session_id = (
-            os.environ.get("BFCL_SESSION_ID") or session_id_default
-        )
+        session_id = os.environ.get("BFCL_SESSION_ID") or session_id_default
 
         entry_inv = EntryInvocation(session_id=session_id)
         entry_input_messages = _extract_questions_from_cases(test_cases_total)
-        entry_system_instructions = _extract_tool_defs_from_cases(test_cases_total)
+        entry_system_instructions = _extract_tool_defs_from_cases(
+            test_cases_total
+        )
         entry_inv.input_messages = _messages_to_input(entry_input_messages)
         handler = get_extended_telemetry_handler()
 
@@ -747,9 +773,7 @@ class GenerateResultsWrapper:
                 pass
         if isinstance(test_cases_total, (list, tuple)):
             attributes[BFCL_TEST_CASE_COUNT] = len(test_cases_total)
-        attributes[BFCL_RUN_IDS] = bool(
-            _safe_get(cli_args, "run_ids", False)
-        )
+        attributes[BFCL_RUN_IDS] = bool(_safe_get(cli_args, "run_ids", False))
 
         try:
             with handler.entry(entry_inv) as inv:
@@ -763,8 +787,16 @@ class GenerateResultsWrapper:
                                 key,
                                 exc_info=True,
                             )
-                    _set_json_span_attr(inv.span, GEN_AI_INPUT_MESSAGES_ATTR, entry_input_messages)
-                    _set_json_span_attr(inv.span, GEN_AI_SYSTEM_INSTRUCTIONS_ATTR, entry_system_instructions)
+                    _set_json_span_attr(
+                        inv.span,
+                        GEN_AI_INPUT_MESSAGES_ATTR,
+                        entry_input_messages,
+                    )
+                    _set_json_span_attr(
+                        inv.span,
+                        GEN_AI_SYSTEM_INSTRUCTIONS_ATTR,
+                        entry_system_instructions,
+                    )
                 try:
                     result = wrapped(*args, **kwargs)
                 except Exception as exc:
@@ -781,7 +813,15 @@ class GenerateResultsWrapper:
                     _set_json_span_attr(
                         inv.span,
                         GEN_AI_OUTPUT_MESSAGES_ATTR,
-                        [_message_dict("assistant", {"model": model_name, "status": "generate_results_completed"})],
+                        [
+                            _message_dict(
+                                "assistant",
+                                {
+                                    "model": model_name,
+                                    "status": "generate_results_completed",
+                                },
+                            )
+                        ],
                     )
                 return result
         finally:
@@ -877,7 +917,9 @@ class BaseHandlerInferenceWrapper:
                 functions = test_entry.get("function")
                 input_messages_dicts = _flatten_messages(question, "user")
                 if input_messages_dicts:
-                    inv.input_messages = _messages_to_input(input_messages_dicts)
+                    inv.input_messages = _messages_to_input(
+                        input_messages_dicts
+                    )
                 if functions is not None:
                     system_inputs = to_text_input(
                         "system", truncate_text(_safe_str(functions))
@@ -926,10 +968,9 @@ class BaseHandlerInferenceWrapper:
                     else None
                 )
 
-                if (
-                    isinstance(result_payload, str)
-                    and result_payload.startswith(_BFCL_INFERENCE_ERROR_PREFIX)
-                ):
+                if isinstance(
+                    result_payload, str
+                ) and result_payload.startswith(_BFCL_INFERENCE_ERROR_PREFIX):
                     _record_span_error(
                         inv.span,
                         result_payload,
@@ -966,7 +1007,7 @@ class BaseHandlerInferenceWrapper:
                             output_messages_dicts,
                         )
 
-                synthetic_tool_count = _emit_synthetic_tool_spans(
+                _emit_synthetic_tool_spans(
                     result_payload,
                     test_entry_id=test_entry_id,
                     model_name=request_model,
@@ -1051,7 +1092,7 @@ def _extract_result_content(result: Any) -> Any:
 
 def _step_log_sort_key(key: str) -> int:
     try:
-        return int(key[len("step_"):])
+        return int(key[len("step_") :])
     except (TypeError, ValueError):
         return -1
 
@@ -1087,9 +1128,7 @@ class QueryWrapper:
                     span.set_attribute(GEN_AI_PROVIDER_NAME, provider)
                 model_name = getattr(instance, "model_name", None)
                 if model_name:
-                    span.set_attribute(
-                        "gen_ai.request.model", str(model_name)
-                    )
+                    span.set_attribute("gen_ai.request.model", str(model_name))
                 from opentelemetry.instrumentation.bfclv4.internal.state import (
                     get_state,
                 )
@@ -1123,9 +1162,11 @@ class QueryWrapper:
             # (inside the STEP context) and replace it with a plain
             # iterator over the cached chunks. This makes ``stop_llm``
             # (which detaches the LLM context) run *before* STEP detaches.
-            if api_response is not None and hasattr(
-                api_response, "__next__"
-            ) and not isinstance(api_response, (str, bytes)):
+            if (
+                api_response is not None
+                and hasattr(api_response, "__next__")
+                and not isinstance(api_response, (str, bytes))
+            ):
                 try:
                     chunks = list(api_response)
                     api_response = iter(chunks)
@@ -1212,9 +1253,7 @@ class TurnBumpWrapper:
             else:
                 bump_turn()
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "bfclv4: turn_idx maintenance failed", exc_info=True
-            )
+            logger.debug("bfclv4: turn_idx maintenance failed", exc_info=True)
         return wrapped(*args, **kwargs)
 
 
@@ -1240,18 +1279,10 @@ class ExecuteFuncCallWrapper:
         #                                involved_classes, model_name,
         #                                test_entry_id, long_context=False,
         #                                is_evaL_run=False)``
-        func_call_list = (
-            args[0] if args else kwargs.get("func_call_list", [])
-        )
-        model_name = (
-            args[3]
-            if len(args) >= 4
-            else kwargs.get("model_name")
-        )
+        func_call_list = args[0] if args else kwargs.get("func_call_list", [])
+        model_name = args[3] if len(args) >= 4 else kwargs.get("model_name")
         test_entry_id = (
-            args[4]
-            if len(args) >= 5
-            else kwargs.get("test_entry_id")
+            args[4] if len(args) >= 5 else kwargs.get("test_entry_id")
         )
 
         if not isinstance(func_call_list, list) or not func_call_list:
@@ -1314,10 +1345,14 @@ class ExecuteFuncCallWrapper:
                             result=execution_result,
                             description=description,
                             tool_name=tool_name,
-                            tool_call_id=_synth_tool_call_id(test_entry_id, model_name, index),
+                            tool_call_id=_synth_tool_call_id(
+                                test_entry_id, model_name, index
+                            ),
                             tool_type="function",
                         )
-                        if isinstance(execution_result, str) and execution_result.startswith(
+                        if isinstance(
+                            execution_result, str
+                        ) and execution_result.startswith(
                             "Error during execution:"
                         ):
                             _record_span_error(

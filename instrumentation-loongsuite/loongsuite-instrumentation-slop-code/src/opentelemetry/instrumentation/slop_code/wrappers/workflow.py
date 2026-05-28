@@ -25,7 +25,9 @@ from opentelemetry.instrumentation.slop_code.utils import (
 )
 from opentelemetry.semconv._incubating.attributes import gen_ai_attributes
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from opentelemetry.util.genai.extended_semconv import gen_ai_extended_attributes
+from opentelemetry.util.genai.extended_semconv import (
+    gen_ai_extended_attributes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,9 @@ class _WorkflowWrapper:
 
     def __call__(self, wrapped, instance, args, kwargs):
         # run_agent_on_problem(problem_config, problem_name, config, progress_queue, output_path)
-        problem_name = args[1] if len(args) > 1 else kwargs.get("problem_name", "unknown")
+        problem_name = (
+            args[1] if len(args) > 1 else kwargs.get("problem_name", "unknown")
+        )
         config = args[2] if len(args) > 2 else kwargs.get("config")
 
         span_name = f"chain {problem_name}"
@@ -55,7 +59,9 @@ class _WorkflowWrapper:
         # Extract optional attributes from config
         if config is not None:
             model_name = safe_get_nested(config, "model_def", "name")
-            set_optional_attr_dict(attrs, gen_ai_attributes.GEN_AI_REQUEST_MODEL, model_name)
+            set_optional_attr_dict(
+                attrs, gen_ai_attributes.GEN_AI_REQUEST_MODEL, model_name
+            )
 
             agent_type = safe_get_nested(config, "agent_config", "type")
             set_optional_attr_dict(attrs, "slop_code.agent.type", agent_type)
@@ -63,7 +69,9 @@ class _WorkflowWrapper:
             pass_policy = safe_get_nested(config, "pass_policy", "value")
             if pass_policy is None:
                 pass_policy_obj = safe_get(config, "pass_policy")
-                if pass_policy_obj is not None and hasattr(pass_policy_obj, "value"):
+                if pass_policy_obj is not None and hasattr(
+                    pass_policy_obj, "value"
+                ):
                     pass_policy = pass_policy_obj.value
             set_optional_attr_dict(attrs, "slop_code.pass_policy", pass_policy)
 
@@ -87,7 +95,9 @@ class _WorkflowWrapper:
                                 "slop_code.passed_policy",
                                 summary.get("passed_policy"),
                             )
-                            set_optional_attr(span, "output.value", str(summary))
+                            set_optional_attr(
+                                span, "output.value", str(summary)
+                            )
 
                     span.set_status(Status(StatusCode.OK))
                     return result

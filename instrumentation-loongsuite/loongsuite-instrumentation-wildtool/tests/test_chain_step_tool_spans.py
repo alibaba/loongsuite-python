@@ -1,9 +1,20 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for CHAIN / STEP / TOOL spans (P3, P4, P5)."""
 
 import json
-
-import pytest
-from opentelemetry.trace import StatusCode
 
 from wtb.model_handler.base_handler import BaseHandler
 
@@ -36,8 +47,12 @@ class _StubHandler(BaseHandler):
 
 class TestChainSpan:
     def test_chain_span_per_task(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """Each task should produce one CHAIN span with correct attributes."""
         handler = _StubHandler()
@@ -60,13 +75,19 @@ class TestChainSpan:
         assert attrs.get("gen_ai.operation.name") == "workflow"
         assert attrs.get("gen_ai.framework") == "wildtool"
         assert attrs.get("wildtool.task_idx") == 0
-        assert attrs.get("wildtool.test_entry_id") == "wild_tool_bench_test_001"
+        assert (
+            attrs.get("wildtool.test_entry_id") == "wild_tool_bench_test_001"
+        )
         assert attrs.get("wildtool.action_name_label") == "correct"
         assert attrs.get("wildtool.is_optimal") is True
 
     def test_chain_parent_is_agent(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """CHAIN span should be child of AGENT span."""
         handler = _StubHandler()
@@ -94,8 +115,12 @@ class TestChainSpan:
 
 class TestStepSpans:
     def test_step_spans_per_chain(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """Each _request_tool_call invocation should produce a STEP span."""
         handler = _StubHandler()
@@ -113,7 +138,12 @@ class TestStepSpans:
 
         attrs0 = dict(step_spans[0].attributes or {})
         attrs1 = dict(step_spans[1].attributes or {})
-        rounds = sorted([attrs0.get("gen_ai.react.round"), attrs1.get("gen_ai.react.round")])
+        rounds = sorted(
+            [
+                attrs0.get("gen_ai.react.round"),
+                attrs1.get("gen_ai.react.round"),
+            ]
+        )
         assert rounds == [1, 2]
 
         for ss in step_spans:
@@ -122,8 +152,12 @@ class TestStepSpans:
             assert a.get("gen_ai.operation.name") == "react"
 
     def test_step_parent_is_chain(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """STEP spans should be children of CHAIN span."""
         handler = _StubHandler()
@@ -148,8 +182,12 @@ class TestStepSpans:
             assert ss.parent.span_id == chain.context.span_id
 
     def test_step_token_attributes(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """STEP span should have gen_ai.usage.input_tokens and output_tokens."""
         handler = _StubHandler()
@@ -158,7 +196,8 @@ class TestStepSpans:
         )
         resp1 = text_response_factory(
             "The weather in Beijing is Sunny, 25°C",
-            input_tokens=25, output_tokens=12,
+            input_tokens=25,
+            output_tokens=12,
         )
         handler._step_responses = [resp0, resp1]
 
@@ -184,8 +223,12 @@ class TestStepSpans:
 
 class TestToolSpans:
     def test_tool_span_attributes(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """TOOL span should have correct attributes including execution_mode."""
         handler = _StubHandler()
@@ -213,8 +256,12 @@ class TestToolSpans:
         )
 
     def test_tool_span_parent_is_chain(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """TOOL spans share the CHAIN trace_id (parent is STEP after Round 2)."""
         handler = _StubHandler()
@@ -240,8 +287,12 @@ class TestToolSpans:
 
 class TestSpanHierarchy:
     def test_full_hierarchy(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """Verify ENTRY → AGENT → CHAIN → STEP hierarchy and consistent trace_id."""
         from wtb._llm_response_generation import multi_threaded_inference

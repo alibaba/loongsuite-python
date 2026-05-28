@@ -59,14 +59,14 @@ import json
 import logging
 from typing import Any, Collection
 
+from wrapt import wrap_function_wrapper
+
 from opentelemetry import context as context_api
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.terminus2.package import _instruments
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.trace import SpanKind, Status, StatusCode
-from wrapt import wrap_function_wrapper
-
-from opentelemetry.instrumentation.terminus2.package import _instruments
 
 logger = logging.getLogger(__name__)
 
@@ -110,25 +110,30 @@ _OP_RUN_TASK = "run_task"
 _OP_TASK = "task"
 _TOOL_TYPE_EXTENSION = "extension"
 
-_TERMINAL_TOOL_DEFINITION = json.dumps([{
-    "type": "function",
-    "name": _TERMINAL_TOOL_NAME,
-    "description": _TERMINAL_TOOL_DESCRIPTION,
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "keystrokes": {
-                "type": "string",
-                "description": "Exact keystrokes to send to the terminal",
+_TERMINAL_TOOL_DEFINITION = json.dumps(
+    [
+        {
+            "type": "function",
+            "name": _TERMINAL_TOOL_NAME,
+            "description": _TERMINAL_TOOL_DESCRIPTION,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keystrokes": {
+                        "type": "string",
+                        "description": "Exact keystrokes to send to the terminal",
+                    },
+                    "duration_sec": {
+                        "type": "number",
+                        "description": "Seconds to wait for the command to complete",
+                    },
+                },
+                "required": ["keystrokes"],
             },
-            "duration_sec": {
-                "type": "number",
-                "description": "Seconds to wait for the command to complete",
-            },
-        },
-        "required": ["keystrokes"],
-    },
-}], ensure_ascii=False)
+        }
+    ],
+    ensure_ascii=False,
+)
 
 # ── ReAct extension attributes (阿里云扩展规范) ──────────────────────────────
 _GEN_AI_REACT_ROUND = "gen_ai.react.round"
@@ -147,10 +152,12 @@ def _commands_to_arguments_json(commands) -> str:
     ``gen_ai.tool.call.arguments``."""
     serialized = []
     for cmd in commands:
-        serialized.append({
-            "keystrokes": getattr(cmd, "keystrokes", ""),
-            "duration_sec": getattr(cmd, "duration_sec", None),
-        })
+        serialized.append(
+            {
+                "keystrokes": getattr(cmd, "keystrokes", ""),
+                "duration_sec": getattr(cmd, "duration_sec", None),
+            }
+        )
     try:
         return json.dumps(serialized, ensure_ascii=False)
     except Exception:
@@ -238,6 +245,7 @@ def _resolve_target(module: str, name: str):
     module / attribute.
     """
     from importlib import import_module
+
     mod = import_module(module)
     parts = name.split(".")
     parent = mod
@@ -317,6 +325,7 @@ def _try_unwrap(module: str, name: str) -> None:
 # Instrumentor
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class Terminus2Instrumentor(BaseInstrumentor):
     """Instrumentor for the terminus-2 agent from terminal-bench."""
 
@@ -325,7 +334,9 @@ class Terminus2Instrumentor(BaseInstrumentor):
 
     def _instrument(self, **kwargs: Any) -> None:
         tracer_provider = kwargs.get("tracer_provider")
-        tracer = trace_api.get_tracer(__name__, "", tracer_provider=tracer_provider)
+        tracer = trace_api.get_tracer(
+            __name__, "", tracer_provider=tracer_provider
+        )
 
         # P0 – ENTRY span (application entry point)
         _try_wrap(
@@ -415,6 +426,7 @@ class Terminus2Instrumentor(BaseInstrumentor):
 # P0 — ENTRY span: Terminus2.perform_task
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class _PerformTaskWrapper:
     """Wrap ``Terminus2.perform_task`` to produce the **ENTRY** span.
 
@@ -462,9 +474,11 @@ class _PerformTaskWrapper:
             # AgentResult.total_*_tokens is a local-tokenizer estimate —
             # see docstring at top of module for why we don't surface it.
             failure_mode = getattr(result, "failure_mode", None)
-            failure_mode_str = str(
-                getattr(failure_mode, "value", failure_mode)
-            ) if failure_mode is not None else "none"
+            failure_mode_str = (
+                str(getattr(failure_mode, "value", failure_mode))
+                if failure_mode is not None
+                else "none"
+            )
             markers = getattr(result, "timestamped_markers", None) or []
 
             output_summary = {
@@ -489,6 +503,7 @@ class _PerformTaskWrapper:
 # ═══════════════════════════════════════════════════════════════════════════
 # P0 — AGENT span: Terminus2._run_agent_loop
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class _RunAgentLoopWrapper:
     """Wrap ``Terminus2._run_agent_loop`` to produce the **AGENT** span.
@@ -517,7 +532,9 @@ class _RunAgentLoopWrapper:
         #   (initial_prompt, session, chat, logging_dir=None,
         #    original_instruction="")
         original_instruction = (
-            args[4] if len(args) > 4 else kwargs.get("original_instruction", "")
+            args[4]
+            if len(args) > 4
+            else kwargs.get("original_instruction", "")
         )
         chat = args[2] if len(args) > 2 else kwargs.get("chat")
 
@@ -590,7 +607,9 @@ class _RunAgentLoopWrapper:
             # last ``assistant`` entry — the agent's terminal action/response)
             # plus loop-exit context. Without this the AGENT span has only
             # input, which is what the user sees as "no output".
-            pending_completion = bool(getattr(instance, "_pending_completion", False))
+            pending_completion = bool(
+                getattr(instance, "_pending_completion", False)
+            )
             final_assistant_text = ""
             messages = list(getattr(chat, "_messages", []) or [])
             for msg in reversed(messages):
@@ -613,7 +632,9 @@ class _RunAgentLoopWrapper:
                 _GEN_AI_OUTPUT_MESSAGES,
                 _text_messages_json("assistant", output_value),
             )
-            span.set_attribute("terminus2.pending_completion", pending_completion)
+            span.set_attribute(
+                "terminus2.pending_completion", pending_completion
+            )
 
             span.set_status(Status(StatusCode.OK))
             return result
@@ -622,6 +643,7 @@ class _RunAgentLoopWrapper:
 # ═══════════════════════════════════════════════════════════════════════════
 # P0 — TOOL span: Terminus2._execute_commands
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class _ExecuteCommandsWrapper:
     """Wrap ``Terminus2._execute_commands`` to produce a **TOOL** span.
@@ -686,6 +708,7 @@ class _ExecuteCommandsWrapper:
 # P1 — STEP span: Terminus2._handle_llm_interaction
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class _HandleLLMInteractionWrapper:
     """Wrap ``Terminus2._handle_llm_interaction`` to produce a **STEP** span.
 
@@ -742,6 +765,7 @@ class _HandleLLMInteractionWrapper:
 # P1 — TASK span: parser.parse_response
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class _ParseResponseWrapper:
     """Wrap ``parser.parse_response`` to produce a **TASK** span.
 
@@ -782,8 +806,12 @@ class _ParseResponseWrapper:
                 span.set_status(Status(StatusCode.ERROR))
                 raise
 
-            span.set_attribute("terminus2.task_complete", result.is_task_complete)
-            span.set_attribute("terminus2.commands.count", len(result.commands))
+            span.set_attribute(
+                "terminus2.task_complete", result.is_task_complete
+            )
+            span.set_attribute(
+                "terminus2.commands.count", len(result.commands)
+            )
 
             output_summary = {
                 "is_task_complete": result.is_task_complete,
@@ -810,7 +838,9 @@ class _ParseResponseWrapper:
                 span.set_attribute("terminus2.parse.error", str(result.error))
 
             if result.warning:
-                span.set_attribute("terminus2.parse.warning", str(result.warning))
+                span.set_attribute(
+                    "terminus2.parse.warning", str(result.warning)
+                )
 
             span.set_status(Status(StatusCode.OK))
             return result
@@ -819,6 +849,7 @@ class _ParseResponseWrapper:
 # ═══════════════════════════════════════════════════════════════════════════
 # P2 — CHAIN span: Terminus2._summarize
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class _SummarizeWrapper:
     """Wrap ``Terminus2._summarize`` to produce a **CHAIN** span.

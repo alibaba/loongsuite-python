@@ -34,11 +34,12 @@ class TestTaskSpan:
         checkpoint.name = "checkpoint_1"
         checkpoint.order = 1
 
-        result = runner._run_checkpoint(checkpoint, "/tmp/save", True)
+        runner._run_checkpoint(checkpoint, "/tmp/save", True)
 
         spans = span_exporter.get_finished_spans()
         task_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "run_task"
         ]
         assert len(task_spans) == 1
@@ -56,10 +57,17 @@ class TestTaskSpan:
         """Exception in _run_checkpoint should produce an error task span."""
         import slop_code.agent_runner.runner as mod
 
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class FailingRunner(mod.AgentRunner):
-            def _run_checkpoint(self, checkpoint, checkpoint_save_dir, is_first_checkpoint=False):
+            def _run_checkpoint(
+                self,
+                checkpoint,
+                checkpoint_save_dir,
+                is_first_checkpoint=False,
+            ):
                 raise RuntimeError("Checkpoint failed")
 
         # Replace class temporarily
@@ -67,7 +75,9 @@ class TestTaskSpan:
         mod.AgentRunner = FailingRunner
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             runner = mod.AgentRunner()
@@ -80,7 +90,8 @@ class TestTaskSpan:
 
             spans = span_exporter.get_finished_spans()
             task_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "run_task"
             ]
             assert len(task_spans) == 1
@@ -103,8 +114,11 @@ class TestTaskSpan:
 
         spans = span_exporter.get_finished_spans()
         task_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "run_task"
         ]
         assert len(task_spans) == 1
-        assert task_spans[0].attributes["slop_code.is_first_checkpoint"] is False
+        assert (
+            task_spans[0].attributes["slop_code.is_first_checkpoint"] is False
+        )

@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for ``opentelemetry.instrumentation.algotune.internal.utils``
 and ``opentelemetry.instrumentation.algotune.config``.
 
@@ -8,11 +22,8 @@ the module-level constants, and the config helper functions
 
 from __future__ import annotations
 
-import os
 import types
 from unittest import mock
-
-import pytest
 
 from opentelemetry.instrumentation.algotune.internal.utils import (
     ALGOTUNE_FRAMEWORK_VALUE,
@@ -27,7 +38,6 @@ from opentelemetry.instrumentation.algotune.internal.utils import (
     safe_close_step,
     truncate,
 )
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -152,7 +162,9 @@ class TestProviderFromModel:
         assert provider_from_model("openai/gpt-4o") == "openai"
 
     def test_anthropic_prefix(self):
-        assert provider_from_model("anthropic/claude-3-5-sonnet") == "anthropic"
+        assert (
+            provider_from_model("anthropic/claude-3-5-sonnet") == "anthropic"
+        )
 
     def test_vertex_ai_prefix(self):
         assert provider_from_model("vertex_ai/gemini-1.5-pro") == "google"
@@ -182,10 +194,16 @@ class TestProviderFromModel:
         assert provider_from_model("deepseek/deepseek-coder") == "deepseek"
 
     def test_openrouter_prefix(self):
-        assert provider_from_model("openrouter/meta-llama/llama-3") == "openrouter"
+        assert (
+            provider_from_model("openrouter/meta-llama/llama-3")
+            == "openrouter"
+        )
 
     def test_together_ai_prefix(self):
-        assert provider_from_model("together_ai/meta-llama/Meta-Llama-3") == "together_ai"
+        assert (
+            provider_from_model("together_ai/meta-llama/Meta-Llama-3")
+            == "together_ai"
+        )
 
     # -- Case insensitivity --
 
@@ -367,14 +385,18 @@ class TestBoolEnv:
 
         for val in ("true", "1", "yes", "on", "True", "YES", "ON"):
             monkeypatch.setenv("TEST_BOOL_ENV_VAR", val)
-            assert _bool_env("TEST_BOOL_ENV_VAR", False) is True, f"Failed for {val}"
+            assert _bool_env("TEST_BOOL_ENV_VAR", False) is True, (
+                f"Failed for {val}"
+            )
 
     def test_false_values(self, monkeypatch):
         from opentelemetry.instrumentation.algotune.config import _bool_env
 
         for val in ("false", "0", "no", "off", "random"):
             monkeypatch.setenv("TEST_BOOL_ENV_VAR", val)
-            assert _bool_env("TEST_BOOL_ENV_VAR", True) is False, f"Failed for {val}"
+            assert _bool_env("TEST_BOOL_ENV_VAR", True) is False, (
+                f"Failed for {val}"
+            )
 
 
 class TestIntEnv:
@@ -419,37 +441,62 @@ class TestFloatEnv:
 
 class TestGenaiCaptureEnabled:
     def test_not_set_returns_false(self, monkeypatch):
-        from opentelemetry.instrumentation.algotune.config import _genai_capture_enabled
+        from opentelemetry.instrumentation.algotune.config import (
+            _genai_capture_enabled,
+        )
 
-        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        monkeypatch.delenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False
+        )
         assert _genai_capture_enabled() is False
 
     def test_true_value(self, monkeypatch):
-        from opentelemetry.instrumentation.algotune.config import _genai_capture_enabled
+        from opentelemetry.instrumentation.algotune.config import (
+            _genai_capture_enabled,
+        )
 
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "TRUE")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "TRUE"
+        )
         assert _genai_capture_enabled() is True
 
     def test_span_only(self, monkeypatch):
-        from opentelemetry.instrumentation.algotune.config import _genai_capture_enabled
+        from opentelemetry.instrumentation.algotune.config import (
+            _genai_capture_enabled,
+        )
 
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
         assert _genai_capture_enabled() is True
 
     def test_span_and_event(self, monkeypatch):
-        from opentelemetry.instrumentation.algotune.config import _genai_capture_enabled
+        from opentelemetry.instrumentation.algotune.config import (
+            _genai_capture_enabled,
+        )
 
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_AND_EVENT")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT",
+            "SPAN_AND_EVENT",
+        )
         assert _genai_capture_enabled() is True
 
     def test_event_only(self, monkeypatch):
-        from opentelemetry.instrumentation.algotune.config import _genai_capture_enabled
+        from opentelemetry.instrumentation.algotune.config import (
+            _genai_capture_enabled,
+        )
 
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "EVENT_ONLY")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "EVENT_ONLY"
+        )
         assert _genai_capture_enabled() is True
 
     def test_invalid_value_returns_false(self, monkeypatch):
-        from opentelemetry.instrumentation.algotune.config import _genai_capture_enabled
+        from opentelemetry.instrumentation.algotune.config import (
+            _genai_capture_enabled,
+        )
 
-        monkeypatch.setenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "invalid")
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "invalid"
+        )
         assert _genai_capture_enabled() is False

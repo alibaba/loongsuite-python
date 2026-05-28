@@ -14,8 +14,6 @@
 
 """Tests for AGENT span (Agent.run_checkpoint)."""
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from opentelemetry.trace import StatusCode
@@ -29,11 +27,12 @@ class TestAgentSpan:
         import slop_code.agent_runner.agent as mod
 
         agent = mod.Agent(problem_name="file_backup")
-        result = agent.run_checkpoint("solve the bug")
+        agent.run_checkpoint("solve the bug")
 
         spans = span_exporter.get_finished_spans()
         agent_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
         ]
         assert len(agent_spans) == 1
@@ -61,7 +60,8 @@ class TestAgentSpan:
 
         spans = span_exporter.get_finished_spans()
         agent_spans = [
-            s for s in spans
+            s
+            for s in spans
             if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
         ]
         assert len(agent_spans) == 1
@@ -76,7 +76,9 @@ class TestAgentSpan:
         """Exception in Agent.run_checkpoint should produce error span."""
         import slop_code.agent_runner.agent as mod
 
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class FailingAgent(mod.Agent):
             def run_checkpoint(self, task):
@@ -86,7 +88,9 @@ class TestAgentSpan:
         mod.Agent = FailingAgent
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.Agent(problem_name="test_prob")
@@ -96,7 +100,8 @@ class TestAgentSpan:
 
             spans = span_exporter.get_finished_spans()
             agent_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
             ]
             assert len(agent_spans) == 1
@@ -107,10 +112,15 @@ class TestAgentSpan:
             instrumentor.uninstrument()
             mod.Agent = OriginalAgent
 
-    def test_agent_span_with_messages_attr(self, span_exporter, tracer_provider):
+    def test_agent_span_with_messages_attr(
+        self, span_exporter, tracer_provider
+    ):
         """Agent with _messages should capture assistant output messages."""
         import slop_code.agent_runner.agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class AgentWithMessages(mod.Agent):
             def __init__(self, problem_name="test"):
@@ -118,16 +128,24 @@ class TestAgentSpan:
                 self.system_template = None
                 self.system_prompt = "You are a helpful assistant"
                 self._messages = [
-                    {"role": "system", "content": "You are a helpful assistant"},
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant",
+                    },
                     {"role": "user", "content": "Fix the bug"},
-                    {"role": "assistant", "content": "I found the issue in line 42"},
+                    {
+                        "role": "assistant",
+                        "content": "I found the issue in line 42",
+                    },
                 ]
 
         OriginalAgent = mod.Agent
         mod.Agent = AgentWithMessages
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.Agent(problem_name="test_prob")
@@ -135,7 +153,8 @@ class TestAgentSpan:
 
             spans = span_exporter.get_finished_spans()
             agent_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
             ]
             assert len(agent_spans) == 1
@@ -147,7 +166,10 @@ class TestAgentSpan:
 
             # Should use system_prompt as fallback for system instructions
             assert "gen_ai.system.instructions" in span.attributes
-            assert "helpful assistant" in span.attributes["gen_ai.system.instructions"]
+            assert (
+                "helpful assistant"
+                in span.attributes["gen_ai.system.instructions"]
+            )
         finally:
             instrumentor.uninstrument()
             mod.Agent = OriginalAgent
@@ -155,7 +177,10 @@ class TestAgentSpan:
     def test_agent_span_with_steps_attr(self, span_exporter, tracer_provider):
         """Agent with _steps should capture assistant output messages from steps."""
         import slop_code.agent_runner.agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class StepRole:
             def __init__(self, value):
@@ -182,7 +207,9 @@ class TestAgentSpan:
         mod.Agent = AgentWithSteps
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.Agent(problem_name="test_prob")
@@ -190,7 +217,8 @@ class TestAgentSpan:
 
             spans = span_exporter.get_finished_spans()
             agent_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
             ]
             assert len(agent_spans) == 1
@@ -202,15 +230,22 @@ class TestAgentSpan:
 
             # Should extract system prompt from _steps
             assert "gen_ai.system.instructions" in span.attributes
-            assert "system agent" in span.attributes["gen_ai.system.instructions"]
+            assert (
+                "system agent" in span.attributes["gen_ai.system.instructions"]
+            )
         finally:
             instrumentor.uninstrument()
             mod.Agent = OriginalAgent
 
-    def test_agent_span_system_from_messages(self, span_exporter, tracer_provider):
+    def test_agent_span_system_from_messages(
+        self, span_exporter, tracer_provider
+    ):
         """Agent with _messages containing system role should extract system prompt."""
         import slop_code.agent_runner.agent as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class AgentSysMsgs(mod.Agent):
             def __init__(self, problem_name="test"):
@@ -219,7 +254,10 @@ class TestAgentSpan:
                 self.system_prompt = None
                 self._steps = []
                 self._messages = [
-                    {"role": "system", "content": "System context from messages"},
+                    {
+                        "role": "system",
+                        "content": "System context from messages",
+                    },
                     {"role": "user", "content": "Help me"},
                 ]
 
@@ -227,7 +265,9 @@ class TestAgentSpan:
         mod.Agent = AgentSysMsgs
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             agent = mod.Agent(problem_name="test_prob")
@@ -235,13 +275,17 @@ class TestAgentSpan:
 
             spans = span_exporter.get_finished_spans()
             agent_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.operation.name") == "invoke_agent"
             ]
             assert len(agent_spans) == 1
             span = agent_spans[0]
             assert "gen_ai.system.instructions" in span.attributes
-            assert "System context from messages" in span.attributes["gen_ai.system.instructions"]
+            assert (
+                "System context from messages"
+                in span.attributes["gen_ai.system.instructions"]
+            )
         finally:
             instrumentor.uninstrument()
             mod.Agent = OriginalAgent

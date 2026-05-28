@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Round 2 regression tests covering the H1 / H2 / M1 / M2 / M3 fixes.
 
 See ``llm-dev/execute.md`` § "修订记录 (Round 2 fix)" and
@@ -8,9 +22,9 @@ addressed by these tests.
 import json
 
 import pytest
-from opentelemetry.trace import StatusCode
-
 from wtb.model_handler.base_handler import BaseHandler
+
+from opentelemetry.trace import StatusCode
 
 
 class _StubHandler(BaseHandler):
@@ -42,7 +56,11 @@ class _StubHandler(BaseHandler):
 
 
 def _spans_by_kind(spans, kind):
-    return [s for s in spans if (s.attributes or {}).get("gen_ai.span.kind") == kind]
+    return [
+        s
+        for s in spans
+        if (s.attributes or {}).get("gen_ai.span.kind") == kind
+    ]
 
 
 def _spans_named(spans, name):
@@ -64,8 +82,12 @@ def _step_for_round(spans, round_num):
 
 class TestToolParentIsStep:
     def test_single_tool_parent_is_step_round_one(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """The single TOOL span in simple_test_entry should be a child of the
         first STEP span (round=1), not the CHAIN span."""
@@ -99,8 +121,11 @@ class TestToolParentIsStep:
         assert tool.context.trace_id == step_round1.context.trace_id
 
     def test_multi_step_each_tool_parented_to_correct_step(
-        self, span_exporter, instrument,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """multi-step scenario: 2 successful tool steps + 1 prepare_to_answer.
 
@@ -147,12 +172,18 @@ class TestToolParentIsStep:
                         "dependency_list": [],
                     },
                     {
-                        "action": {"name": "lookup", "arguments": {"id": "item_42"}},
+                        "action": {
+                            "name": "lookup",
+                            "arguments": {"id": "item_42"},
+                        },
                         "observation": "details:hello",
                         "dependency_list": [0],
                     },
                     {
-                        "action": {"name": "prepare_to_answer", "arguments": {}},
+                        "action": {
+                            "name": "prepare_to_answer",
+                            "arguments": {},
+                        },
                         "observation": "Item X is hello.",
                         "dependency_list": [1],
                     },
@@ -183,11 +214,13 @@ class TestToolParentIsStep:
         chain = _spans_by_kind(spans, "CHAIN")[0]
 
         lookup_tool = next(
-            t for t in tool_spans
+            t
+            for t in tool_spans
             if (t.attributes or {}).get("gen_ai.tool.name") == "lookup"
         )
         search_tool = next(
-            t for t in tool_spans
+            t
+            for t in tool_spans
             if (t.attributes or {}).get("gen_ai.tool.name") == "search"
         )
 
@@ -207,8 +240,12 @@ class TestToolParentIsStep:
 
 class TestChainInputOutputValue:
     def test_chain_input_value_and_output_value(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         handler = _StubHandler()
         resp0 = tool_call_response_factory(
@@ -237,8 +274,11 @@ class TestChainInputOutputValue:
         assert out["is_optimal"] is True
 
     def test_chain_input_value_truncated_when_long(
-        self, span_exporter, instrument,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """Very long user content should be truncated to keep span attribute small."""
         handler = _StubHandler()
@@ -260,7 +300,10 @@ class TestChainInputOutputValue:
             "english_answer_list": [
                 [
                     {
-                        "action": {"name": "prepare_to_answer", "arguments": {}},
+                        "action": {
+                            "name": "prepare_to_answer",
+                            "arguments": {},
+                        },
                         "observation": "ok",
                         "dependency_list": [],
                     }
@@ -287,7 +330,10 @@ class TestChainInputOutputValue:
 
 class TestStepFinishReason:
     def test_finish_reason_action_name_mismatch(
-        self, span_exporter, instrument, simple_test_entry,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
         tool_call_response_factory,
     ):
         handler = _StubHandler()
@@ -302,10 +348,16 @@ class TestStepFinishReason:
         steps = _spans_named(spans, "react step")
         assert len(steps) == 1
         attrs = dict(steps[0].attributes or {})
-        assert attrs.get("gen_ai.react.finish_reason") == "action_name_mismatch"
+        assert (
+            attrs.get("gen_ai.react.finish_reason") == "action_name_mismatch"
+        )
 
     def test_finish_reason_empty_response(
-        self, span_exporter, instrument, simple_test_entry, make_completion,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        make_completion,
     ):
         """Empty content + no tool_calls → STEP gets finish_reason=empty_response."""
         from tests.conftest import (
@@ -329,7 +381,10 @@ class TestStepFinishReason:
         assert attrs.get("gen_ai.react.finish_reason") == "empty_response"
 
     def test_finish_reason_request_exception(
-        self, span_exporter, instrument, simple_test_entry,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
     ):
         """Exception in _request_tool_call → STEP ERROR + finish_reason=error."""
         handler = _StubHandler()
@@ -346,8 +401,12 @@ class TestStepFinishReason:
         assert attrs.get("gen_ai.react.finish_reason") == "error"
 
     def test_finish_reason_omitted_on_success(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """Successful steps should NOT have a finish_reason (per execute.md)."""
         handler = _StubHandler()
@@ -376,8 +435,12 @@ class TestStepFinishReason:
 
 class TestToolSensitiveAttributes:
     def test_tool_args_result_description_and_execution_mode(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         handler = _StubHandler()
         resp0 = tool_call_response_factory(
@@ -408,8 +471,7 @@ class TestToolSensitiveAttributes:
 
         # Existing custom attribute must still be present.
         assert (
-            attrs.get("wildtool.tool.execution_mode")
-            == "ground_truth_replay"
+            attrs.get("wildtool.tool.execution_mode") == "ground_truth_replay"
         )
 
 
@@ -420,8 +482,12 @@ class TestToolSensitiveAttributes:
 
 class TestStepProviderFallback:
     def test_step_has_provider_name_fallback(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         handler = _StubHandler()
         handler._step_responses = [

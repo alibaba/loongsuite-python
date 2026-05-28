@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Wrapt wrappers for AlgoTune OpenTelemetry instrumentation.
 
 Span hierarchy (final selection)::
@@ -88,9 +102,7 @@ def _text_value(value: Any) -> str:
 def _span_message(role: str, content: Any) -> dict[str, Any]:
     return {
         "role": role or "user",
-        "parts": [
-            {"type": "text", "content": truncate(_text_value(content))}
-        ],
+        "parts": [{"type": "text", "content": truncate(_text_value(content))}],
     }
 
 
@@ -267,7 +279,9 @@ class MainWrapper:
             span.set_attribute(GEN_AI_FRAMEWORK, ALGOTUNE_FRAMEWORK_VALUE)
             span.set_attribute("gen_ai.session.id", session_id)
             if argv_repr:
-                span.set_attribute("algotune.invocation.argv", truncate(argv_repr))
+                span.set_attribute(
+                    "algotune.invocation.argv", truncate(argv_repr)
+                )
 
             # Best-effort: pull --model and --task out of sys.argv so the
             # ENTRY span carries the user's intent before main() finishes.
@@ -382,7 +396,9 @@ class RunTaskWrapper:
 
                 rounds = int(getattr(instance, INST_ROUND_ATTR, 0) or 0)
                 span.set_attribute("algo.agent.total_rounds", rounds)
-                span.set_attribute("algo.agent.final_status", terminated_reason)
+                span.set_attribute(
+                    "algo.agent.final_status", terminated_reason
+                )
                 _publish_agent_content_attributes(instance, span, parent_span)
 
                 # Spend / final eval bookkeeping (best-effort; AlgoTune may
@@ -426,7 +442,6 @@ class RunTaskWrapper:
                     "agent.loop.terminated",
                     {"reason": terminated_reason},
                 )
-
 
     @staticmethod
     def _infer_termination_reason(instance: Any) -> str:
@@ -528,7 +543,9 @@ class GetResponseWrapper:
     @staticmethod
     def _publish_attempt_count(instance: Any, span: Span) -> None:
         try:
-            attempts = int(getattr(instance, INST_LITELLM_ATTEMPTS_ATTR, 0) or 0)
+            attempts = int(
+                getattr(instance, INST_LITELLM_ATTEMPTS_ATTR, 0) or 0
+            )
             if attempts:
                 span.set_attribute("algo.llm.retry_count", attempts)
         except Exception:  # noqa: BLE001
@@ -806,7 +823,9 @@ class RunnerEvalDatasetWrapper:
             else:
                 self._record_eval_attributes(span, result)
                 try:
-                    result_data = result.data if hasattr(result, "data") else result
+                    result_data = (
+                        result.data if hasattr(result, "data") else result
+                    )
                     _set_task_output(
                         span,
                         {
@@ -897,7 +916,8 @@ class EvaluateSingleWrapper:
             if baseline_time_ms is not None:
                 try:
                     span.set_attribute(
-                        "algo.problem.baseline_time_ms", float(baseline_time_ms)
+                        "algo.problem.baseline_time_ms",
+                        float(baseline_time_ms),
                     )
                 except (TypeError, ValueError):
                     pass
@@ -1073,7 +1093,9 @@ class GetBaselineTimesWrapper:
                 _set_task_output(
                     span,
                     {
-                        "count": len(result) if isinstance(result, dict) else None,
+                        "count": len(result)
+                        if isinstance(result, dict)
+                        else None,
                         "result": result,
                     },
                 )
@@ -1115,9 +1137,7 @@ class LiteLLMQueryWrapper:
         finally:
             try:
                 attempts = int(
-                    getattr(
-                        instance, "_otel_algo_litellm_call_attempts", 0
-                    )
+                    getattr(instance, "_otel_algo_litellm_call_attempts", 0)
                     or 0
                 )
                 if (
@@ -1233,7 +1253,10 @@ class TogetherModelQueryWrapper:
 
             try:
                 if isinstance(defaults, dict):
-                    if "temperature" in defaults and defaults["temperature"] is not None:
+                    if (
+                        "temperature" in defaults
+                        and defaults["temperature"] is not None
+                    ):
                         span.set_attribute(
                             GenAI.GEN_AI_REQUEST_TEMPERATURE,
                             float(defaults["temperature"]),

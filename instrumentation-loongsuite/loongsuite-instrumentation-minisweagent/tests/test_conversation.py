@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for opentelemetry.instrumentation.minisweagent.internal.conversation.
 
 Covers the pure-function helpers that convert mini-swe-agent trajectory
@@ -8,8 +22,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     InputMessage,
@@ -19,14 +31,17 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
 )
 
-
 # =====================================================================
 # Helpers under test — imported after conftest injects stub modules.
 # =====================================================================
 
+
 def _conv():
     """Lazy import so stub modules are in place."""
-    from opentelemetry.instrumentation.minisweagent.internal import conversation
+    from opentelemetry.instrumentation.minisweagent.internal import (
+        conversation,
+    )
+
     return conversation
 
 
@@ -243,7 +258,9 @@ class TestNormalizedToolCalls:
     def test_actions_ignored_when_tool_calls_present(self):
         """``extra.actions`` are ignored if ``tool_calls`` is non-empty."""
         msg: dict[str, Any] = {
-            "tool_calls": [{"id": "tc_x", "function": {"name": "bash", "arguments": "{}"}}],
+            "tool_calls": [
+                {"id": "tc_x", "function": {"name": "bash", "arguments": "{}"}}
+            ],
             "extra": {
                 "actions": [{"command": "should be ignored"}],
             },
@@ -267,9 +284,7 @@ class TestNormalizedToolCalls:
 
     def test_tool_call_without_function_uses_defaults(self):
         """A tool_call dict missing 'function' should still produce a ToolCall with defaults."""
-        msg: dict[str, Any] = {
-            "tool_calls": [{"id": "tc_nofn"}]
-        }
+        msg: dict[str, Any] = {"tool_calls": [{"id": "tc_nofn"}]}
         result = _conv()._normalized_tool_calls(msg)
         assert len(result) == 1
         assert result[0].name == "bash"
@@ -278,8 +293,20 @@ class TestNormalizedToolCalls:
     def test_multiple_tool_calls(self):
         msg: dict[str, Any] = {
             "tool_calls": [
-                {"id": "t1", "function": {"name": "bash", "arguments": '{"command":"a"}'}},
-                {"id": "t2", "function": {"name": "bash", "arguments": '{"command":"b"}'}},
+                {
+                    "id": "t1",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"a"}',
+                    },
+                },
+                {
+                    "id": "t2",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"b"}',
+                    },
+                },
             ]
         }
         result = _conv()._normalized_tool_calls(msg)
@@ -353,7 +380,13 @@ class TestMessageToSemconvMessages:
             "role": "assistant",
             "content": "Running command",
             "tool_calls": [
-                {"id": "tc_1", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}
+                {
+                    "id": "tc_1",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"ls"}',
+                    },
+                }
             ],
         }
         result = _conv()._message_to_semconv_messages(msg)
@@ -474,7 +507,13 @@ class TestBuildInvokePayloadFromMessages:
                 "role": "assistant",
                 "content": "Running ls",
                 "tool_calls": [
-                    {"id": "tc_1", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}
+                    {
+                        "id": "tc_1",
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command": "ls"}',
+                        },
+                    }
                 ],
             },
             {"role": "tool", "tool_call_id": "tc_1", "content": "file.py"},
@@ -493,11 +532,15 @@ class TestBuildInvokePayloadFromMessages:
 
         # output: two assistant messages
         assert len(payload["output_messages"]) == 2
-        assert all(isinstance(m, OutputMessage) for m in payload["output_messages"])
+        assert all(
+            isinstance(m, OutputMessage) for m in payload["output_messages"]
+        )
 
         # tool definitions
         assert len(payload["tool_definitions"]) == 1
-        assert isinstance(payload["tool_definitions"][0], FunctionToolDefinition)
+        assert isinstance(
+            payload["tool_definitions"][0], FunctionToolDefinition
+        )
 
     def test_system_only(self):
         messages = [
@@ -569,10 +612,22 @@ class TestApplyPayloadToEntryInvocation:
 
         entry = FakeEntry()
         payload = {
-            "input_messages": [InputMessage(role="user", parts=[Text(content="hi")])],
-            "output_messages": [OutputMessage(role="assistant", parts=[Text(content="hello")], finish_reason="stop")],
+            "input_messages": [
+                InputMessage(role="user", parts=[Text(content="hi")])
+            ],
+            "output_messages": [
+                OutputMessage(
+                    role="assistant",
+                    parts=[Text(content="hello")],
+                    finish_reason="stop",
+                )
+            ],
             "system_instruction": [Text(content="sys")],
-            "tool_definitions": [FunctionToolDefinition(name="bash", description="desc", parameters={})],
+            "tool_definitions": [
+                FunctionToolDefinition(
+                    name="bash", description="desc", parameters={}
+                )
+            ],
         }
         _conv().apply_payload_to_entry_invocation(entry, payload)
         assert entry.input_messages == payload["input_messages"]

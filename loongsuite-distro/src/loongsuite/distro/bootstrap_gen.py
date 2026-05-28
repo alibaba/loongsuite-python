@@ -218,63 +218,99 @@ libraries = [
     },
     {
         "library": "agentscope >= 1.0.0",
-        "instrumentation": "loongsuite-instrumentation-agentscope==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-agentscope==0.6.0.dev",
     },
     {
-        "library": "agno",
-        "instrumentation": "loongsuite-instrumentation-agno==0.5.0.dev",
+        "library": "agno >= 2.0.0, < 3",
+        "instrumentation": "loongsuite-instrumentation-agno==0.6.0.dev",
+    },
+    {
+        "library": "bfcl-eval >= 4.0.0",
+        "instrumentation": "loongsuite-instrumentation-bfclv4==0.1.3.dev0",
     },
     {
         "library": "claude-agent-sdk >= 0.1.0",
-        "instrumentation": "loongsuite-instrumentation-claude-agent-sdk==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-claude-agent-sdk==0.6.0.dev",
+    },
+    {
+        "library": "claw-eval >= 0.1.0",
+        "instrumentation": "loongsuite-instrumentation-claw-eval==0.1.0",
     },
     {
         "library": "crewai >= 0.80.0",
-        "instrumentation": "loongsuite-instrumentation-crewai==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-crewai==0.6.0.dev",
     },
     {
         "library": "dashscope >= 1.0.0",
-        "instrumentation": "loongsuite-instrumentation-dashscope==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-dashscope==0.6.0.dev",
     },
     {
         "library": "google-adk >= 0.1.0",
-        "instrumentation": "loongsuite-instrumentation-google-adk==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-google-adk==0.6.0.dev",
     },
     {
         "library": "openai >= 1.0.0",
-        "instrumentation": "loongsuite-instrumentation-hermes-agent==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-hermes-agent==0.6.0.dev",
     },
     {
         "library": "langchain_core >= 0.1.0",
-        "instrumentation": "loongsuite-instrumentation-langchain==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-langchain==0.6.0.dev",
     },
     {
         "library": "langgraph >= 0.2",
-        "instrumentation": "loongsuite-instrumentation-langgraph==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-langgraph==0.6.0.dev",
     },
     {
         "library": "litellm >= 1.0.0",
-        "instrumentation": "loongsuite-instrumentation-litellm==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-litellm==0.6.0.dev",
     },
     {
         "library": "mcp >= 1.3.0, <= 1.25.0",
-        "instrumentation": "loongsuite-instrumentation-mcp==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-mcp==0.6.0.dev",
     },
     {
         "library": "mem0ai >= 1.0.0, < 2.0.0",
-        "instrumentation": "loongsuite-instrumentation-mem0==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-mem0==0.6.0.dev",
+    },
+    {
+        "library": "mini-swe-agent >= 2.2.0",
+        "instrumentation": "loongsuite-instrumentation-minisweagent==0.1.0",
     },
     {
         "library": "qwen-agent >= 0.0.20",
-        "instrumentation": "loongsuite-instrumentation-qwen-agent==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-qwen-agent==0.6.0.dev",
     },
     {
         "library": "qwenpaw >= 1.1.0",
-        "instrumentation": "loongsuite-instrumentation-qwenpaw==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-qwenpaw==0.6.0.dev",
     },
     {
         "library": "copaw >= 0.1.0, <= 1.0.2",
-        "instrumentation": "loongsuite-instrumentation-qwenpaw==0.5.0.dev",
+        "instrumentation": "loongsuite-instrumentation-qwenpaw==0.6.0.dev",
+    },
+    {
+        "library": "slop-code-bench >= 0.1",
+        "instrumentation": "loongsuite-instrumentation-slop-code==0.5.0.dev",
+    },
+    {
+        "library": "terminal-bench >= 0.1.0",
+        "instrumentation": "loongsuite-instrumentation-terminus2==0.1.0",
+    },
+    {
+        "library": "vita >= 0.0.1",
+        "instrumentation": "loongsuite-instrumentation-vita==0.5.0.dev",
+    },
+    {
+        "library": "webarena >= 0.0.1",
+        "instrumentation": "loongsuite-instrumentation-webarena==0.1.0",
+    },
+    {
+        "library": "widesearch >= 0.1.0",
+        "instrumentation": "loongsuite-instrumentation-widesearch==0.5.0.dev",
+    },
+    {
+        "library": "openai >= 1.0.0",
+        "instrumentation": "loongsuite-instrumentation-wildtool==0.1.0",
     },
 ]
 
@@ -286,5 +322,7 @@ default_instrumentations = [
     "opentelemetry-instrumentation-threading==0.62b0.dev",
     "opentelemetry-instrumentation-urllib==0.62b0.dev",
     "opentelemetry-instrumentation-wsgi==0.62b0.dev",
-    "loongsuite-instrumentation-dify==0.5.0.dev",
+    "loongsuite-instrumentation-algotune==0.1.0",
+    "loongsuite-instrumentation-dify==0.6.0.dev",
+    "loongsuite-instrumentation-openhands==0.1.0",
 ]

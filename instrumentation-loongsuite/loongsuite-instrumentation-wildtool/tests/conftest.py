@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Test configuration for WildToolBench instrumentation tests.
 
 Installs a complete mock ``wtb`` module hierarchy into ``sys.modules`` so
@@ -21,7 +35,9 @@ import pytest
 
 os.environ.setdefault("OPENAI_API_KEY", "test_key_not_real")
 os.environ.setdefault("OPENAI_BASE_URL", "http://localhost:9999/v1")
-os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental")
+os.environ.setdefault(
+    "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +45,9 @@ os.environ.setdefault("OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experiment
 # ---------------------------------------------------------------------------
 
 
-def _make_module(name: str, parent: types.ModuleType | None = None) -> types.ModuleType:
+def _make_module(
+    name: str, parent: types.ModuleType | None = None
+) -> types.ModuleType:
     """Create a fake module and register it in sys.modules."""
     mod = types.ModuleType(name)
     mod.__package__ = name
@@ -140,11 +158,13 @@ class BaseHandler:
                 if tool_name == expected_action:
                     step_output["current_action_name_label"] = "correct"
                     observation = expected_step.get("observation", "")
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": observation,
-                    })
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": observation,
+                        }
+                    )
                     step_data["inference_answer"] = {
                         "candidate_0_answer_function_list": {
                             "observation": observation,
@@ -187,9 +207,7 @@ class BaseHandler:
             else:
                 # Neither tool_calls nor content
                 step_output["current_action_name_label"] = "error"
-                step_output["error_reason"] = (
-                    "tool_calls and content are None"
-                )
+                step_output["error_reason"] = "tool_calls and content are None"
                 action_name_label = "error"
                 is_optimal = False
                 inference_log[f"step_{step_idx}"] = step_data
@@ -206,7 +224,9 @@ class BaseHandler:
         }
 
 
-def multi_threaded_inference(handler, model_name: str, test_case: dict) -> dict:
+def multi_threaded_inference(
+    handler, model_name: str, test_case: dict
+) -> dict:
     """Stub of wtb._llm_response_generation.multi_threaded_inference.
 
     Calls ``handler.inference(test_case)`` and wraps the result in a dict
@@ -236,7 +256,9 @@ def _install_mock_wtb() -> dict[str, types.ModuleType]:
     mods["wtb.model_handler"] = model_handler
 
     # ---- wtb.model_handler.base_handler ----
-    base_handler = _make_module("wtb.model_handler.base_handler", model_handler)
+    base_handler = _make_module(
+        "wtb.model_handler.base_handler", model_handler
+    )
     base_handler.BaseHandler = BaseHandler
     mods["wtb.model_handler.base_handler"] = base_handler
 
@@ -275,7 +297,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

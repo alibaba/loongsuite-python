@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LoongSuite WildToolBench Instrumentation"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "LoongSuite Python Agent Authors", email = "caishipeng.csp@alibaba-inc.com" },
     { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
@@ -19,7 +19,6 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -30,7 +29,7 @@ dependencies = [
     "opentelemetry-instrumentation >= 0.58b0",
     "opentelemetry-semantic-conventions >= 0.58b0",
     "opentelemetry-util-genai",
-    "wrapt >= 1.17.3, < 3.0.0",
+    "wrapt >= 1.17.3, < 2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -42,7 +41,6 @@ test = [
     "pytest ~= 8.0",
     "pytest-cov ~= 4.1.0",
     "pytest-forked >= 1.6.0",
-    "opentelemetry-sdk >= 1.37",
     "openai >= 1.0.0",
 ]
 

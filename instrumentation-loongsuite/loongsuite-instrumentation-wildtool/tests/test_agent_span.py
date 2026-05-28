@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for AGENT span (P2: inference_multi_turn)."""
 
 import json
@@ -33,8 +47,13 @@ class _StubHandler(BaseHandler):
 
 class TestAgentSpan:
     def test_agent_span_attributes(
-        self, span_exporter, instrument, simple_test_entry, make_completion,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        make_completion,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """AGENT span should exist with correct attributes and token aggregation."""
         handler = _StubHandler()
@@ -46,7 +65,8 @@ class TestAgentSpan:
         # Step 1: model returns text (prepare_to_answer match)
         resp1 = text_response_factory(
             "The weather in Beijing is Sunny, 25°C",
-            input_tokens=20, output_tokens=15,
+            input_tokens=20,
+            output_tokens=15,
         )
         handler._step_responses = [resp0, resp1]
 
@@ -64,7 +84,9 @@ class TestAgentSpan:
         assert attrs.get("gen_ai.operation.name") == "invoke_agent"
         assert attrs.get("gen_ai.framework") == "wildtool"
         assert attrs.get("gen_ai.agent.name") == "_StubHandler"
-        assert attrs.get("gen_ai.conversation.id") == "wild_tool_bench_test_001"
+        assert (
+            attrs.get("gen_ai.conversation.id") == "wild_tool_bench_test_001"
+        )
         assert attrs.get("gen_ai.request.model") == "test-model"
         assert attrs.get("wildtool.turn_count") == 1
 
@@ -72,8 +94,12 @@ class TestAgentSpan:
         assert attrs.get("gen_ai.usage.output_tokens") == 20
 
     def test_agent_span_captures_input_and_output_messages(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """AGENT span should always carry GenAI input/output messages."""
 
@@ -104,8 +130,12 @@ class TestAgentSpan:
         )
 
     def test_agent_parent_is_entry(
-        self, span_exporter, instrument, simple_test_entry,
-        tool_call_response_factory, text_response_factory,
+        self,
+        span_exporter,
+        instrument,
+        simple_test_entry,
+        tool_call_response_factory,
+        text_response_factory,
     ):
         """When called via multi_threaded_inference, AGENT span should be child of ENTRY."""
         from wtb._llm_response_generation import multi_threaded_inference  # noqa: I001, PLC0415

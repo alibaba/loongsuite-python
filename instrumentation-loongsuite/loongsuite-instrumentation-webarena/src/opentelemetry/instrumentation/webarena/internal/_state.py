@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Lifecycle state shared across WebArena wrappers.
 
 WebArena's ``run.py:test()`` is a single function with a *for* loop over
@@ -30,11 +44,15 @@ _in_task: ContextVar[bool] = ContextVar("webarena_in_task", default=False)
 
 # ENTRY span handle + its attached context token.
 _entry_span: ContextVar[Any] = ContextVar("webarena_entry_span", default=None)
-_entry_token: ContextVar[Any] = ContextVar("webarena_entry_token", default=None)
+_entry_token: ContextVar[Any] = ContextVar(
+    "webarena_entry_token", default=None
+)
 
 # CHAIN(workflow) span handle + token (always nested inside ENTRY).
 _chain_span: ContextVar[Any] = ContextVar("webarena_chain_span", default=None)
-_chain_token: ContextVar[Any] = ContextVar("webarena_chain_token", default=None)
+_chain_token: ContextVar[Any] = ContextVar(
+    "webarena_chain_token", default=None
+)
 
 # Currently active STEP span handle + token.
 _step_span: ContextVar[Any] = ContextVar("webarena_step_span", default=None)

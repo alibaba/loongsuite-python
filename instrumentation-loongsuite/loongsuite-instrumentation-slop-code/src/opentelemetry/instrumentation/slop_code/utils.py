@@ -57,16 +57,32 @@ def truncate_text(value: str, limit: int = MAX_ATTR_LEN) -> str:
         return value
     return value if len(value) <= limit else value[:limit]
 
+
 def json_dumps_attr(value: Any) -> str:
     """Serialize a value as JSON for ARMS GenAI string attributes."""
     import json
+
     return truncate_text(json.dumps(value, ensure_ascii=False, default=str))
+
 
 def genai_messages(messages: Any) -> str:
     """Normalize chat-like messages to the ARMS GenAI message schema."""
     normalized = []
     for item in messages or []:
-        role = safe_get(item, "role") or (item.get("role") if isinstance(item, dict) else None) or "user"
-        content = safe_get(item, "content") or (item.get("content") if isinstance(item, dict) else None) or ""
-        normalized.append({"role": str(role), "parts": [{"type": "text", "content": str(content)}]})
+        role = (
+            safe_get(item, "role")
+            or (item.get("role") if isinstance(item, dict) else None)
+            or "user"
+        )
+        content = (
+            safe_get(item, "content")
+            or (item.get("content") if isinstance(item, dict) else None)
+            or ""
+        )
+        normalized.append(
+            {
+                "role": str(role),
+                "parts": [{"type": "text", "content": str(content)}],
+            }
+        )
     return json_dumps_attr(normalized)

@@ -1,14 +1,28 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for __init__.py (instrumentor plumbing) and config.py."""
 
 from __future__ import annotations
 
-import importlib
 import os
 import sys
 import types
 from unittest import mock
 
 import pytest
+
 from opentelemetry import trace as trace_api
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -55,7 +69,7 @@ def test_module_importable_other_import_error():
 
     mod_name = "_test_import_error_module"
     # Create a module that raises a generic exception on import
-    bad_mod = types.ModuleType(mod_name)
+    types.ModuleType(mod_name)
     # We need to simulate an import error. Use importlib to make
     # importlib.import_module raise a non-ModuleNotFoundError.
     with mock.patch("importlib.import_module", side_effect=ValueError("bad")):
@@ -71,9 +85,7 @@ def test_module_importable_other_import_error():
 def test_safe_wrap_module_not_importable():
     from opentelemetry.instrumentation.openhands import _safe_wrap
 
-    result = _safe_wrap(
-        "nonexistent_module_abc", "func", lambda *a: None
-    )
+    result = _safe_wrap("nonexistent_module_abc", "func", lambda *a: None)
     assert result is False
 
 
@@ -175,7 +187,9 @@ def test_instrumentation_dependencies():
 def test_instrument_disabled(tracer_provider):
     from opentelemetry.instrumentation.openhands import OpenHandsInstrumentor
 
-    with mock.patch.dict(os.environ, {"OTEL_INSTRUMENTATION_OPENHANDS_ENABLED": "false"}):
+    with mock.patch.dict(
+        os.environ, {"OTEL_INSTRUMENTATION_OPENHANDS_ENABLED": "false"}
+    ):
         # Need to reload config to pick up the env var
         import opentelemetry.instrumentation.openhands.config as cfg_mod
 
@@ -183,7 +197,9 @@ def test_instrument_disabled(tracer_provider):
         cfg_mod.OTEL_INSTRUMENTATION_OPENHANDS_ENABLED = False
         try:
             inst = OpenHandsInstrumentor()
-            inst.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+            inst.instrument(
+                tracer_provider=tracer_provider, skip_dep_check=True
+            )
             inst.uninstrument()
         finally:
             cfg_mod.OTEL_INSTRUMENTATION_OPENHANDS_ENABLED = original
@@ -317,6 +333,7 @@ def test_safe_unwrap_setattr_error():
 
     class ReadOnlyContainer:
         """A container where setattr raises."""
+
         func = wrapped_fn
 
         def __setattr__(self, name, value):

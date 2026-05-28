@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Cross-thread / cross-loop trace continuity tests for V0 wrappers.
 
 These tests model the *real* OpenHands V0 runtime behaviour: events are
@@ -19,7 +33,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -37,7 +50,9 @@ def _spans_by_kind_attr(exporter, kind: str):
 @pytest.fixture
 def instrumented_v0(tracer_provider, stub_openhands_v0_modules):
     from opentelemetry.instrumentation.openhands import OpenHandsInstrumentor
-    from opentelemetry.instrumentation.openhands.internal import session_context
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
     inst = OpenHandsInstrumentor()
@@ -108,7 +123,10 @@ def test_all_spans_share_one_trace_id_across_threads(instrumented_v0):
     asyncio.run(_scenario())
 
     spans = exporter.get_finished_spans()
-    by_kind = {kind: _spans_by_kind_attr(exporter, kind) for kind in ("ENTRY", "AGENT", "STEP", "TOOL")}
+    by_kind = {
+        kind: _spans_by_kind_attr(exporter, kind)
+        for kind in ("ENTRY", "AGENT", "STEP", "TOOL")
+    }
 
     assert len(by_kind["ENTRY"]) == 1
     assert len(by_kind["AGENT"]) == 1
@@ -127,9 +145,14 @@ def test_all_spans_share_one_trace_id_across_threads(instrumented_v0):
         )
 
     # Parent-child links: AGENT under ENTRY, STEP under AGENT
-    assert agent.parent is not None and agent.parent.span_id == entry.context.span_id
+    assert (
+        agent.parent is not None
+        and agent.parent.span_id == entry.context.span_id
+    )
     for s in by_kind["STEP"]:
-        assert s.parent is not None and s.parent.span_id == agent.context.span_id
+        assert (
+            s.parent is not None and s.parent.span_id == agent.context.span_id
+        )
     # TOOL spans are children of their respective STEP spans
     step_span_ids = {s.context.span_id for s in by_kind["STEP"]}
     for t in by_kind["TOOL"]:
@@ -140,14 +163,18 @@ def test_session_context_cleared_after_entry(instrumented_v0):
     """The per-sid stash must not leak across runs."""
     inst, exporter = instrumented_v0
 
-    import openhands.core.loop as loop_mod
     import openhands.core.main as main_mod
-    from opentelemetry.instrumentation.openhands.internal import session_context
+
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     async def _scenario():
         await main_mod.run_controller(
             config=None,
-            initial_user_action=type("Msg", (), {"content": "x", "source": "user"})(),
+            initial_user_action=type(
+                "Msg", (), {"content": "x", "source": "user"}
+            )(),
             sid="ephemeral-sid",
         )
 

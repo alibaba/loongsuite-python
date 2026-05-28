@@ -25,11 +25,9 @@ Tests cover:
 from __future__ import annotations
 
 import json
-from typing import Any
-from unittest.mock import MagicMock, patch
-
 import pathlib
 import sys
+from unittest.mock import MagicMock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -47,15 +45,23 @@ from conftest import (
 )
 
 from opentelemetry import context as otel_context
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
-    InMemorySpanExporter,
-)
-from opentelemetry.trace import SpanKind, StatusCode
 
 # Import wrappers module
 from opentelemetry.instrumentation.claw_eval.internal.wrappers import (
+    GEN_AI_FRAMEWORK,
+    GEN_AI_SPAN_KIND,
+    GEN_AI_TOOL_CALL_ARGUMENTS,
+    GEN_AI_TOOL_CALL_RESULT,
+    GEN_AI_TOOL_DEFINITIONS,
+    DoAutoCompactWrapper,
+    EntryWrapper,
+    GetGraderWrapper,
+    JudgeWrapper,
+    LoadPeerGraderWrapper,
+    ProviderChatWrapper,
+    RunSingleTaskWrapper,
+    RunTaskWrapper,
+    ToolDispatchWrapper,
     _agent_capture,
     _agent_tool_definitions,
     _block_to_part,
@@ -85,25 +91,16 @@ from opentelemetry.instrumentation.claw_eval.internal.wrappers import (
     _serialize_tool_definitions,
     _step_counter,
     _wrap_grader_eval_methods,
-    DoAutoCompactWrapper,
-    EntryWrapper,
-    GetGraderWrapper,
-    JudgeWrapper,
-    LoadPeerGraderWrapper,
-    ProviderChatWrapper,
-    RunSingleTaskWrapper,
-    RunTaskWrapper,
-    ToolDispatchWrapper,
-    GEN_AI_FRAMEWORK,
-    GEN_AI_SPAN_KIND,
-    GEN_AI_TOOL_CALL_ARGUMENTS,
-    GEN_AI_TOOL_CALL_RESULT,
-    GEN_AI_TOOL_DEFINITIONS,
+)
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
 )
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
-
+from opentelemetry.trace import StatusCode
 
 # ---------------------------------------------------------------------------
 # Helper to get a test tracer with in-memory exporter
@@ -331,7 +328,9 @@ class TestBlockToPart:
         assert part["response"] == "line1\nline2"
 
     def test_tool_result_block_none_content(self):
-        block = ContentBlock(type="tool_result", tool_use_id="tu_003", content=None)
+        block = ContentBlock(
+            type="tool_result", tool_use_id="tu_003", content=None
+        )
         part = _block_to_part(block)
         assert part["response"] == ""
 
@@ -386,7 +385,10 @@ class TestMessageToChatMessage:
             content=[
                 ContentBlock(type="text", text="Let me run a command."),
                 ContentBlock(
-                    type="tool_use", id="tu_1", name="bash", input={"cmd": "ls"}
+                    type="tool_use",
+                    id="tu_1",
+                    name="bash",
+                    input={"cmd": "ls"},
                 ),
             ],
         )
@@ -453,7 +455,9 @@ class TestSerializeInputMessages:
 
     def test_basic(self):
         messages = [
-            Message(role="user", content=[ContentBlock(type="text", text="Hi")]),
+            Message(
+                role="user", content=[ContentBlock(type="text", text="Hi")]
+            ),
         ]
         result = _serialize_input_messages(messages)
         parsed = json.loads(result)
@@ -463,8 +467,13 @@ class TestSerializeInputMessages:
 
     def test_multiple_messages(self):
         messages = [
-            Message(role="user", content=[ContentBlock(type="text", text="q1")]),
-            Message(role="assistant", content=[ContentBlock(type="text", text="a1")]),
+            Message(
+                role="user", content=[ContentBlock(type="text", text="q1")]
+            ),
+            Message(
+                role="assistant",
+                content=[ContentBlock(type="text", text="a1")],
+            ),
         ]
         result = _serialize_input_messages(messages)
         parsed = json.loads(result)
@@ -569,7 +578,10 @@ class TestSerializeToolDefinitions:
             ToolSpec(
                 name="bash",
                 description="Run bash",
-                input_schema={"type": "object", "properties": {"cmd": {"type": "string"}}},
+                input_schema={
+                    "type": "object",
+                    "properties": {"cmd": {"type": "string"}},
+                },
             ),
         ]
         result = _serialize_tool_definitions(tools)
@@ -627,8 +639,8 @@ class TestEndCurrentStep:
         ctx = otel_context.set_value("test", True)
         token = otel_context.attach(ctx)
 
-        tok_span = _current_step_span.set(span)
-        tok_token = _current_step_token.set(token)
+        _current_step_span.set(span)
+        _current_step_token.set(token)
 
         try:
             _end_current_step()
@@ -646,8 +658,8 @@ class TestRotateStep:
     def test_rotate_increments_counter(self):
         tracer, exporter, provider = _make_tracer()
         tok_cnt = _step_counter.set(0)
-        tok_span = _current_step_span.set(None)
-        tok_token = _current_step_token.set(None)
+        _current_step_span.set(None)
+        _current_step_token.set(None)
 
         try:
             _rotate_step(tracer)
@@ -667,8 +679,8 @@ class TestRotateStep:
     def test_rotate_creates_step_span(self):
         tracer, exporter, provider = _make_tracer()
         tok_cnt = _step_counter.set(0)
-        tok_span = _current_step_span.set(None)
-        tok_token = _current_step_token.set(None)
+        _current_step_span.set(None)
+        _current_step_token.set(None)
 
         try:
             _rotate_step(tracer)
@@ -796,7 +808,7 @@ class TestRunSingleTaskWrapper:
         def fake_wrapped(task_dir="", **kwargs):
             return {"task_id": "T002"}
 
-        result = wrapper(fake_wrapped, None, (), {"task_dir": "/my/task"})
+        wrapper(fake_wrapped, None, (), {"task_dir": "/my/task"})
         spans = exporter.get_finished_spans()
         assert spans[0].attributes["claw_eval.task_dir"] == "/my/task"
         provider.shutdown()
@@ -853,14 +865,19 @@ class TestRunTaskWrapper:
     def test_creates_agent_span(self):
         tracer, exporter, provider = _make_tracer()
         wrapper = RunTaskWrapper(tracer)
-        task = TaskDefinition(task_id="T001", prompt=Prompt(text="Do something"))
+        task = TaskDefinition(
+            task_id="T001", prompt=Prompt(text="Do something")
+        )
 
         class FakeProvider:
             model_id = "gpt-4o"
 
             def chat(self, messages, *args, **kwargs):
                 return (
-                    Message(role="assistant", content=[ContentBlock(type="text", text="Done")]),
+                    Message(
+                        role="assistant",
+                        content=[ContentBlock(type="text", text="Done")],
+                    ),
                     Usage(input_tokens=100, output_tokens=50),
                 )
 
@@ -868,7 +885,14 @@ class TestRunTaskWrapper:
 
         def fake_run_task(t, p, *args, **kwargs):
             # Simulate a chat call
-            p.chat([Message(role="user", content=[ContentBlock(type="text", text="Hi")])])
+            p.chat(
+                [
+                    Message(
+                        role="user",
+                        content=[ContentBlock(type="text", text="Hi")],
+                    )
+                ]
+            )
             return {"task_id": "T001"}
 
         result = wrapper(fake_run_task, None, (task, prov), {})
@@ -876,7 +900,9 @@ class TestRunTaskWrapper:
 
         spans = exporter.get_finished_spans()
         # Should have at least the AGENT span (step spans may also exist)
-        agent_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"]
+        agent_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"
+        ]
         assert len(agent_spans) == 1
         agent = agent_spans[0]
         assert agent.name == "invoke_agent claw-eval"
@@ -888,7 +914,9 @@ class TestRunTaskWrapper:
     def test_agent_description_set_from_task_prompt(self):
         tracer, exporter, provider = _make_tracer()
         wrapper = RunTaskWrapper(tracer)
-        task = TaskDefinition(task_id="T002", prompt=Prompt(text="Evaluate this code"))
+        task = TaskDefinition(
+            task_id="T002", prompt=Prompt(text="Evaluate this code")
+        )
 
         class FakeProvider:
             model_id = "gpt-4"
@@ -906,8 +934,13 @@ class TestRunTaskWrapper:
 
         wrapper(fake_run_task, None, (task, prov), {})
         spans = exporter.get_finished_spans()
-        agent_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"]
-        assert agent_spans[0].attributes[GenAI.GEN_AI_AGENT_DESCRIPTION] == "Evaluate this code"
+        agent_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"
+        ]
+        assert (
+            agent_spans[0].attributes[GenAI.GEN_AI_AGENT_DESCRIPTION]
+            == "Evaluate this code"
+        )
         provider.shutdown()
 
     def test_error_records_exception(self):
@@ -930,7 +963,9 @@ class TestRunTaskWrapper:
             wrapper(fake_run_task, None, (task, prov), {})
 
         spans = exporter.get_finished_spans()
-        agent_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"]
+        agent_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"
+        ]
         assert agent_spans[0].status.status_code == StatusCode.ERROR
         provider.shutdown()
 
@@ -945,7 +980,9 @@ class TestRunTaskWrapper:
 
         wrapper(fake_run_task, None, (task, None), {})
         spans = exporter.get_finished_spans()
-        agent_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"]
+        agent_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"
+        ]
         assert len(agent_spans) == 1
         # No model attribute should be set
         assert GenAI.GEN_AI_REQUEST_MODEL not in agent_spans[0].attributes
@@ -969,7 +1006,9 @@ class TestRunTaskWrapper:
 
         wrapper(fake_run_task, None, (None, prov), {})
         spans = exporter.get_finished_spans()
-        agent_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"]
+        agent_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"
+        ]
         assert agent_spans[0].attributes["claw_eval.task_id"] == "unknown"
         provider.shutdown()
 
@@ -984,7 +1023,10 @@ class TestRunTaskWrapper:
 
             def chat(self, messages, *args, **kwargs):
                 return (
-                    Message(role="assistant", content=[ContentBlock(type="text", text="ok")]),
+                    Message(
+                        role="assistant",
+                        content=[ContentBlock(type="text", text="ok")],
+                    ),
                     Usage(input_tokens=50, output_tokens=25),
                 )
 
@@ -997,7 +1039,9 @@ class TestRunTaskWrapper:
 
         wrapper(fake_run_task, None, (task, prov), {})
         spans = exporter.get_finished_spans()
-        agent_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"]
+        agent_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"
+        ]
         assert agent_spans[0].attributes["claw_eval.total_turns"] == 3
         provider.shutdown()
 
@@ -1020,9 +1064,13 @@ class TestRunTaskWrapper:
 
         wrapper(fake_run_task, None, (), {"task": task, "provider": prov})
         spans = exporter.get_finished_spans()
-        agent_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"]
+        agent_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "AGENT"
+        ]
         assert agent_spans[0].attributes["claw_eval.task_id"] == "T_kw"
-        assert agent_spans[0].attributes[GenAI.GEN_AI_REQUEST_MODEL] == "model-kw"
+        assert (
+            agent_spans[0].attributes[GenAI.GEN_AI_REQUEST_MODEL] == "model-kw"
+        )
         provider.shutdown()
 
 
@@ -1046,6 +1094,7 @@ class TestInstallProviderChatCaptureShim:
 
     def test_idempotent(self):
         """Second install should not double-wrap."""
+
         class FakeProvider:
             def chat(self, messages, *args, **kwargs):
                 return Message(), Usage()
@@ -1064,7 +1113,10 @@ class TestInstallProviderChatCaptureShim:
         class FakeProvider:
             def chat(self, messages, *args, **kwargs):
                 return (
-                    Message(role="assistant", content=[ContentBlock(type="text", text="hi")]),
+                    Message(
+                        role="assistant",
+                        content=[ContentBlock(type="text", text="hi")],
+                    ),
                     Usage(input_tokens=100, output_tokens=50),
                 )
 
@@ -1090,6 +1142,7 @@ class TestInstallProviderChatCaptureShim:
 
     def test_shim_skips_during_compact(self):
         """Token accumulation should be skipped when compact_depth > 0."""
+
         class FakeProvider:
             def chat(self, messages, *args, **kwargs):
                 return (
@@ -1142,8 +1195,14 @@ class TestInstallProviderChatCaptureShim:
         tok = _agent_capture.set(capture)
         try:
             messages = [
-                Message(role="system", content=[ContentBlock(type="text", text="Be helpful")]),
-                Message(role="user", content=[ContentBlock(type="text", text="Hello")]),
+                Message(
+                    role="system",
+                    content=[ContentBlock(type="text", text="Be helpful")],
+                ),
+                Message(
+                    role="user",
+                    content=[ContentBlock(type="text", text="Hello")],
+                ),
             ]
             prov.chat(messages)
             assert capture["system_instructions"] == "Be helpful"
@@ -1203,17 +1262,17 @@ class TestProviderChatWrapper:
 
         tok_agent = _in_agent_run.set(True)
         tok_cnt = _step_counter.set(0)
-        tok_span = _current_step_span.set(None)
-        tok_token = _current_step_token.set(None)
+        _current_step_span.set(None)
+        _current_step_token.set(None)
 
         def fake_chat(*args, **kwargs):
             return Message(), Usage()
 
         try:
-            wrapper(fake_chat, None, ([], ), {})
+            wrapper(fake_chat, None, ([],), {})
             assert _step_counter.get(0) == 1
 
-            wrapper(fake_chat, None, ([], ), {})
+            wrapper(fake_chat, None, ([],), {})
             assert _step_counter.get(0) == 2
 
             _end_current_step()
@@ -1235,7 +1294,7 @@ class TestProviderChatWrapper:
             return Message(), Usage()
 
         try:
-            wrapper(fake_chat, None, ([], ), {})
+            wrapper(fake_chat, None, ([],), {})
             assert _step_counter.get(0) == 0
         finally:
             _in_agent_run.reset(tok_agent)
@@ -1249,14 +1308,14 @@ class TestProviderChatWrapper:
         tok_agent = _in_agent_run.set(True)
         tok_cnt = _step_counter.set(0)
         tok_depth = _compact_depth.set(1)
-        tok_span = _current_step_span.set(None)
-        tok_token = _current_step_token.set(None)
+        _current_step_span.set(None)
+        _current_step_token.set(None)
 
         def fake_chat(*args, **kwargs):
             return Message(), Usage()
 
         try:
-            wrapper(fake_chat, None, ([], ), {})
+            wrapper(fake_chat, None, ([],), {})
             assert _step_counter.get(0) == 0
         finally:
             _in_agent_run.reset(tok_agent)
@@ -1328,10 +1387,12 @@ class TestDoAutoCompactWrapper:
 
         def fake_compact_outer(*args, **kwargs):
             observed_depths.append(("outer", _compact_depth.get(0)))
+
             # Simulate a nested compact call
             def fake_compact_inner(*a, **kw):
                 observed_depths.append(("inner", _compact_depth.get(0)))
                 return "inner_result"
+
             wrapper(fake_compact_inner, None, (), {})
             return "outer_result"
 
@@ -1586,7 +1647,9 @@ class TestExtractDispatchAttrs:
         event = DispatchEvent(latency_ms=42.0, response_status=200)
 
         _extract_dispatch_attrs(span, (tool_result, event))
-        span.set_attribute.assert_any_call("claw_eval.dispatch.latency_ms", 42.0)
+        span.set_attribute.assert_any_call(
+            "claw_eval.dispatch.latency_ms", 42.0
+        )
         span.set_attribute.assert_any_call("http.response.status_code", 200)
         span.set_attribute.assert_any_call(GEN_AI_TOOL_CALL_RESULT, "output")
 
@@ -1693,7 +1756,9 @@ class TestGetGraderWrapper:
 
         grader = wrapper(fake_get_grader, None, (), {})
         # The method should have been wrapped
-        assert hasattr(MyGrader._llm_score_classifications, "_claw_eval_judge_wrapped")
+        assert hasattr(
+            MyGrader._llm_score_classifications, "_claw_eval_judge_wrapped"
+        )
         # The grader should still work
         result = grader._llm_score_classifications()
         assert result == {"classifications": []}
@@ -1736,7 +1801,9 @@ class TestLoadPeerGraderWrapper:
 
         cls = wrapper(fake_load_peer, None, (), {})
         assert cls is PeerGrader
-        assert hasattr(PeerGrader._llm_score_classifications, "_claw_eval_judge_wrapped")
+        assert hasattr(
+            PeerGrader._llm_score_classifications, "_claw_eval_judge_wrapped"
+        )
         provider.shutdown()
 
     def test_returns_class_on_wrap_failure(self):
@@ -1770,7 +1837,9 @@ class TestWrapGraderEvalMethods:
                 return "result"
 
         _wrap_grader_eval_methods(Grader, tracer)
-        assert hasattr(Grader._llm_score_classifications, "_claw_eval_judge_wrapped")
+        assert hasattr(
+            Grader._llm_score_classifications, "_claw_eval_judge_wrapped"
+        )
         provider.shutdown()
 
     def test_idempotent(self):
@@ -1816,7 +1885,9 @@ class TestWrapGraderEvalMethods:
 
         _wrap_grader_eval_methods(DerivedGrader, tracer)
         # Base class method should be wrapped via MRO walk
-        assert hasattr(BaseGrader._llm_score_classifications, "_claw_eval_judge_wrapped")
+        assert hasattr(
+            BaseGrader._llm_score_classifications, "_claw_eval_judge_wrapped"
+        )
         provider.shutdown()
 
     def test_class_without_eval_method(self):
@@ -1865,7 +1936,9 @@ class TestGetTaskPrompt:
     """Tests for _get_task_prompt."""
 
     def test_with_prompt(self):
-        task = TaskDefinition(task_id="T001", prompt=Prompt(text="Do the thing"))
+        task = TaskDefinition(
+            task_id="T001", prompt=Prompt(text="Do the thing")
+        )
         assert _get_task_prompt(task) == "Do the thing"
 
     def test_none_task(self):
@@ -1899,8 +1972,12 @@ class TestPopulateAgentSpan:
             "last_response_str": '[{"role":"assistant","parts":[],"finish_reason":"stop"}]',
         }
         _populate_agent_span(span, capture, "prompt text")
-        span.set_attribute.assert_any_call(GenAI.GEN_AI_USAGE_INPUT_TOKENS, 500)
-        span.set_attribute.assert_any_call(GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, 200)
+        span.set_attribute.assert_any_call(
+            GenAI.GEN_AI_USAGE_INPUT_TOKENS, 500
+        )
+        span.set_attribute.assert_any_call(
+            GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, 200
+        )
 
     def test_fallback_to_task_prompt(self):
         span = MagicMock()
@@ -2033,7 +2110,9 @@ class TestFullTraceHierarchy:
         import claw_eval.runner.providers.openai_compat as oc
 
         provider = oc.OpenAICompatProvider()
-        task = TaskDefinition(task_id="T_full", prompt=Prompt(text="Full test"))
+        task = TaskDefinition(
+            task_id="T_full", prompt=Prompt(text="Full test")
+        )
 
         # Call cmd_run which internally calls run_task via the mock
         # The mock run_task calls provider.chat which triggers step rotation
@@ -2044,13 +2123,16 @@ class TestFullTraceHierarchy:
             return loop.run_task(task, provider)
 
         # Temporarily replace the mock with our version
-        original = cli.cmd_run.__wrapped__ if hasattr(cli.cmd_run, "__wrapped__") else None
-        import claw_eval.cli
+        (
+            cli.cmd_run.__wrapped__
+            if hasattr(cli.cmd_run, "__wrapped__")
+            else None
+        )
 
         # We can just call the instrumented cmd_run directly
         # because the mock claw_eval.cli.cmd_run is now wrapped
         # But we need it to invoke run_task. Let's just call run_task directly.
-        result = loop.run_task(task, provider)
+        loop.run_task(task, provider)
 
         spans = span_exporter.get_finished_spans()
         span_kinds = {s.attributes.get(GEN_AI_SPAN_KIND) for s in spans}
@@ -2064,10 +2146,12 @@ class TestFullTraceHierarchy:
 
         dispatcher = disp.ToolDispatcher()
         tool_use = ToolUse(name="bash", id="tu_int", input={"cmd": "echo hi"})
-        result = dispatcher.dispatch(tool_use)
+        dispatcher.dispatch(tool_use)
 
         spans = span_exporter.get_finished_spans()
-        tool_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "TOOL"]
+        tool_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "TOOL"
+        ]
         assert len(tool_spans) == 1
         assert tool_spans[0].attributes[GenAI.GEN_AI_TOOL_NAME] == "bash"
 
@@ -2078,7 +2162,9 @@ class TestFullTraceHierarchy:
         compact.do_auto_compact()
 
         spans = span_exporter.get_finished_spans()
-        chain_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "CHAIN"]
+        chain_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "CHAIN"
+        ]
         assert len(chain_spans) == 1
 
     def test_judge_suppresses_spans(self, instrument, span_exporter):
@@ -2120,16 +2206,24 @@ class TestFullTraceHierarchy:
         result = instance._llm_score_classifications()
         assert result == {"peer_classifications": []}
 
-    def test_sandbox_dispatch_produces_tool_span(self, instrument, span_exporter):
+    def test_sandbox_dispatch_produces_tool_span(
+        self, instrument, span_exporter
+    ):
         """SandboxToolDispatcher.dispatch should produce a TOOL span."""
         import claw_eval.runner.sandbox_dispatcher as sdisp
 
         dispatcher = sdisp.SandboxToolDispatcher()
-        tool_use = ToolUse(name="sandbox_bash", id="tu_sand", input={"cmd": "ls"})
-        result = dispatcher.dispatch(tool_use)
+        tool_use = ToolUse(
+            name="sandbox_bash", id="tu_sand", input={"cmd": "ls"}
+        )
+        dispatcher.dispatch(tool_use)
 
         spans = span_exporter.get_finished_spans()
-        tool_spans = [s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "TOOL"]
+        tool_spans = [
+            s for s in spans if s.attributes.get(GEN_AI_SPAN_KIND) == "TOOL"
+        ]
         assert len(tool_spans) == 1
-        assert tool_spans[0].attributes[GenAI.GEN_AI_TOOL_NAME] == "sandbox_bash"
+        assert (
+            tool_spans[0].attributes[GenAI.GEN_AI_TOOL_NAME] == "sandbox_bash"
+        )
         assert tool_spans[0].attributes["claw_eval.sandbox.remote"] is True

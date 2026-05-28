@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Unit tests for opentelemetry.instrumentation.openhands.internal.utils."""
 
 from __future__ import annotations
@@ -17,7 +31,6 @@ from opentelemetry.instrumentation.openhands.internal.utils import (
     serialize_message,
     to_json_str,
 )
-
 
 # ---------------------------------------------------------------------------
 # safe_str
@@ -380,7 +393,9 @@ def test_action_to_genai_output_basic():
     assert parsed[0]["role"] == "assistant"
     assert parsed[0]["content"] == "thinking"
     assert parsed[0]["tool_calls"][0]["function"]["name"] == "run"
-    assert parsed[0]["tool_calls"][0]["function"]["arguments"]["command"] == "ls"
+    assert (
+        parsed[0]["tool_calls"][0]["function"]["arguments"]["command"] == "ls"
+    )
 
 
 def test_action_to_genai_output_no_thought():

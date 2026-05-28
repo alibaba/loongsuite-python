@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Tests for agent_wrappers.py -- DefaultAgentRunWrapper and DefaultAgentStepWrapper __call__.
 
 Covers the main AGENT and STEP span-creation paths (lines 45-53, 71-139, 172-203)
@@ -6,7 +20,6 @@ that are the biggest coverage gap.
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -22,23 +35,36 @@ def _wrappers():
         DefaultAgentStepWrapper,
         _populate_invoke_from_agent,
     )
-    return DefaultAgentRunWrapper, DefaultAgentStepWrapper, _populate_invoke_from_agent
+
+    return (
+        DefaultAgentRunWrapper,
+        DefaultAgentStepWrapper,
+        _populate_invoke_from_agent,
+    )
 
 
-def _make_agent(messages=None, model_name="gpt-4o", step_limit=0, cost_limit=0.0):
+def _make_agent(
+    messages=None, model_name="gpt-4o", step_limit=0, cost_limit=0.0
+):
     """Create a minimal agent stub for wrapper tests."""
     cfg = type("Cfg", (), {"model_name": model_name})()
     model = type("Model", (), {"config": cfg})()
-    config = type("Config", (), {"step_limit": step_limit, "cost_limit": cost_limit})()
+    config = type(
+        "Config", (), {"step_limit": step_limit, "cost_limit": cost_limit}
+    )()
 
-    agent = type("Agent", (), {
-        "__module__": "minisweagent.agents.default",
-        "messages": messages or [],
-        "model": model,
-        "config": config,
-        "n_calls": 0,
-        "cost": 0.0,
-    })()
+    agent = type(
+        "Agent",
+        (),
+        {
+            "__module__": "minisweagent.agents.default",
+            "messages": messages or [],
+            "model": model,
+            "config": config,
+            "n_calls": 0,
+            "cost": 0.0,
+        },
+    )()
     return agent
 
 
@@ -53,18 +79,24 @@ class TestPopulateInvokeFromAgent:
     def test_success_path(self):
         _, _, populate = _wrappers()
 
-        agent = _make_agent(messages=[
-            {"role": "system", "content": "You are helpful."},
-            {"role": "user", "content": "Fix bug"},
-            {"role": "assistant", "content": "Done."},
-        ])
+        agent = _make_agent(
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Fix bug"},
+                {"role": "assistant", "content": "Done."},
+            ]
+        )
 
-        inv = type("Inv", (), {
-            "system_instruction": None,
-            "input_messages": None,
-            "output_messages": None,
-            "tool_definitions": None,
-        })()
+        inv = type(
+            "Inv",
+            (),
+            {
+                "system_instruction": None,
+                "input_messages": None,
+                "output_messages": None,
+                "tool_definitions": None,
+            },
+        )()
 
         populate(inv, agent)
 
@@ -76,12 +108,16 @@ class TestPopulateInvokeFromAgent:
     def test_exception_path_returns_early(self):
         _, _, populate = _wrappers()
 
-        inv = type("Inv", (), {
-            "system_instruction": None,
-            "input_messages": None,
-            "output_messages": None,
-            "tool_definitions": None,
-        })()
+        inv = type(
+            "Inv",
+            (),
+            {
+                "system_instruction": None,
+                "input_messages": None,
+                "output_messages": None,
+                "tool_definitions": None,
+            },
+        )()
 
         with patch(
             "opentelemetry.instrumentation.minisweagent.internal.agent_wrappers.build_invoke_agent_payload",
@@ -110,10 +146,12 @@ class TestDefaultAgentRunWrapperCall:
 
     def test_success_with_task_in_args(self):
         wrapper = self._make_wrapper()
-        agent = _make_agent(messages=[
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "Fix bug"},
-        ])
+        agent = _make_agent(
+            messages=[
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "Fix bug"},
+            ]
+        )
 
         def run(task="", **kw):
             return {"exit_status": "submitted", "submission": "done"}
@@ -202,6 +240,7 @@ class TestDefaultAgentRunWrapperCall:
 
         token = ENTRY_SPAN_ACTIVE.set(True)
         try:
+
             def run(task="", **kw):
                 return {"exit_status": "ok"}
 
@@ -266,6 +305,7 @@ class TestDefaultAgentRunWrapperCall:
 
         token = ENTRY_SPAN_ACTIVE.set(True)
         try:
+
             def run(task="", **kw):
                 raise ValueError("fail with entry active")
 
@@ -280,6 +320,7 @@ class TestDefaultAgentRunWrapperCall:
 
         token = ENTRY_SPAN_ACTIVE.set(True)
         try:
+
             def run(task="", **kw):
                 raise KeyboardInterrupt()
 

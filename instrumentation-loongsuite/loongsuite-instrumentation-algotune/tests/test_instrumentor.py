@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Lifecycle tests for ``AlgoTuneInstrumentor``.
 
 Verifies import, instrument/uninstrument, ``_safe_wrap``/``_safe_unwrap``,
@@ -10,9 +24,6 @@ import importlib
 import sys
 import types
 from unittest import mock
-
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Basic import / dependency tests
@@ -66,9 +77,9 @@ def test_double_instrument_uninstrument(tracer_provider):
 
 def test_uninstrument_restores_originals(tracer_provider):
     """After uninstrument(), the stub functions should be unwrapped."""
-    from opentelemetry.instrumentation.algotune import AlgoTuneInstrumentor
-
     import AlgoTuner.main as main_mod
+
+    from opentelemetry.instrumentation.algotune import AlgoTuneInstrumentor
 
     original_main = main_mod.main
 
@@ -87,8 +98,8 @@ def test_uninstrument_restores_originals(tracer_provider):
 def test_instrument_wraps_all_patch_sites(tracer_provider):
     """After instrument(), every _PATCH_SITES target should have __wrapped__."""
     from opentelemetry.instrumentation.algotune import (
-        AlgoTuneInstrumentor,
         _PATCH_SITES,
+        AlgoTuneInstrumentor,
     )
 
     instr = AlgoTuneInstrumentor()
@@ -173,12 +184,12 @@ def test_safe_wrap_generic_exception():
 
 def test_safe_unwrap_leaf_is_none():
     """When the leaf attribute exists but resolves to None, should be a no-op."""
-    from opentelemetry.instrumentation.algotune import _safe_unwrap
-
     # Create a module with a class that has a None method.
     import AlgoTuner.interfaces.llm_interface as mod
 
-    original = getattr(mod.LLMInterface, "run_task")
+    from opentelemetry.instrumentation.algotune import _safe_unwrap
+
+    getattr(mod.LLMInterface, "run_task")
     setattr(mod.LLMInterface, "_nonexistent_method", None)
     try:
         _safe_unwrap(
@@ -232,9 +243,9 @@ def test_instrument_disabled_via_env(tracer_provider, monkeypatch):
 
 def test_together_not_wrapped_by_default(tracer_provider):
     """TogetherModel.query should NOT be wrapped unless env var is set."""
-    from opentelemetry.instrumentation.algotune import AlgoTuneInstrumentor
-
     import AlgoTuner.models.together_model as together_mod
+
+    from opentelemetry.instrumentation.algotune import AlgoTuneInstrumentor
 
     instr = AlgoTuneInstrumentor()
     instr.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
@@ -252,9 +263,9 @@ def test_together_wrapped_when_env_set(tracer_provider, monkeypatch):
         if m.startswith("opentelemetry.instrumentation.algotune"):
             del sys.modules[m]
 
-    from opentelemetry.instrumentation.algotune import AlgoTuneInstrumentor
-
     import AlgoTuner.models.together_model as together_mod
+
+    from opentelemetry.instrumentation.algotune import AlgoTuneInstrumentor
 
     instr = AlgoTuneInstrumentor()
     instr.instrument(tracer_provider=tracer_provider, skip_dep_check=True)

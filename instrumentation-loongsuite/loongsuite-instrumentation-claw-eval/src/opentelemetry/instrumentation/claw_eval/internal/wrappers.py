@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Wrapt wrappers for claw-eval OpenTelemetry instrumentation.
 
 Span hierarchy
@@ -199,9 +213,7 @@ def _block_to_part(block) -> dict[str, Any]:
 def _message_to_chat_message(msg) -> dict[str, Any]:
     """Convert a claw-eval ``Message`` to a spec ``ChatMessage`` dict."""
     role = getattr(msg, "role", "unknown")
-    parts = [
-        _block_to_part(b) for b in (getattr(msg, "content", None) or [])
-    ]
+    parts = [_block_to_part(b) for b in (getattr(msg, "content", None) or [])]
     return {"role": role, "parts": parts}
 
 
@@ -406,7 +418,7 @@ class EntryWrapper:
         captures: list[dict] = []
         cap_tok = _entry_capture.set(captures)
         with self._tracer.start_as_current_span(
-                f"claw-eval {self._command}", kind=SpanKind.INTERNAL
+            f"claw-eval {self._command}", kind=SpanKind.INTERNAL
         ) as span:
             span.set_attribute(GEN_AI_SPAN_KIND, "ENTRY")
             span.set_attribute(GEN_AI_FRAMEWORK, "claw-eval")
@@ -435,7 +447,7 @@ class RunSingleTaskWrapper:
         captures: list[dict] = []
         cap_tok = _entry_capture.set(captures)
         with self._tracer.start_as_current_span(
-                "claw-eval batch_worker", kind=SpanKind.INTERNAL
+            "claw-eval batch_worker", kind=SpanKind.INTERNAL
         ) as span:
             span.set_attribute(GEN_AI_SPAN_KIND, "ENTRY")
             span.set_attribute(GEN_AI_FRAMEWORK, "claw-eval")
@@ -491,7 +503,7 @@ class RunTaskWrapper:
         task_id = getattr(task, "task_id", "unknown") if task else "unknown"
 
         with self._tracer.start_as_current_span(
-                "invoke_agent claw-eval", kind=SpanKind.INTERNAL
+            "invoke_agent claw-eval", kind=SpanKind.INTERNAL
         ) as span:
             span.set_attribute(GEN_AI_SPAN_KIND, "AGENT")
             span.set_attribute(
@@ -573,7 +585,9 @@ def _install_provider_chat_capture_shim(provider) -> None:
         return
 
     existing = provider.__dict__.get("chat")
-    if existing is not None and getattr(existing, "_claw_eval_capture_shim", False):
+    if existing is not None and getattr(
+        existing, "_claw_eval_capture_shim", False
+    ):
         return
 
     cls = type(provider)
@@ -622,14 +636,15 @@ def _install_provider_chat_capture_shim(provider) -> None:
         if not capture.get("first_call_done", False):
             capture["first_call_done"] = True
             try:
-                capture["system_instructions"] = _extract_system_prompt(messages)
+                capture["system_instructions"] = _extract_system_prompt(
+                    messages
+                )
                 non_system = [
-                    m for m in messages
-                    if getattr(m, "role", None) != "system"
+                    m for m in messages if getattr(m, "role", None) != "system"
                 ]
                 if non_system:
-                    capture["input_messages_str"] = (
-                        _serialize_input_messages(non_system)
+                    capture["input_messages_str"] = _serialize_input_messages(
+                        non_system
                     )
             except Exception:
                 pass
@@ -736,7 +751,7 @@ class DoAutoCompactWrapper:
         layer = "manual" if focus is not None else "auto"
 
         with self._tracer.start_as_current_span(
-                "compact", kind=SpanKind.INTERNAL
+            "compact", kind=SpanKind.INTERNAL
         ) as span:
             span.set_attribute(GEN_AI_SPAN_KIND, "CHAIN")
             span.set_attribute(GEN_AI_FRAMEWORK, "claw-eval")
@@ -775,14 +790,16 @@ class ToolDispatchWrapper:
             return wrapped(*args, **kwargs)
 
         tool_use = args[0] if args else kwargs.get("tool_use")
-        tool_name = getattr(tool_use, "name", "unknown") if tool_use else "unknown"
+        tool_name = (
+            getattr(tool_use, "name", "unknown") if tool_use else "unknown"
+        )
         tool_use_id = getattr(tool_use, "id", "") if tool_use else ""
         tool_input = getattr(tool_use, "input", None) if tool_use else None
         is_sandbox = hasattr(instance, "_http")
 
         guard = _in_tool_dispatch.set(True)
         with self._tracer.start_as_current_span(
-                f"execute_tool {tool_name}", kind=SpanKind.INTERNAL
+            f"execute_tool {tool_name}", kind=SpanKind.INTERNAL
         ) as span:
             span.set_attribute(GEN_AI_SPAN_KIND, "TOOL")
             span.set_attribute(
@@ -890,16 +907,14 @@ class JudgeWrapper:
 
 import wrapt as _wrapt  # local import to avoid widening top-level deps
 
-_GRADER_EVAL_METHOD_NAMES: tuple[str, ...] = (
-    "_llm_score_classifications",
-)
+_GRADER_EVAL_METHOD_NAMES: tuple[str, ...] = ("_llm_score_classifications",)
 
 _GRADER_WRAP_MARKER = "_claw_eval_judge_wrapped"
 
 
 def _wrap_grader_eval_methods(
-        cls,
-        tracer: Tracer,
+    cls,
+    tracer: Tracer,
 ) -> None:
     """Wrap evaluation-helper methods on ``cls`` (and its bases) with JudgeWrapper.
 
@@ -946,9 +961,7 @@ class GetGraderWrapper:
     def __call__(self, wrapped, instance, args, kwargs):
         grader = wrapped(*args, **kwargs)
         try:
-            _wrap_grader_eval_methods(
-                type(grader), self._tracer
-            )
+            _wrap_grader_eval_methods(type(grader), self._tracer)
         except Exception:
             pass
         return grader

@@ -17,13 +17,13 @@
 from unittest.mock import MagicMock
 
 from opentelemetry.instrumentation.slop_code.utils import (
+    MAX_ATTR_LEN,
+    genai_messages,
+    json_dumps_attr,
     safe_get,
     safe_get_nested,
     set_optional_attr,
     truncate_text,
-    json_dumps_attr,
-    genai_messages,
-    MAX_ATTR_LEN,
 )
 
 
@@ -39,12 +39,15 @@ class TestSafeGet:
 
     def test_safe_get_exception(self):
         """safe_get should return default when getattr raises."""
+
         class Broken:
             @property
             def bad(self):
                 raise ValueError("broken property")
+
             def __getattr__(self, name):
                 raise TypeError("broken getattr")
+
         obj = Broken()
         assert safe_get(obj, "bad", "fallback") == "fallback"
 
@@ -123,7 +126,10 @@ class TestGenaiMessages:
 
 class TestInstrumentorMeta:
     def test_instrumentation_dependencies(self):
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
+
         instrumentor = SlopCodeInstrumentor()
         deps = instrumentor.instrumentation_dependencies()
         assert ("slop-code-bench >= 0.1",) == deps

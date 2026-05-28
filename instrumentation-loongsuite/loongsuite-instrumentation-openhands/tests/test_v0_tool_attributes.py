@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """ARMS GenAI semconv §Tool conformance tests for the V0 TOOL wrapper.
 
 I/O capture is always on (no env-var gating, no truncation), so the
@@ -24,7 +38,9 @@ def _spans_by_kind(exporter, kind: str):
 @pytest.fixture
 def instrumented(tracer_provider, stub_openhands_v0_modules):
     from opentelemetry.instrumentation.openhands import OpenHandsInstrumentor
-    from opentelemetry.instrumentation.openhands.internal import session_context
+    from opentelemetry.instrumentation.openhands.internal import (
+        session_context,
+    )
 
     session_context.clear_all()
     inst = OpenHandsInstrumentor()
@@ -277,7 +293,9 @@ def test_tool_span_always_emits_arguments_attribute(instrumented):
     assert attrs["gen_ai.tool.call.arguments"] == "{}"
 
 
-def test_agent_io_capture_omits_legacy_and_openinference_attrs(tracer_provider):
+def test_agent_io_capture_omits_legacy_and_openinference_attrs(
+    tracer_provider,
+):
     from opentelemetry.instrumentation.openhands.internal.v0_wrappers import (
         _capture_agent_io_attributes,
     )

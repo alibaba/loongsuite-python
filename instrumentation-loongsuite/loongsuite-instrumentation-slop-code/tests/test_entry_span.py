@@ -30,8 +30,7 @@ class TestEntrySpan:
 
         spans = span_exporter.get_finished_spans()
         entry_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
         ]
         assert len(entry_spans) == 1
 
@@ -45,7 +44,9 @@ class TestEntrySpan:
         """run_agent raising an exception should produce an error ENTRY span."""
         import slop_code.entrypoints.commands.run_agent as mod
 
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         # Store original and replace with failing function
         original = mod.run_agent
@@ -56,7 +57,9 @@ class TestEntrySpan:
         mod.run_agent = failing_run_agent
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             with pytest.raises(RuntimeError, match="Config error"):
@@ -64,7 +67,8 @@ class TestEntrySpan:
 
             spans = span_exporter.get_finished_spans()
             entry_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "ENTRY"
             ]
             assert len(entry_spans) == 1
@@ -73,16 +77,19 @@ class TestEntrySpan:
             instrumentor.uninstrument()
             mod.run_agent = original
 
-    def test_entry_span_with_problem_names_and_model(self, span_exporter, instrument):
+    def test_entry_span_with_problem_names_and_model(
+        self, span_exporter, instrument
+    ):
         """run_agent with problem_names and model_override kwargs should set input messages."""
         import slop_code.entrypoints.commands.run_agent as mod
 
-        mod.run_agent(problem_names=["problem_a", "problem_b"], model_override="gpt-4")
+        mod.run_agent(
+            problem_names=["problem_a", "problem_b"], model_override="gpt-4"
+        )
 
         spans = span_exporter.get_finished_spans()
         entry_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
         ]
         assert len(entry_spans) == 1
         span = entry_spans[0]
@@ -92,7 +99,9 @@ class TestEntrySpan:
         assert "problem_b" in msg
         assert "gpt-4" in msg
 
-    def test_entry_span_with_single_problem_string(self, span_exporter, instrument):
+    def test_entry_span_with_single_problem_string(
+        self, span_exporter, instrument
+    ):
         """run_agent with a single problem string should set input messages."""
         import slop_code.entrypoints.commands.run_agent as mod
 
@@ -100,11 +109,13 @@ class TestEntrySpan:
 
         spans = span_exporter.get_finished_spans()
         entry_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
         ]
         assert len(entry_spans) == 1
-        assert "single_problem" in entry_spans[0].attributes["gen_ai.input.messages"]
+        assert (
+            "single_problem"
+            in entry_spans[0].attributes["gen_ai.input.messages"]
+        )
 
 
 class TestRunnerEntrySpan:
@@ -115,12 +126,11 @@ class TestRunnerEntrySpan:
         import slop_code.agent_runner.runner as mod
 
         runner = mod.AgentRunner()
-        result = runner.run()
+        runner.run()
 
         spans = span_exporter.get_finished_spans()
         entry_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
         ]
         assert len(entry_spans) == 1
 
@@ -129,10 +139,15 @@ class TestRunnerEntrySpan:
         assert span.attributes["gen_ai.operation.name"] == "enter"
         assert span.attributes["gen_ai.session.id"] == "test_problem"
         assert "gen_ai.input.messages" in span.attributes
-        assert "Solve the coding problem" in span.attributes["gen_ai.input.messages"]
+        assert (
+            "Solve the coding problem"
+            in span.attributes["gen_ai.input.messages"]
+        )
         assert span.status.status_code == StatusCode.OK
 
-    def test_runner_entry_span_captures_output(self, span_exporter, instrument):
+    def test_runner_entry_span_captures_output(
+        self, span_exporter, instrument
+    ):
         """AgentRunner.run result should be captured as output."""
         import slop_code.agent_runner.runner as mod
 
@@ -142,8 +157,7 @@ class TestRunnerEntrySpan:
 
         spans = span_exporter.get_finished_spans()
         entry_spans = [
-            s for s in spans
-            if s.attributes.get("gen_ai.span.kind") == "ENTRY"
+            s for s in spans if s.attributes.get("gen_ai.span.kind") == "ENTRY"
         ]
         assert len(entry_spans) == 1
         span = entry_spans[0]
@@ -153,7 +167,10 @@ class TestRunnerEntrySpan:
     def test_runner_entry_span_error(self, span_exporter, tracer_provider):
         """Exception in AgentRunner.run should produce an error span."""
         import slop_code.agent_runner.runner as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class FailingRunner(mod.AgentRunner):
             def run(self):
@@ -163,7 +180,9 @@ class TestRunnerEntrySpan:
         mod.AgentRunner = FailingRunner
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             runner = mod.AgentRunner()
@@ -172,7 +191,8 @@ class TestRunnerEntrySpan:
 
             spans = span_exporter.get_finished_spans()
             entry_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "ENTRY"
             ]
             assert len(entry_spans) == 1
@@ -181,10 +201,15 @@ class TestRunnerEntrySpan:
             instrumentor.uninstrument()
             mod.AgentRunner = OriginalRunner
 
-    def test_runner_entry_span_fallback_prompt_sources(self, span_exporter, tracer_provider):
+    def test_runner_entry_span_fallback_prompt_sources(
+        self, span_exporter, tracer_provider
+    ):
         """RunnerEntryWrapper should try multiple prompt sources in order."""
         import slop_code.agent_runner.runner as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class RunnerNoPrompt(mod.AgentRunner):
             def __init__(self):
@@ -198,7 +223,9 @@ class TestRunnerEntrySpan:
         mod.AgentRunner = RunnerNoPrompt
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             runner = mod.AgentRunner()
@@ -206,19 +233,27 @@ class TestRunnerEntrySpan:
 
             spans = span_exporter.get_finished_spans()
             entry_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "ENTRY"
             ]
             assert len(entry_spans) == 1
-            assert "Fix the following issue" in entry_spans[0].attributes.get("gen_ai.input.messages", "")
+            assert "Fix the following issue" in entry_spans[0].attributes.get(
+                "gen_ai.input.messages", ""
+            )
         finally:
             instrumentor.uninstrument()
             mod.AgentRunner = OriginalRunner
 
-    def test_runner_entry_span_template_fallback(self, span_exporter, tracer_provider):
+    def test_runner_entry_span_template_fallback(
+        self, span_exporter, tracer_provider
+    ):
         """RunnerEntryWrapper should fall back to run_spec.template when no problem prompt."""
         import slop_code.agent_runner.runner as mod
-        from opentelemetry.instrumentation.slop_code import SlopCodeInstrumentor
+
+        from opentelemetry.instrumentation.slop_code import (
+            SlopCodeInstrumentor,
+        )
 
         class RunnerTemplateOnly(mod.AgentRunner):
             def __init__(self):
@@ -232,7 +267,9 @@ class TestRunnerEntrySpan:
         mod.AgentRunner = RunnerTemplateOnly
 
         instrumentor = SlopCodeInstrumentor()
-        instrumentor.instrument(tracer_provider=tracer_provider, skip_dep_check=True)
+        instrumentor.instrument(
+            tracer_provider=tracer_provider, skip_dep_check=True
+        )
 
         try:
             runner = mod.AgentRunner()
@@ -240,11 +277,14 @@ class TestRunnerEntrySpan:
 
             spans = span_exporter.get_finished_spans()
             entry_spans = [
-                s for s in spans
+                s
+                for s in spans
                 if s.attributes.get("gen_ai.span.kind") == "ENTRY"
             ]
             assert len(entry_spans) == 1
-            assert "Template task instructions" in entry_spans[0].attributes.get("gen_ai.input.messages", "")
+            assert "Template task instructions" in entry_spans[
+                0
+            ].attributes.get("gen_ai.input.messages", "")
         finally:
             instrumentor.uninstrument()
             mod.AgentRunner = OriginalRunner

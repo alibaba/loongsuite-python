@@ -101,7 +101,9 @@ class VitaInstrumentor(BaseInstrumentor):
             )
             logger.debug("Instrumented vita.utils.llm_utils.generate")
         except Exception as e:
-            logger.warning(f"Could not wrap vita.utils.llm_utils.generate: {e}")
+            logger.warning(
+                f"Could not wrap vita.utils.llm_utils.generate: {e}"
+            )
 
         # Hook #1: run_task -> ENTRY
         try:
@@ -153,7 +155,9 @@ class VitaInstrumentor(BaseInstrumentor):
             )
             logger.debug("Instrumented LLMAgent.generate_next_message")
         except Exception as e:
-            logger.warning(f"Could not wrap LLMAgent.generate_next_message: {e}")
+            logger.warning(
+                f"Could not wrap LLMAgent.generate_next_message: {e}"
+            )
 
         # Hook #4b: LLMSoloAgent.generate_next_message -> AGENT
         try:
@@ -166,7 +170,9 @@ class VitaInstrumentor(BaseInstrumentor):
             )
             logger.debug("Instrumented LLMSoloAgent.generate_next_message")
         except Exception as e:
-            logger.warning(f"Could not wrap LLMSoloAgent.generate_next_message: {e}")
+            logger.warning(
+                f"Could not wrap LLMSoloAgent.generate_next_message: {e}"
+            )
 
         # Hook #6: Environment.get_response -> TOOL
         try:

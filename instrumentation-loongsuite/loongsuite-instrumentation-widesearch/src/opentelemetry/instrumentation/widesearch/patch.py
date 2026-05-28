@@ -1,3 +1,17 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Patch functions for WideSearch instrumentation.
 
 Wraps key WideSearch methods to generate OpenTelemetry spans:
@@ -104,7 +118,7 @@ async def wrap_runner_run(
         if last_step:
             invocation.output_messages = _step_to_output_messages(last_step)
         handler.stop_invoke_agent(invocation)
-    except GeneratorExit as e:
+    except GeneratorExit:
         handler.fail_invoke_agent(
             invocation, Error(message="GeneratorExit", type=GeneratorExit)
         )
@@ -137,7 +151,7 @@ async def wrap_runner_step(
     try:
         result = await wrapped(*args, **kwargs)
 
-        from src.agent.memory import ActionStep, ActionStepError, StepStatus
+        from src.agent.memory import ActionStepError, StepStatus
 
         if isinstance(result, ActionStepError):
             invocation.finish_reason = "error"
@@ -201,7 +215,9 @@ async def wrap_invoke_tool_call(
             )
             return ToolCallResult(
                 tool_call_id=tool_call.tool_call_id,
-                error_marker=ErrorMarker(message=f"Tool {tool_name} not found"),
+                error_marker=ErrorMarker(
+                    message=f"Tool {tool_name} not found"
+                ),
             )
 
         arguments = tool_call.arguments
@@ -258,7 +274,9 @@ async def wrap_invoke_tool_call(
         if tool is None:
             return ToolCallResult(
                 tool_call_id=tool_call.tool_call_id,
-                error_marker=ErrorMarker(message=f"Tool {tool_name} not found"),
+                error_marker=ErrorMarker(
+                    message=f"Tool {tool_name} not found"
+                ),
             )
         arguments = tool_call.arguments
         if isinstance(arguments, str):

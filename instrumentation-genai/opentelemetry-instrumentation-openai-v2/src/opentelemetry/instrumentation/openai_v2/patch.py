@@ -829,7 +829,9 @@ class LegacyChatStreamWrapper(BaseStreamWrapper):
                     function = {"name": tool_call.function_name}
                     if self.capture_content:
                         function["arguments"] = "".join(
-                            part for part in tool_call.arguments if part is not None
+                            part
+                            for part in tool_call.arguments
+                            if part is not None
                         )
                     tool_call_dict = {
                         "id": tool_call.tool_call_id,
@@ -907,7 +909,9 @@ class ChatStreamWrapper(BaseStreamWrapper):
                 for tool_call in choice.tool_calls_buffers:
                     arguments = None
                     arguments_str = "".join(
-                        part for part in tool_call.arguments if part is not None
+                        part
+                        for part in tool_call.arguments
+                        if part is not None
                     )
                     if arguments_str:
                         try:
