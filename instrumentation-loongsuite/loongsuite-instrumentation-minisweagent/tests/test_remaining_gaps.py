@@ -286,14 +286,17 @@ class TestTryFillEntryPayload:
         traj_data = {"messages": [{"role": "user", "content": "hello"}]}
         traj_file.write_text(json.dumps(traj_data), encoding="utf-8")
         try:
-            with patch(
-                "opentelemetry.instrumentation.minisweagent.internal.conversation.build_invoke_payload_from_messages",
+            conversation = self._conv()
+            with patch.object(
+                conversation,
+                "build_invoke_payload_from_messages",
                 side_effect=Exception("build failed"),
-            ):
+            ) as mock_build:
                 result = (
-                    self._conv().try_fill_entry_payload_from_mini_trajectory()
+                    conversation.try_fill_entry_payload_from_mini_trajectory()
                 )
                 assert result is None
+                mock_build.assert_called_once()
         finally:
             if hasattr(mini, "global_config_dir"):
                 delattr(mini, "global_config_dir")
