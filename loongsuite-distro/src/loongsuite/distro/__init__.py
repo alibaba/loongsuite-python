@@ -24,11 +24,22 @@ from opentelemetry.instrumentation.distro import BaseDistro
 from opentelemetry.sdk._configuration import _OTelSDKConfigurator
 from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_PROTOCOL
 
+from loongsuite.distro.resource import LoongSuiteResourceDetector
+
 
 class LoongSuiteConfigurator(_OTelSDKConfigurator):
     """
     LoongSuite configurator, inherits from OpenTelemetry SDK configurator.
+
+    Augments the resource with LoongSuite specific attributes (``host.ip`` and
+    ``gen_ai.instrumentation.sdk.name``) before delegating to the OpenTelemetry
+    SDK configurator.
     """
+
+    def _configure(self, **kwargs: Any) -> None:
+        resource_attributes = dict(kwargs.pop("resource_attributes", None) or {})
+        resource_attributes.update(LoongSuiteResourceDetector().detect().attributes)
+        super()._configure(resource_attributes=resource_attributes, **kwargs)
 
 
 class LoongSuiteDistro(BaseDistro):
