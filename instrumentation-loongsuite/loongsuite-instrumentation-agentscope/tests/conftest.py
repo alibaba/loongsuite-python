@@ -245,8 +245,8 @@ def vcr_config():
     """Configure VCR for recording and replaying HTTP requests"""
     return {
         "filter_headers": [
-            ("authorization", "Bearer test_api_key"),
-            ("api-key", "test_api_key"),
+            ("authorization", "<redacted>"),
+            ("api-key", "<redacted>"),
         ],
         "decode_compressed_response": True,
         "before_record_response": scrub_response_headers,
