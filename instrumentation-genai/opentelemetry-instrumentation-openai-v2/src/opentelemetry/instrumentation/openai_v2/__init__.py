@@ -40,6 +40,8 @@ API
 ---
 """
 
+import logging
+from importlib import import_module
 from typing import Collection
 
 from wrapt import wrap_function_wrapper
@@ -66,10 +68,42 @@ from .patch import (
     async_chat_completions_create_v_new,
     async_chat_completions_create_v_old,
     async_embeddings_create,
+    async_responses_create_v_new,
     chat_completions_create_v_new,
     chat_completions_create_v_old,
     embeddings_create,
+    responses_create_v_new,
 )
+
+_logger = logging.getLogger(__name__)
+
+
+def _wrap_function_wrapper_if_available(module, name, wrapper):
+    try:
+        imported_module = import_module(module)
+        target = imported_module
+        for part in name.split(".")[:-1]:
+            target = getattr(target, part)
+        getattr(target, name.split(".")[-1])
+    except (AttributeError, ModuleNotFoundError) as exc:
+        _logger.debug(
+            "Skipping optional OpenAI wrapper %s.%s: %s",
+            module,
+            name,
+            exc,
+        )
+        return
+    wrap_function_wrapper(module=module, name=name, wrapper=wrapper)
+
+
+def _unwrap_if_available(module_name, class_name, method_name):
+    try:
+        module = import_module(module_name)
+    except ModuleNotFoundError:
+        return
+    cls = getattr(module, class_name, None)
+    if cls is not None and hasattr(cls, method_name):
+        unwrap(cls, method_name)
 
 
 class OpenAIInstrumentor(BaseInstrumentor):
@@ -159,6 +193,19 @@ class OpenAIInstrumentor(BaseInstrumentor):
             ),
         )
 
+        if latest_experimental_enabled:
+            _wrap_function_wrapper_if_available(
+                module="openai.resources.responses",
+                name="Responses.create",
+                wrapper=responses_create_v_new(handler, content_mode),
+            )
+
+            _wrap_function_wrapper_if_available(
+                module="openai.resources.responses",
+                name="AsyncResponses.create",
+                wrapper=async_responses_create_v_new(handler, content_mode),
+            )
+
     def _uninstrument(self, **kwargs):
         import openai  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
 
@@ -166,3 +213,9 @@ class OpenAIInstrumentor(BaseInstrumentor):
         unwrap(openai.resources.chat.completions.AsyncCompletions, "create")
         unwrap(openai.resources.embeddings.Embeddings, "create")
         unwrap(openai.resources.embeddings.AsyncEmbeddings, "create")
+        _unwrap_if_available(
+            "openai.resources.responses", "Responses", "create"
+        )
+        _unwrap_if_available(
+            "openai.resources.responses", "AsyncResponses", "create"
+        )

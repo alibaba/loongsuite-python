@@ -37,17 +37,34 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.trace.status import Status, StatusCode
 from opentelemetry.util.genai.types import (
+    File,
+    FunctionToolDefinition,
+    GenericToolDefinition,
     InputMessage,
     LLMInvocation,
     OutputMessage,
     Text,
     ToolCall,
     ToolCallResponse,
+    Uri,
 )
 
 OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT = (
     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
 )
+
+_RESPONSE_TOOL_CALL_ITEM_TYPES = {
+    "code_interpreter_call",
+    "computer_call",
+    "custom_tool_call",
+    "file_search_call",
+    "function_call",
+    "image_generation_call",
+    "local_shell_call",
+    "mcp_call",
+    "tool_call",
+    "web_search_call",
+}
 
 
 def is_content_enabled() -> bool:
@@ -399,6 +416,334 @@ def create_chat_invocation(
             kwargs.get("messages", [])
         )
     return llm_invocation
+
+
+def create_response_invocation(
+    kwargs,
+    client_instance,
+    capture_content: bool,
+) -> LLMInvocation:
+    llm_invocation = LLMInvocation(request_model=kwargs.get("model", ""))
+    llm_invocation.provider = (
+        GenAIAttributes.GenAiProviderNameValues.OPENAI.value
+    )
+    llm_invocation.temperature = get_value(kwargs.get("temperature"))
+    llm_invocation.top_p = get_value(kwargs.get("top_p"))
+    llm_invocation.max_tokens = get_value(kwargs.get("max_output_tokens"))
+
+    text_config = get_value(kwargs.get("text"))
+    output_type = _get_response_output_type(text_config)
+    if output_type:
+        llm_invocation.output_type = output_type
+
+    address, port = get_server_address_and_port(client_instance)
+    if address:
+        llm_invocation.server_address = address
+    if port:
+        llm_invocation.server_port = port
+
+    conversation_id = _get_response_conversation_id(kwargs.get("conversation"))
+    if conversation_id:
+        llm_invocation.conversation_id = conversation_id
+
+    reasoning = get_value(kwargs.get("reasoning"))
+    attributes = {}
+    metric_attributes = {}
+
+    service_tier = get_value(kwargs.get("service_tier"))
+    if service_tier and service_tier != "auto":
+        attributes[OpenAIAttributes.OPENAI_REQUEST_SERVICE_TIER] = service_tier
+        metric_attributes[OpenAIAttributes.OPENAI_REQUEST_SERVICE_TIER] = (
+            service_tier
+        )
+
+    _set_optional_attribute(
+        attributes,
+        "gen_ai.openai.request.previous_response_id",
+        get_value(kwargs.get("previous_response_id")),
+    )
+    _set_optional_attribute(
+        attributes,
+        "gen_ai.openai.request.background",
+        get_value(kwargs.get("background")),
+    )
+    _set_optional_attribute(
+        attributes,
+        "gen_ai.openai.request.store",
+        get_value(kwargs.get("store")),
+    )
+    _set_optional_attribute(
+        attributes,
+        "gen_ai.openai.request.parallel_tool_calls",
+        get_value(kwargs.get("parallel_tool_calls")),
+    )
+    _set_optional_attribute(
+        attributes,
+        "gen_ai.openai.request.reasoning.effort",
+        _get_mapping_or_attr(reasoning, "effort"),
+    )
+    _set_optional_attribute(
+        attributes,
+        "gen_ai.openai.request.reasoning.summary",
+        _get_mapping_or_attr(reasoning, "summary"),
+    )
+
+    if attributes:
+        llm_invocation.attributes = attributes
+    if metric_attributes:
+        llm_invocation.metric_attributes = metric_attributes
+
+    if capture_content:
+        llm_invocation.input_messages = _prepare_response_input_messages(
+            kwargs.get("input")
+        )
+        if (instructions := get_value(kwargs.get("instructions"))) is not None:
+            llm_invocation.system_instruction = [
+                Text(content=str(instructions))
+            ]
+
+    llm_invocation.tool_definitions = _prepare_response_tool_definitions(
+        kwargs.get("tools")
+    )
+
+    return llm_invocation
+
+
+def _set_optional_attribute(attributes, key, value):
+    if value is not None:
+        attributes[key] = value
+
+
+def _get_mapping_or_attr(obj, key):
+    if obj is None:
+        return None
+    if isinstance(obj, Mapping):
+        return get_value(obj.get(key))
+    return get_value(getattr(obj, key, None))
+
+
+def _get_response_output_type(text_config):
+    response_format = _get_mapping_or_attr(text_config, "format")
+    if response_format is None:
+        return None
+    response_format_type = _get_mapping_or_attr(response_format, "type")
+    if response_format_type in {"json_schema", "json_object"}:
+        return GenAIAttributes.GenAiOutputTypeValues.JSON.value
+    if response_format_type:
+        return response_format_type
+    return None
+
+
+def _get_response_conversation_id(conversation):
+    if conversation is None:
+        return None
+    if isinstance(conversation, str):
+        return conversation
+    conversation_id = _get_mapping_or_attr(conversation, "id")
+    if conversation_id:
+        return conversation_id
+    return None
+
+
+def _prepare_response_tool_definitions(tools) -> list:
+    if not value_is_set(tools):
+        return []
+    definitions = []
+    for tool in tools or []:
+        tool_type = get_property_value(tool, "type") or "function"
+        if tool_type == "function":
+            function = get_property_value(tool, "function") or tool
+            definitions.append(
+                FunctionToolDefinition(
+                    name=get_property_value(function, "name") or "",
+                    description=get_property_value(function, "description"),
+                    parameters=get_property_value(function, "parameters"),
+                )
+            )
+        else:
+            definitions.append(
+                GenericToolDefinition(name=str(tool_type), type=str(tool_type))
+            )
+    return definitions
+
+
+def _prepare_response_input_messages(input_value) -> list[InputMessage]:
+    if not value_is_set(input_value):
+        return []
+    if isinstance(input_value, str):
+        return [InputMessage(role="user", parts=[Text(content=input_value)])]
+
+    messages = []
+    if not isinstance(input_value, Iterable) or isinstance(
+        input_value, (str, bytes)
+    ):
+        return messages
+
+    for item in input_value:
+        item_type = get_property_value(item, "type")
+        if item_type and item_type not in {"message", "input_message"}:
+            continue
+        role = get_property_value(item, "role") or "user"
+        content = get_property_value(item, "content")
+        parts = _prepare_response_message_parts(content)
+        if parts:
+            messages.append(InputMessage(role=str(role), parts=parts))
+    return messages
+
+
+def _prepare_response_message_parts(content) -> list:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [Text(content=content)]
+    if not isinstance(content, Iterable) or isinstance(content, (str, bytes)):
+        return [Text(content=str(content))]
+
+    parts = []
+    for part in content:
+        part_type = get_property_value(part, "type")
+        text = get_property_value(part, "text")
+        if part_type in {"input_text", "output_text", "text"} and text:
+            parts.append(Text(content=str(text)))
+            continue
+
+        image_url = get_property_value(part, "image_url")
+        file_id = get_property_value(part, "file_id")
+        if image_url:
+            parts.append(
+                Uri(mime_type=None, modality="image", uri=str(image_url))
+            )
+        elif file_id:
+            parts.append(
+                File(mime_type=None, modality="file", file_id=str(file_id))
+            )
+    return parts
+
+
+def set_response_invocation_properties(
+    invocation: LLMInvocation,
+    result,
+    capture_content: bool,
+) -> LLMInvocation:
+    if getattr(result, "model", None):
+        invocation.response_model_name = result.model
+    if getattr(result, "id", None):
+        invocation.response_id = result.id
+
+    status = getattr(result, "status", None)
+    finish_reason = _response_finish_reason(result)
+    if finish_reason:
+        invocation.finish_reasons = [finish_reason]
+    if status:
+        invocation.attributes["gen_ai.openai.response.status"] = status
+
+    if getattr(result, "service_tier", None):
+        invocation.attributes[
+            OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER
+        ] = result.service_tier
+        invocation.metric_attributes[
+            OpenAIAttributes.OPENAI_RESPONSE_SERVICE_TIER
+        ] = result.service_tier
+
+    usage = getattr(result, "usage", None)
+    if usage:
+        invocation.input_tokens = _get_mapping_or_attr(usage, "input_tokens")
+        invocation.output_tokens = _get_mapping_or_attr(usage, "output_tokens")
+        input_details = _get_mapping_or_attr(usage, "input_tokens_details")
+        cached_tokens = _get_mapping_or_attr(input_details, "cached_tokens")
+        if cached_tokens is not None:
+            invocation.usage_cache_read_input_tokens = cached_tokens
+
+        output_details = _get_mapping_or_attr(usage, "output_tokens_details")
+        reasoning_tokens = _get_mapping_or_attr(
+            output_details, "reasoning_tokens"
+        )
+        if reasoning_tokens is not None:
+            invocation.attributes[
+                "gen_ai.usage.output_tokens_details.reasoning_tokens"
+            ] = reasoning_tokens
+
+    if capture_content:
+        invocation.output_messages = _prepare_response_output_messages(result)
+    return invocation
+
+
+def _response_finish_reason(result) -> str | None:
+    status = getattr(result, "status", None)
+    if status == "completed":
+        for item in getattr(result, "output", []) or []:
+            item_type = get_property_value(item, "type")
+            if _is_response_tool_call_item(item_type):
+                return "tool_calls"
+        return "stop"
+    if status == "incomplete":
+        details = getattr(result, "incomplete_details", None)
+        reason = _get_mapping_or_attr(details, "reason")
+        if reason == "content_filter":
+            return "content_filter"
+        return "length"
+    if status in {"failed", "cancelled"}:
+        return "error"
+    return None
+
+
+def _prepare_response_output_messages(result) -> list[OutputMessage]:
+    output_messages = []
+    finish_reason = _response_finish_reason(result) or "stop"
+    for item in getattr(result, "output", []) or []:
+        item_type = get_property_value(item, "type")
+        if item_type == "message":
+            parts = _prepare_response_message_parts(
+                get_property_value(item, "content")
+            )
+            if parts:
+                output_messages.append(
+                    OutputMessage(
+                        role=get_property_value(item, "role") or "assistant",
+                        parts=parts,
+                        finish_reason=finish_reason,
+                    )
+                )
+            continue
+
+        tool_call = _prepare_response_tool_call(item)
+        if tool_call:
+            output_messages.append(
+                OutputMessage(
+                    role="assistant",
+                    parts=[tool_call],
+                    finish_reason=finish_reason,
+                )
+            )
+    return output_messages
+
+
+def _prepare_response_tool_call(item):
+    item_type = get_property_value(item, "type")
+    if not _is_response_tool_call_item(item_type):
+        return None
+
+    call_id = (
+        get_property_value(item, "call_id")
+        or get_property_value(item, "id")
+        or get_property_value(item, "item_id")
+    )
+    name = (
+        get_property_value(item, "name")
+        or get_property_value(item, "tool_name")
+        or item_type
+    )
+    arguments = get_property_value(item, "arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            pass
+    return ToolCall(id=call_id, name=str(name), arguments=arguments)
+
+
+def _is_response_tool_call_item(item_type) -> bool:
+    return item_type in _RESPONSE_TOOL_CALL_ITEM_TYPES
 
 
 def get_value(v: Any):

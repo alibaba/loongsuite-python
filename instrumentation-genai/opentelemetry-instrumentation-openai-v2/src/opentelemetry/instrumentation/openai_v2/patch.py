@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# pylint: disable=too-many-lines
 
 import json
 from timeit import default_timer
@@ -47,10 +48,12 @@ from .utils import (
     _prepare_output_messages,
     choice_to_event,
     create_chat_invocation,
+    create_response_invocation,
     get_llm_request_attributes,
     handle_span_exception,
     is_streaming,
     message_to_event,
+    set_response_invocation_properties,
     set_span_attribute,
 )
 
@@ -259,6 +262,88 @@ def async_chat_completions_create_v_new(
         except Exception as error:
             handler.fail_llm(
                 chat_invocation, Error(type=type(error), message=str(error))
+            )
+            raise
+
+    return traced_method
+
+
+def responses_create_v_new(
+    handler: TelemetryHandler,
+    content_capturing_mode: ContentCapturingMode,
+):
+    capture_content = content_capturing_mode != ContentCapturingMode.NO_CONTENT
+
+    def traced_method(wrapped, instance, args, kwargs):
+        response_invocation = handler.start_llm(
+            create_response_invocation(
+                kwargs, instance, capture_content=capture_content
+            )
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+            if hasattr(result, "parse"):
+                parsed_result = result.parse()
+            else:
+                parsed_result = result
+            if is_streaming(kwargs):
+                return ResponsesStreamWrapper(
+                    parsed_result,
+                    handler,
+                    response_invocation,
+                    capture_content,
+                )
+
+            set_response_invocation_properties(
+                response_invocation, parsed_result, capture_content
+            )
+            handler.stop_llm(response_invocation)
+            return result
+        except Exception as error:
+            handler.fail_llm(
+                response_invocation,
+                Error(type=type(error), message=str(error)),
+            )
+            raise
+
+    return traced_method
+
+
+def async_responses_create_v_new(
+    handler: TelemetryHandler,
+    content_capturing_mode: ContentCapturingMode,
+):
+    capture_content = content_capturing_mode != ContentCapturingMode.NO_CONTENT
+
+    async def traced_method(wrapped, instance, args, kwargs):
+        response_invocation = handler.start_llm(
+            create_response_invocation(
+                kwargs, instance, capture_content=capture_content
+            )
+        )
+        try:
+            result = await wrapped(*args, **kwargs)
+            if hasattr(result, "parse"):
+                parsed_result = result.parse()
+            else:
+                parsed_result = result
+            if is_streaming(kwargs):
+                return ResponsesStreamWrapper(
+                    parsed_result,
+                    handler,
+                    response_invocation,
+                    capture_content,
+                )
+
+            set_response_invocation_properties(
+                response_invocation, parsed_result, capture_content
+            )
+            handler.stop_llm(response_invocation)
+            return result
+        except Exception as error:
+            handler.fail_llm(
+                response_invocation,
+                Error(type=type(error), message=str(error)),
             )
             raise
 
@@ -946,6 +1031,45 @@ class ChatStreamWrapper(BaseStreamWrapper):
             )
 
         self._set_output_messages()
+
+        if error:
+            self.handler.fail_llm(
+                self.invocation, Error(type=type(error), message=str(error))
+            )
+        else:
+            self.handler.stop_llm(self.invocation)
+        self._started = False
+
+
+class ResponsesStreamWrapper(BaseStreamWrapper):
+    handler: TelemetryHandler
+    invocation: LLMInvocation
+
+    def __init__(
+        self,
+        stream: Stream,
+        handler: TelemetryHandler,
+        invocation: LLMInvocation,
+        capture_content: bool,
+    ):
+        super().__init__(stream, capture_content=capture_content)
+        self.handler = handler
+        self.invocation = invocation
+        self.final_response = None
+
+    def process_chunk(self, chunk):
+        response = getattr(chunk, "response", None)
+        if response is not None:
+            self.final_response = response
+
+    def cleanup(self, error: Optional[BaseException] = None):
+        if not self._started:
+            return
+
+        if self.final_response is not None:
+            set_response_invocation_properties(
+                self.invocation, self.final_response, self.capture_content
+            )
 
         if error:
             self.handler.fail_llm(

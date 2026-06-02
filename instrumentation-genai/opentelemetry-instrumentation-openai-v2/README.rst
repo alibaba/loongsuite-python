@@ -57,6 +57,8 @@ Instrumenting all clients
 *************************
 
 When using the instrumentor, all clients will automatically trace OpenAI operations including chat completions and embeddings.
+With `latest experimental features <#enabling-the-latest-experimental-features>`_ enabled, it also traces sync and async
+Responses API calls made with ``responses.create``, including ``stream=True`` calls.
 You can also optionally capture prompts and completions as log events.
 
 Make sure to configure OpenTelemetry tracing, logging, and events to capture all telemetry emitted by the instrumentation.
@@ -130,4 +132,3 @@ References
 * `OpenTelemetry OpenAI Instrumentation <https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation-genai/openai.html>`_
 * `OpenTelemetry Project <https://opentelemetry.io/>`_
 * `OpenTelemetry Python Examples <https://github.com/open-telemetry/opentelemetry-python/tree/main/docs/examples>`_
-
