@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.6.0 (2026-06-03)
+
 ### Changed
 
 - Route Google ADK `AGENT`, `LLM`, and `TOOL` spans through
