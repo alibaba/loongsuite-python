@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.6.0 (2026-06-03)
+
 ### Changed
 
 - Publish LoongSuite GenAI utilities as `loongsuite-otel-util-genai` for new

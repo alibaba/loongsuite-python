@@ -28,7 +28,7 @@ dependencies = [
   "opentelemetry-instrumentation >= 0.58b0",
   "opentelemetry-semantic-conventions >= 0.58b0",
   "wrapt >= 1.0.0, < 2.0.0",
-  "opentelemetry-util-genai",
+  "loongsuite-otel-util-genai ~= 0.6.0",
 ]
 
 [project.optional-dependencies]
