@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 
 from httpx import URL
 from openai import NotGiven
+from openai._types import Omit
 
 from opentelemetry._logs import LogRecord
 from opentelemetry.semconv._incubating.attributes import (
@@ -219,7 +220,7 @@ def non_numerical_value_is_set(value: bool | str | NotGiven | None):
 
 
 def value_is_set(value):
-    return value is not None and not isinstance(value, NotGiven)
+    return value is not None and not isinstance(value, (NotGiven, Omit))
 
 
 def get_llm_request_attributes(
@@ -488,10 +489,8 @@ def create_response_invocation(
         _get_mapping_or_attr(reasoning, "summary"),
     )
 
-    if attributes:
-        llm_invocation.attributes = attributes
-    if metric_attributes:
-        llm_invocation.metric_attributes = metric_attributes
+    llm_invocation.attributes = attributes
+    llm_invocation.metric_attributes = metric_attributes
 
     if capture_content:
         llm_invocation.input_messages = _prepare_response_input_messages(
@@ -625,6 +624,8 @@ def set_response_invocation_properties(
     result,
     capture_content: bool,
 ) -> LLMInvocation:
+    if not invocation.request_model and getattr(result, "model", None):
+        invocation.request_model = result.model
     if getattr(result, "model", None):
         invocation.response_model_name = result.model
     if getattr(result, "id", None):

@@ -69,10 +69,14 @@ from .patch import (
     async_chat_completions_create_v_old,
     async_embeddings_create,
     async_responses_create_v_new,
+    async_responses_parse_v_new,
+    async_responses_retrieve_v_new,
     chat_completions_create_v_new,
     chat_completions_create_v_old,
     embeddings_create,
     responses_create_v_new,
+    responses_parse_v_new,
+    responses_retrieve_v_new,
 )
 
 _logger = logging.getLogger(__name__)
@@ -199,11 +203,31 @@ class OpenAIInstrumentor(BaseInstrumentor):
                 name="Responses.create",
                 wrapper=responses_create_v_new(handler, content_mode),
             )
+            _wrap_function_wrapper_if_available(
+                module="openai.resources.responses",
+                name="Responses.parse",
+                wrapper=responses_parse_v_new(handler, content_mode),
+            )
+            _wrap_function_wrapper_if_available(
+                module="openai.resources.responses",
+                name="Responses.retrieve",
+                wrapper=responses_retrieve_v_new(handler, content_mode),
+            )
 
             _wrap_function_wrapper_if_available(
                 module="openai.resources.responses",
                 name="AsyncResponses.create",
                 wrapper=async_responses_create_v_new(handler, content_mode),
+            )
+            _wrap_function_wrapper_if_available(
+                module="openai.resources.responses",
+                name="AsyncResponses.parse",
+                wrapper=async_responses_parse_v_new(handler, content_mode),
+            )
+            _wrap_function_wrapper_if_available(
+                module="openai.resources.responses",
+                name="AsyncResponses.retrieve",
+                wrapper=async_responses_retrieve_v_new(handler, content_mode),
             )
 
     def _uninstrument(self, **kwargs):
@@ -217,5 +241,17 @@ class OpenAIInstrumentor(BaseInstrumentor):
             "openai.resources.responses", "Responses", "create"
         )
         _unwrap_if_available(
+            "openai.resources.responses", "Responses", "parse"
+        )
+        _unwrap_if_available(
+            "openai.resources.responses", "Responses", "retrieve"
+        )
+        _unwrap_if_available(
             "openai.resources.responses", "AsyncResponses", "create"
+        )
+        _unwrap_if_available(
+            "openai.resources.responses", "AsyncResponses", "parse"
+        )
+        _unwrap_if_available(
+            "openai.resources.responses", "AsyncResponses", "retrieve"
         )

@@ -309,6 +309,89 @@ def responses_create_v_new(
     return traced_method
 
 
+def responses_parse_v_new(
+    handler: TelemetryHandler,
+    content_capturing_mode: ContentCapturingMode,
+):
+    capture_content = content_capturing_mode != ContentCapturingMode.NO_CONTENT
+
+    def traced_method(wrapped, instance, args, kwargs):
+        response_invocation = handler.start_llm(
+            create_response_invocation(
+                kwargs, instance, capture_content=capture_content
+            )
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return ResponsesStreamWrapper(
+                    result,
+                    handler,
+                    response_invocation,
+                    capture_content,
+                )
+
+            set_response_invocation_properties(
+                response_invocation, result, capture_content
+            )
+            handler.stop_llm(response_invocation)
+            return result
+        except Exception as error:
+            handler.fail_llm(
+                response_invocation,
+                Error(type=type(error), message=str(error)),
+            )
+            raise
+
+    return traced_method
+
+
+def responses_retrieve_v_new(
+    handler: TelemetryHandler,
+    content_capturing_mode: ContentCapturingMode,
+):
+    capture_content = content_capturing_mode != ContentCapturingMode.NO_CONTENT
+
+    def traced_method(wrapped, instance, args, kwargs):
+        if not is_streaming(kwargs):
+            return wrapped(*args, **kwargs)
+
+        response_invocation = handler.start_llm(
+            create_response_invocation(
+                {
+                    "previous_response_id": _get_response_id(args, kwargs),
+                    "stream": kwargs.get("stream"),
+                },
+                instance,
+                capture_content=capture_content,
+            )
+        )
+        try:
+            result = wrapped(*args, **kwargs)
+            return ResponsesStreamWrapper(
+                result,
+                handler,
+                response_invocation,
+                capture_content,
+            )
+        except Exception as error:
+            handler.fail_llm(
+                response_invocation,
+                Error(type=type(error), message=str(error)),
+            )
+            raise
+
+    return traced_method
+
+
+def _get_response_id(args, kwargs):
+    if "response_id" in kwargs:
+        return kwargs["response_id"]
+    if args:
+        return args[0]
+    return None
+
+
 def async_responses_create_v_new(
     handler: TelemetryHandler,
     content_capturing_mode: ContentCapturingMode,
@@ -340,6 +423,81 @@ def async_responses_create_v_new(
             )
             handler.stop_llm(response_invocation)
             return result
+        except Exception as error:
+            handler.fail_llm(
+                response_invocation,
+                Error(type=type(error), message=str(error)),
+            )
+            raise
+
+    return traced_method
+
+
+def async_responses_parse_v_new(
+    handler: TelemetryHandler,
+    content_capturing_mode: ContentCapturingMode,
+):
+    capture_content = content_capturing_mode != ContentCapturingMode.NO_CONTENT
+
+    async def traced_method(wrapped, instance, args, kwargs):
+        response_invocation = handler.start_llm(
+            create_response_invocation(
+                kwargs, instance, capture_content=capture_content
+            )
+        )
+        try:
+            result = await wrapped(*args, **kwargs)
+            if is_streaming(kwargs):
+                return ResponsesStreamWrapper(
+                    result,
+                    handler,
+                    response_invocation,
+                    capture_content,
+                )
+
+            set_response_invocation_properties(
+                response_invocation, result, capture_content
+            )
+            handler.stop_llm(response_invocation)
+            return result
+        except Exception as error:
+            handler.fail_llm(
+                response_invocation,
+                Error(type=type(error), message=str(error)),
+            )
+            raise
+
+    return traced_method
+
+
+def async_responses_retrieve_v_new(
+    handler: TelemetryHandler,
+    content_capturing_mode: ContentCapturingMode,
+):
+    capture_content = content_capturing_mode != ContentCapturingMode.NO_CONTENT
+
+    async def traced_method(wrapped, instance, args, kwargs):
+        if not is_streaming(kwargs):
+            return await wrapped(*args, **kwargs)
+
+        response_invocation = handler.start_llm(
+            create_response_invocation(
+                {
+                    "previous_response_id": _get_response_id(args, kwargs),
+                    "stream": kwargs.get("stream"),
+                },
+                instance,
+                capture_content=capture_content,
+            )
+        )
+        try:
+            result = await wrapped(*args, **kwargs)
+            return ResponsesStreamWrapper(
+                result,
+                handler,
+                response_invocation,
+                capture_content,
+            )
         except Exception as error:
             handler.fail_llm(
                 response_invocation,

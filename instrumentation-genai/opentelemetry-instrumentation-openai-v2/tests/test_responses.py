@@ -45,63 +45,122 @@ AsyncResponses = responses_resources.AsyncResponses
 Responses = responses_resources.Responses
 
 
+def _to_dict(value):
+    if isinstance(value, SimpleNamespace):
+        return {
+            key: _to_dict(item)
+            for key, item in vars(value).items()
+            if not key.startswith("_")
+        }
+    if isinstance(value, list):
+        return [_to_dict(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_to_dict(item) for item in value)
+    if isinstance(value, dict):
+        return {key: _to_dict(item) for key, item in value.items()}
+    return value
+
+
+class _ResponseObject(SimpleNamespace):
+    def to_dict(self):
+        return _to_dict(self)
+
+
+def _obj(**kwargs):
+    return _ResponseObject(**kwargs)
+
+
 def _response():
-    return SimpleNamespace(
+    return _obj(
         id="resp_123",
         model=DEFAULT_MODEL,
         status="completed",
         service_tier="default",
         output=[
-            SimpleNamespace(
+            _obj(
                 type="message",
                 role="assistant",
                 content=[
-                    SimpleNamespace(
+                    _obj(
                         type="output_text",
                         text="This is a Responses API test.",
                     )
                 ],
             )
         ],
-        usage=SimpleNamespace(
+        usage=_obj(
             input_tokens=11,
             output_tokens=7,
-            input_tokens_details=SimpleNamespace(cached_tokens=3),
-            output_tokens_details=SimpleNamespace(reasoning_tokens=2),
+            input_tokens_details=_obj(cached_tokens=3),
+            output_tokens_details=_obj(reasoning_tokens=2),
         ),
     )
 
 
 def _tool_response():
-    return SimpleNamespace(
+    return _obj(
         id="resp_123",
         model=DEFAULT_MODEL,
         status="completed",
         output=[
-            SimpleNamespace(type="reasoning", summary=[]),
-            SimpleNamespace(
+            _obj(type="reasoning", summary=[]),
+            _obj(
                 type="function_call",
                 call_id="call_1",
                 name="lookup_weather",
                 arguments='{"city": "Seattle"}',
             ),
         ],
-        usage=SimpleNamespace(input_tokens=11, output_tokens=7),
+        usage=_obj(input_tokens=11, output_tokens=7),
     )
 
 
 def _response_with_status(status, incomplete_reason=None):
     incomplete_details = None
     if incomplete_reason:
-        incomplete_details = SimpleNamespace(reason=incomplete_reason)
-    return SimpleNamespace(
+        incomplete_details = _obj(reason=incomplete_reason)
+    return _obj(
         id="resp_123",
         model=DEFAULT_MODEL,
         status=status,
         output=[],
         incomplete_details=incomplete_details,
-        usage=SimpleNamespace(input_tokens=11, output_tokens=7),
+        usage=_obj(input_tokens=11, output_tokens=7),
     )
+
+
+def _created_response():
+    return _obj(
+        id="resp_123",
+        model=DEFAULT_MODEL,
+        status="in_progress",
+        output=[],
+        usage=None,
+    )
+
+
+def _response_created_event(sequence_number=0):
+    return SimpleNamespace(
+        type="response.created",
+        sequence_number=sequence_number,
+        response=_created_response(),
+    )
+
+
+def _response_completed_event(sequence_number=1):
+    return SimpleNamespace(
+        type="response.completed",
+        sequence_number=sequence_number,
+        response=_response(),
+    )
+
+
+class _RawStreamResponse:
+    def close(self):
+        pass
+
+    async def aclose(self):
+        pass
 
 
 class _RawResponse:
@@ -116,6 +175,7 @@ class _ResponseStream:
     def __init__(self, events):
         self._events = iter(events)
         self.closed = False
+        self.response = _RawStreamResponse()
 
     def __iter__(self):
         return self
@@ -134,6 +194,7 @@ class _AsyncResponseStream:
     def __init__(self, events):
         self._events = iter(events)
         self.closed = False
+        self.response = _RawStreamResponse()
 
     def __aiter__(self):
         return self
@@ -391,10 +452,8 @@ async def test_async_responses_create_streaming(
     async def fake_create(self, **kwargs):
         return _AsyncResponseStream(
             [
-                SimpleNamespace(type="response.created"),
-                SimpleNamespace(
-                    type="response.completed", response=_response()
-                ),
+                _response_created_event(),
+                _response_completed_event(),
             ]
         )
 
@@ -605,10 +664,8 @@ def test_responses_create_streaming(
     def fake_create(self, **kwargs):
         return _ResponseStream(
             [
-                SimpleNamespace(type="response.created"),
-                SimpleNamespace(
-                    type="response.completed", response=_response()
-                ),
+                _response_created_event(),
+                _response_completed_event(),
             ]
         )
 
@@ -630,3 +687,247 @@ def test_responses_create_streaming(
 
     (span,) = span_exporter.get_finished_spans()
     _assert_response_span(span)
+
+
+def test_responses_stream_helper_filters_omit_sentinels(
+    monkeypatch,
+    caplog,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    def fake_create(self, **kwargs):
+        return _ResponseStream(
+            [
+                _response_created_event(),
+                _response_completed_event(),
+            ]
+        )
+
+    monkeypatch.setattr(Responses, "create", fake_create)
+    instrumentor = _instrument(
+        tracer_provider, logger_provider, meter_provider
+    )
+    try:
+        with caplog.at_level("WARNING"):
+            with getattr(OpenAI(), "responses").stream(
+                model=DEFAULT_MODEL,
+                input="Say this is a test",
+            ) as stream:
+                for _ in stream:
+                    pass
+    finally:
+        _cleanup(instrumentor)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == DEFAULT_MODEL
+    )
+    assert "gen_ai.request.temperature" not in span.attributes
+    assert "gen_ai.request.top_p" not in span.attributes
+    assert "gen_ai.openai.request.previous_response_id" not in span.attributes
+    assert "gen_ai.openai.request.background" not in span.attributes
+    assert "gen_ai.openai.request.store" not in span.attributes
+    assert "gen_ai.openai.request.parallel_tool_calls" not in span.attributes
+    assert not any(
+        "Omit" in record.message or "Invalid type" in record.message
+        for record in caplog.records
+    )
+
+
+def test_responses_stream_existing_response_uses_retrieve(
+    monkeypatch,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    def fake_retrieve(self, response_id, **kwargs):
+        assert response_id == "resp_existing"
+        assert kwargs["stream"] is True
+        return _ResponseStream(
+            [
+                _response_created_event(),
+                _response_completed_event(),
+            ]
+        )
+
+    monkeypatch.setattr(Responses, "retrieve", fake_retrieve)
+    instrumentor = _instrument(
+        tracer_provider, logger_provider, meter_provider
+    )
+    try:
+        with getattr(OpenAI(), "responses").stream(
+            response_id="resp_existing"
+        ) as stream:
+            for _ in stream:
+                pass
+    finally:
+        _cleanup(instrumentor)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == f"chat {DEFAULT_MODEL}"
+    assert (
+        span.attributes["gen_ai.openai.request.previous_response_id"]
+        == "resp_existing"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == DEFAULT_MODEL
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 11
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
+
+
+def test_responses_retrieve_non_streaming_does_not_create_span(
+    monkeypatch,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    def fake_retrieve(self, response_id, **kwargs):
+        assert response_id == "resp_existing"
+        assert "stream" not in kwargs
+        return _response()
+
+    monkeypatch.setattr(Responses, "retrieve", fake_retrieve)
+    instrumentor = _instrument(
+        tracer_provider, logger_provider, meter_provider
+    )
+    try:
+        result = getattr(OpenAI(), "responses").retrieve("resp_existing")
+    finally:
+        _cleanup(instrumentor)
+
+    assert result.id == "resp_123"
+    assert not span_exporter.get_finished_spans()
+
+
+def test_responses_parse_with_content(
+    monkeypatch,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    def fake_parse(self, **kwargs):
+        return _response()
+
+    monkeypatch.setattr(Responses, "parse", fake_parse)
+    instrumentor = _instrument(
+        tracer_provider, logger_provider, meter_provider
+    )
+    try:
+        parsed = getattr(OpenAI(), "responses").parse(
+            model=DEFAULT_MODEL,
+            instructions="You are concise.",
+            input="Say this is a test",
+        )
+    finally:
+        _cleanup(instrumentor)
+
+    assert parsed.id == "resp_123"
+    (span,) = span_exporter.get_finished_spans()
+    _assert_response_span(span)
+
+
+@pytest.mark.asyncio
+async def test_async_responses_parse_with_content(
+    monkeypatch,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    async def fake_parse(self, **kwargs):
+        return _response()
+
+    monkeypatch.setattr(AsyncResponses, "parse", fake_parse)
+    instrumentor = _instrument(
+        tracer_provider, logger_provider, meter_provider
+    )
+    try:
+        parsed = await getattr(AsyncOpenAI(), "responses").parse(
+            model=DEFAULT_MODEL,
+            instructions="You are concise.",
+            input="Say this is a test",
+        )
+    finally:
+        _cleanup(instrumentor)
+
+    assert parsed.id == "resp_123"
+    (span,) = span_exporter.get_finished_spans()
+    _assert_response_span(span)
+
+
+@pytest.mark.asyncio
+async def test_async_responses_stream_existing_response_uses_retrieve(
+    monkeypatch,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    async def fake_retrieve(self, response_id, **kwargs):
+        assert response_id == "resp_existing"
+        assert kwargs["stream"] is True
+        return _AsyncResponseStream(
+            [
+                _response_created_event(),
+                _response_completed_event(),
+            ]
+        )
+
+    monkeypatch.setattr(AsyncResponses, "retrieve", fake_retrieve)
+    instrumentor = _instrument(
+        tracer_provider, logger_provider, meter_provider
+    )
+    try:
+        async with getattr(AsyncOpenAI(), "responses").stream(
+            response_id="resp_existing"
+        ) as stream:
+            async for _ in stream:
+                pass
+    finally:
+        _cleanup(instrumentor)
+
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == f"chat {DEFAULT_MODEL}"
+    assert (
+        span.attributes["gen_ai.openai.request.previous_response_id"]
+        == "resp_existing"
+    )
+    assert (
+        span.attributes[GenAIAttributes.GEN_AI_RESPONSE_MODEL] == DEFAULT_MODEL
+    )
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS] == 11
+    assert span.attributes[GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS] == 7
+
+
+@pytest.mark.asyncio
+async def test_async_responses_retrieve_non_streaming_does_not_create_span(
+    monkeypatch,
+    span_exporter,
+    tracer_provider,
+    logger_provider,
+    meter_provider,
+):
+    async def fake_retrieve(self, response_id, **kwargs):
+        assert response_id == "resp_existing"
+        assert "stream" not in kwargs
+        return _response()
+
+    monkeypatch.setattr(AsyncResponses, "retrieve", fake_retrieve)
+    instrumentor = _instrument(
+        tracer_provider, logger_provider, meter_provider
+    )
+    try:
+        result = await getattr(AsyncOpenAI(), "responses").retrieve(
+            "resp_existing"
+        )
+    finally:
+        _cleanup(instrumentor)
+
+    assert result.id == "resp_123"
+    assert not span_exporter.get_finished_spans()
