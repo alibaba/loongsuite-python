@@ -25,7 +25,9 @@ import pytest
 
 agentscope = pytest.importorskip("agentscope")
 if not importlib.metadata.version("agentscope").startswith("2."):
-    pytest.skip("AgentScope v2 tests require agentscope>=2,<3", allow_module_level=True)
+    pytest.skip(
+        "AgentScope v2 tests require agentscope>=2,<3", allow_module_level=True
+    )
 
 from agentscope.agent import Agent  # noqa: E402
 from agentscope.credential import DashScopeCredential  # noqa: E402
@@ -211,6 +213,101 @@ async def test_v2_tool_acting_hook(instrument, span_exporter):
     assert tool_span.attributes["gen_ai.tool.name"] == "lookup_weather"
 
 
+async def test_v2_tool_result_content_capture(
+    instrument_with_content,
+    span_exporter,
+):
+    agent = Agent(
+        name="tool_content_agent",
+        system_prompt="Use tools.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._acting_middlewares)
+    tool_call = SimpleNamespace(
+        name="lookup_weather",
+        id="tool-call-content",
+        input='{"city": "Hangzhou"}',
+    )
+
+    async def tool_handler(**kwargs):
+        del kwargs
+        yield ToolResponse(content=[TextBlock(text="sunny")])
+
+    results = [
+        item
+        async for item in middleware.on_acting(
+            agent,
+            {"tool_call": tool_call},
+            tool_handler,
+        )
+    ]
+
+    assert results
+    tool_span = _spans_by_operation(
+        span_exporter.get_finished_spans(), "execute_tool"
+    )[0]
+    assert tool_span.attributes["gen_ai.tool.call.result"] == (
+        '[{"content":"sunny","type":"text"}]'
+    )
+
+
+async def test_v2_react_many_tools_telemetry(instrument, span_exporter):
+    agent = Agent(
+        name="react_tool_agent",
+        system_prompt="Use tools.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._acting_middlewares)
+
+    for idx, name in enumerate(
+        [
+            "lookup_weather",
+            "search_docs",
+            "calculate_total",
+            "write_summary",
+        ],
+        start=1,
+    ):
+        tool_call = SimpleNamespace(
+            name=name,
+            id=f"tool-call-{idx}",
+            input=f'{{"idx": {idx}}}',
+        )
+
+        async def tool_handler(**kwargs):
+            del kwargs
+            yield ToolResponse(content=[TextBlock(text=f"result {idx}")])
+
+        results = [
+            item
+            async for item in middleware.on_acting(
+                agent,
+                {"tool_call": tool_call},
+                tool_handler,
+            )
+        ]
+        assert results
+
+    spans = span_exporter.get_finished_spans()
+    react_spans = _spans_by_operation(spans, "react")
+    tool_spans = _spans_by_operation(spans, "execute_tool")
+
+    assert [span.attributes["gen_ai.react.round"] for span in react_spans] == [
+        1,
+        2,
+        3,
+        4,
+    ]
+    assert {span.attributes["gen_ai.tool.name"] for span in tool_spans} == {
+        "lookup_weather",
+        "search_docs",
+        "calculate_total",
+        "write_summary",
+    }
+    react_span_ids = {span.context.span_id for span in react_spans}
+    assert {span.parent.span_id for span in tool_spans} == react_span_ids
+
+
 @pytest.mark.vcr()
 async def test_v2_agent_non_streaming_e2e(instrument, span_exporter):
     model = _make_model(stream=False)
@@ -243,7 +340,9 @@ async def test_v2_agent_streaming_e2e(instrument, span_exporter):
     ]
 
     assert events
-    assert any(event.__class__.__name__ == "TextBlockDeltaEvent" for event in events)
+    assert any(
+        event.__class__.__name__ == "TextBlockDeltaEvent" for event in events
+    )
     _assert_agent_and_llm_spans(span_exporter.get_finished_spans())
 
 
@@ -273,7 +372,9 @@ async def test_v2_agent_concurrent_e2e(instrument, span_exporter):
 
 def _make_model(stream: bool):
     return DashScopeChatModel(
-        credential=DashScopeCredential(api_key=os.environ["DASHSCOPE_API_KEY"]),
+        credential=DashScopeCredential(
+            api_key=os.environ["DASHSCOPE_API_KEY"]
+        ),
         model="qwen-plus",
         parameters=DashScopeChatModel.Parameters(
             max_tokens=16,

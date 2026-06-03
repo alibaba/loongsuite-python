@@ -15,8 +15,12 @@
 # -*- coding: utf-8 -*-
 """Test Configuration"""
 
+import asyncio
+import inspect
 import json
 import os
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 import pytest
 import yaml
@@ -26,6 +30,49 @@ import yaml
 # and caches them in module-level variables
 if "DASHSCOPE_API_KEY" not in os.environ:
     os.environ["DASHSCOPE_API_KEY"] = "test_api_key"
+
+# vcrpy's aiohttp stub still references a mixin removed by newer aiohttp
+# releases. AgentScope tests use VCR for replay and should not fail during
+# pytest marker setup just because aiohttp is importable in the environment.
+try:
+    import aiohttp.streams  # type: ignore[import-not-found]
+
+    if not hasattr(aiohttp.streams, "AsyncStreamReaderMixin"):
+        aiohttp.streams.AsyncStreamReaderMixin = object
+except ImportError:
+    pass
+
+try:
+    import aiohttp  # type: ignore[import-not-found]
+    import vcr.stubs.aiohttp_stubs as aiohttp_stubs
+
+    if (
+        "stream_writer"
+        in inspect.signature(aiohttp.ClientResponse.__init__).parameters
+    ):
+
+        class _CompatStreamWriter:
+            output_size = 0
+
+        class _CompatMockClientResponse(aiohttp_stubs.MockClientResponse):
+            def __init__(self, method, url, request_info=None):
+                aiohttp.ClientResponse.__init__(
+                    self,
+                    method=method,
+                    url=url,
+                    writer=None,
+                    continue100=None,
+                    timer=None,
+                    request_info=request_info,
+                    traces=None,
+                    loop=asyncio.get_event_loop(),
+                    session=None,
+                    stream_writer=_CompatStreamWriter(),
+                )
+
+        aiohttp_stubs.MockClientResponse = _CompatMockClientResponse
+except ImportError:
+    pass
 
 from opentelemetry.instrumentation.agentscope import AgentScopeInstrumentor
 from opentelemetry.sdk._logs import LoggerProvider
@@ -44,6 +91,19 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
+
+_V2_TEST_FILE = "test_v2_instrumentation.py"
+
+
+def _agentscope_major() -> int:
+    try:
+        installed_version = version("agentscope")
+    except PackageNotFoundError:
+        return 1
+    try:
+        return int(installed_version.split(".", 1)[0])
+    except ValueError:
+        return 1
 
 
 def pytest_configure(config: pytest.Config):
@@ -65,6 +125,19 @@ def pytest_configure(config: pytest.Config):
     else:
         # Save environment variable to global config for use in subsequent tests
         config.option.api_key = api_key
+
+
+def pytest_ignore_collect(collection_path, config):  # noqa: ARG001
+    path = Path(str(collection_path))
+    if not path.name.startswith("test_") or path.suffix != ".py":
+        return None
+
+    major = _agentscope_major()
+    if major >= 2:
+        return path.name != _V2_TEST_FILE
+    if path.name == _V2_TEST_FILE:
+        return True
+    return None
 
 
 # ==================== Exporters and Readers ====================

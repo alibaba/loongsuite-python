@@ -21,6 +21,8 @@ import json
 import logging
 import timeit
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from contextvars import ContextVar
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from agentscope.agent import Agent
@@ -34,6 +36,7 @@ from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation,
     InvokeAgentInvocation,
+    ReactStepInvocation,
 )
 from opentelemetry.util.genai.types import (
     Error,
@@ -102,6 +105,10 @@ class AgentScopeV2Middleware(MiddlewareBase):
         self, handler: Callable[[], ExtendedTelemetryHandler | None]
     ) -> None:
         self._handler = handler
+        self._react_round: ContextVar[int] = ContextVar(
+            "loongsuite_agentscope_v2_react_round",
+            default=0,
+        )
 
     async def on_reply(
         self,
@@ -117,6 +124,7 @@ class AgentScopeV2Middleware(MiddlewareBase):
 
         invocation = _create_agent_invocation(agent, input_kwargs)
         handler.start_invoke_agent(invocation)
+        round_token = self._react_round.set(0)
         first_token_seen = False
         last_msg = None
         closed = False
@@ -144,6 +152,7 @@ class AgentScopeV2Middleware(MiddlewareBase):
             handler.stop_invoke_agent(invocation)
             closed = True
         finally:
+            self._react_round.reset(round_token)
             if not closed:
                 handler.stop_invoke_agent(invocation)
 
@@ -246,6 +255,8 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return
 
         tool_call = input_kwargs.get("tool_call")
+        react_invocation = ReactStepInvocation(round=self._next_react_round())
+        handler.start_react_step(react_invocation, context=get_current())
         invocation = ExecuteToolInvocation(
             tool_name=getattr(tool_call, "name", "unknown_tool"),
             tool_call_id=getattr(tool_call, "id", None),
@@ -254,28 +265,46 @@ class AgentScopeV2Middleware(MiddlewareBase):
         )
         handler.start_execute_tool(invocation)
         last_item = None
-        closed = False
+        tool_closed = False
+        react_closed = False
         try:
             async for item in next_handler(**input_kwargs):
                 last_item = item
                 yield item
         except BaseException as exc:
+            error = Error(
+                message=str(exc) or type(exc).__name__, type=type(exc)
+            )
             handler.fail_execute_tool(
                 invocation,
-                Error(message=str(exc) or type(exc).__name__, type=type(exc)),
+                error,
             )
-            closed = True
+            tool_closed = True
+            handler.fail_react_step(react_invocation, error)
+            react_closed = True
             raise
         else:
             if isinstance(last_item, ToolResponse):
-                invocation.tool_call_result = last_item.content
+                invocation.tool_call_result = _jsonable(
+                    _blocks_to_parts(last_item.content)
+                )
             elif last_item is not None:
                 invocation.tool_call_result = str(last_item)
             handler.stop_execute_tool(invocation)
-            closed = True
+            tool_closed = True
+            react_invocation.finish_reason = "tool_calls"
+            handler.stop_react_step(react_invocation)
+            react_closed = True
         finally:
-            if not closed:
+            if not tool_closed:
                 handler.stop_execute_tool(invocation)
+            if not react_closed:
+                handler.stop_react_step(react_invocation)
+
+    def _next_react_round(self) -> int:
+        current = self._react_round.get() + 1
+        self._react_round.set(current)
+        return current
 
 
 def _create_agent_invocation(
@@ -290,10 +319,14 @@ def _create_agent_invocation(
         provider=provider,
         agent_name=getattr(agent, "name", "unknown_agent"),
         agent_id=getattr(getattr(agent, "state", None), "session_id", None),
-        conversation_id=getattr(getattr(agent, "state", None), "session_id", None),
+        conversation_id=getattr(
+            getattr(agent, "state", None), "session_id", None
+        ),
         request_model=request_model,
         input_messages=_messages_to_inputs(inputs),
-        system_instruction=[Text(content=getattr(agent, "_system_prompt", ""))],
+        system_instruction=[
+            Text(content=getattr(agent, "_system_prompt", ""))
+        ],
     )
 
 
@@ -335,7 +368,9 @@ def _messages_to_inputs(value: Any) -> list[InputMessage]:
     if isinstance(value, Msg):
         return [_message_to_input(value)]
     if isinstance(value, list):
-        return [_message_to_input(item) for item in value if isinstance(item, Msg)]
+        return [
+            _message_to_input(item) for item in value if isinstance(item, Msg)
+        ]
     return []
 
 
@@ -353,7 +388,10 @@ def _message_to_output(msg: Msg) -> OutputMessage:
 
 def _chat_response_to_output(response: ChatResponse) -> OutputMessage:
     finish_reason = "stop"
-    if any(getattr(block, "type", None) == "tool_call" for block in response.content):
+    if any(
+        getattr(block, "type", None) == "tool_call"
+        for block in response.content
+    ):
         finish_reason = "tool_calls"
     return OutputMessage(
         role="assistant",
@@ -434,7 +472,9 @@ def _middleware_arg_position() -> int | None:
         return None
 
 
-def _is_streaming_model(model: ChatModelBase, input_kwargs: dict[str, Any]) -> bool:
+def _is_streaming_model(
+    model: ChatModelBase, input_kwargs: dict[str, Any]
+) -> bool:
     if "stream" in input_kwargs:
         return bool(input_kwargs["stream"])
     return bool(getattr(model, "stream", False))
@@ -447,6 +487,16 @@ def _loads_json(value: Any) -> Any:
         return json.loads(value)
     except ValueError:
         return value
+
+
+def _jsonable(value: Any) -> Any:
+    if is_dataclass(value):
+        return _jsonable(asdict(value))
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    return value
 
 
 def _set_if_present(
