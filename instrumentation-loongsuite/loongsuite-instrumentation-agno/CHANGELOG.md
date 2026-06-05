@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.6.0 (2026-06-03)
+
 ### Removed
 
 - Drop Agno 1.x support and require Agno 2.x public `Agent.run`/`Agent.arun`
