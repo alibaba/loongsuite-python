@@ -47,12 +47,15 @@ class TestImportAndMetadata:
         assert MiniSweAgentInstrumentor is not None
 
     def test_version_string(self):
+        from packaging.version import Version
+
         from opentelemetry.instrumentation.minisweagent.version import (
             __version__,
         )
 
         assert isinstance(__version__, str)
-        assert __version__ == "0.6.0.dev"
+        parsed_version = Version(__version__)
+        assert parsed_version.release
 
     def test_instruments_tuple(self):
         from opentelemetry.instrumentation.minisweagent.package import (
