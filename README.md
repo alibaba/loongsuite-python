@@ -537,7 +537,7 @@ our [DingTalk group](https://qr.dingtalk.com/action/joingroup?code=v1,k1,mexukXI
 
 | LoongCollector SIG | LoongSuite Python SIG |
 |----|----|
-| <img src="docs/_assets/img/loongcollector-sig-dingtalk.jpg" height="150"> | <img src="docs/_assets/img/loongsuite-python-sig-dingtalk.jpg" height="150"> |
+| <img src="docs/_assets/img/loongcollector-sig-dingtalk.png" height="150"> | <img src="docs/_assets/img/loongsuite-python-sig-dingtalk.jpg" height="150"> |
 
 | LoongCollector Go SIG | LoongSuite Java SIG |
 |----|----|
