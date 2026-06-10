@@ -424,6 +424,9 @@ loongsuite-instrument \
 
   ```bash
   export LOONGSUITE_PYTHON_SITE_BOOTSTRAP=True
+  # 交互式 CLI / 应用可选：不要把通用成功提示写入 stdout。
+  export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=False
+  export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE=/tmp/loongsuite-site-bootstrap-status.json
   ```
 
 **步骤 4 — 创建 `~/.loongsuite/bootstrap-config.json`**
@@ -440,7 +443,7 @@ loongsuite-instrument \
   }
   ```
 
-  然后执行 `python demo.py`。如需使用 **console** exporter、其他后端、改用 **`loongsuite-instrument`**（而非直接 `python`），或查看完整优先级/边界场景，请阅读 [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md)。
+  然后执行 `python demo.py`。如需使用 **console** exporter、其他后端、改用 **`loongsuite-instrument`**（而非直接 `python`）、控制成功提示输出，或查看完整优先级/边界场景，请阅读 [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md)。
 
 > **Beta：**Site-bootstrap 会影响其启用环境中的所有 Python 进程，生产环境使用前请先阅读包 README。
 

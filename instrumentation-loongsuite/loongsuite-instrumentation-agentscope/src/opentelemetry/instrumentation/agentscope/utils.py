@@ -35,8 +35,13 @@ from agentscope.message import Msg
 from agentscope.model import ChatModelBase, ChatResponse
 from pydantic import BaseModel
 
+from opentelemetry import baggage
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
+)
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
+    GEN_AI_SESSION_ID,
+    GEN_AI_USER_ID,
 )
 from opentelemetry.util.genai.extended_types import (
     EmbeddingInvocation,
@@ -85,6 +90,43 @@ _BASE_URL_PROVIDER_MAP = [
     ),
     ("dashscope.aliyuncs.com", AgentScopeGenAiProviderName.DASHSCOPE.value),
 ]
+
+
+def _current_baggage_value(key: str) -> str | None:
+    try:
+        value = baggage.get_baggage(key)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def entry_baggage_identity_attributes() -> dict[str, str]:
+    """Return entry-level identity from current OpenTelemetry Baggage.
+
+    QwenPaw opens an Entry span before AgentScope runs and writes
+    ``gen_ai.session.id`` / ``gen_ai.user.id`` into Baggage. AgentScope has
+    its own ``run_id``; when both instrumentations are active, entry baggage is
+    the request-level identity and should color downstream spans.
+    """
+    attributes: dict[str, str] = {}
+    session_id = _current_baggage_value(GEN_AI_SESSION_ID)
+    user_id = _current_baggage_value(GEN_AI_USER_ID)
+    if session_id:
+        attributes[GEN_AI_SESSION_ID] = session_id
+    if user_id:
+        attributes[GEN_AI_USER_ID] = user_id
+    return attributes
+
+
+def apply_entry_baggage_identity(invocation: Any) -> str | None:
+    """Copy entry-level identity baggage onto a GenAI invocation."""
+    attributes = entry_baggage_identity_attributes()
+    for key, value in attributes.items():
+        invocation.attributes.setdefault(key, value)
+    return attributes.get(GEN_AI_SESSION_ID)
 
 
 def get_provider_name(chat_model: ChatModelBase) -> str:
@@ -318,6 +360,9 @@ def create_llm_invocation(
         provider=provider_name,
         input_messages=input_messages,
     )
+    entry_session_id = apply_entry_baggage_identity(invocation)
+    if entry_session_id and invocation.conversation_id is None:
+        invocation.conversation_id = entry_session_id
 
     # Set optional request parameters if present
     if call_kwargs.get("max_tokens"):
@@ -353,6 +398,7 @@ def create_embedding_invocation(
         request_model=request_model,
         provider=provider_name,
     )
+    apply_entry_baggage_identity(invocation)
 
     # Set encoding formats if present
     if call_kwargs.get("encoding_formats"):
@@ -392,16 +438,18 @@ def create_agent_invocation(
         except Exception as e:
             logger.debug(f"Error converting agent input messages: {e}")
 
+    entry_session_id = _current_baggage_value(GEN_AI_SESSION_ID)
     invocation = InvokeAgentInvocation(
         provider=provider_name,
         agent_name=getattr(reply_instance, "name", "unknown_agent"),
         agent_id=getattr(reply_instance, "id", "unknown"),
         agent_description=inspect.getdoc(reply_instance.__class__)
         or "No description available",
-        conversation_id=_config.run_id,
+        conversation_id=entry_session_id or _config.run_id,
         request_model=request_model,
         input_messages=input_messages,
     )
+    apply_entry_baggage_identity(invocation)
 
     # Set system instruction if available
     if hasattr(reply_instance, "sys_prompt") and reply_instance.sys_prompt:

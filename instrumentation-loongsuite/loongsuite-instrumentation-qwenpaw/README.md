@@ -56,6 +56,18 @@ put `"LOONGSUITE_PYTHON_SITE_BOOTSTRAP": "true"` in `bootstrap-config.json`
 (see below); environment variables take **precedence** over the file for any key
 that is already set in the process.
 
+QwenPaw is an interactive app, so stdout is user-visible. If you do not want the
+generic Site-bootstrap success line in QwenPaw stdout, also set:
+
+```bash
+export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=False
+export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE=/tmp/qwenpaw-loongsuite-bootstrap.json
+```
+
+The status file is an optional local confirmation that the bootstrap hook ran;
+the real access check is still whether the configured backend receives QwenPaw
+entry / AgentScope child spans after a user turn.
+
 **2.4 — Configure export via `~/.loongsuite/bootstrap-config.json`**
 
 Create the directory and file if needed. The JSON root must be an object; string
@@ -84,8 +96,9 @@ Example for quick local debugging with **console** exporters:
 }
 ```
 
-After a successful run you should see a line on stdout such as:
-`loongsuite-site-bootstrap: started successfully (OpenTelemetry auto-instrumentation initialized).`
+By default, a successful run prints a Site-bootstrap success line to stdout.
+When `LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=False`, use the optional
+status file above or verify the generated trace in your backend instead.
 Do not start Python with `python -S` (that disables `site` and `.pth` processing).
 
 > **Beta / scope:** With the hook enabled, **every** Python process in that
@@ -137,3 +150,7 @@ call inside the agent.
 Calls to models, tools, and other AgentScope primitives are **not** duplicated
 here: use AgentScope (and your existing model client) instrumentations alongside
 this package so they appear as child spans under this entry when configured.
+When AgentScope spans run under a QwenPaw Entry span, the QwenPaw
+`gen_ai.session.id` / `gen_ai.user.id` values are propagated through
+OpenTelemetry baggage so downstream AgentScope LLM, agent, embedding, and tool
+spans carry the same request identity.

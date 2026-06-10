@@ -34,6 +34,11 @@ from opentelemetry.util.genai.extended_types import ExecuteToolInvocation
 from opentelemetry.util.genai.span_utils import _apply_error_attributes
 from opentelemetry.util.genai.types import Error
 
+from .utils import (
+    apply_entry_baggage_identity,
+    entry_baggage_identity_attributes,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -407,6 +412,7 @@ async def wrap_tool_call(wrapped, instance, args, kwargs, handler):
         tool_description=tool_description,
         tool_call_arguments=tool_args,
     )
+    apply_entry_baggage_identity(invocation)
 
     # --- Skill attributes ---
     #
@@ -479,6 +485,7 @@ async def wrap_formatter_format(wrapped, instance, args, kwargs, tracer=None):
         try:
             # Record only basic information
             span.set_attribute("gen_ai.operation.name", "format")
+            span.set_attributes(entry_baggage_identity_attributes())
 
             # Execute the wrapped async call
             result = await wrapped(*args, **kwargs)

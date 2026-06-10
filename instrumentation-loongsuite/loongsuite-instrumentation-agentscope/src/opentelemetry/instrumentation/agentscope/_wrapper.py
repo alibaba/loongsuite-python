@@ -70,6 +70,7 @@ from opentelemetry.util.genai.extended_types import ReactStepInvocation
 from opentelemetry.util.genai.types import Error, LLMInvocation
 
 from .utils import (
+    apply_entry_baggage_identity,
     convert_agent_response_to_output_messages,
     convert_chatresponse_to_output_messages,
     create_agent_invocation,
@@ -182,6 +183,7 @@ def _make_pre_reasoning_hook(
 
         state.react_round += 1
         inv = ReactStepInvocation(round=state.react_round)
+        apply_entry_baggage_identity(inv)
         handler.start_react_step(inv, context=state.original_context)
         state.active_step = inv
         state.pending_acting_count = 0

@@ -416,6 +416,9 @@ Run **without** changing codes or bootstrap commands: a **`.pth` hook** loads Lo
 
   ```bash
   export LOONGSUITE_PYTHON_SITE_BOOTSTRAP=True
+  # Optional for interactive CLIs/apps: suppress the generic success line on stdout.
+  export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=False
+  export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE=/tmp/loongsuite-site-bootstrap-status.json
   ```
 
 **Step 4 — Create `~/.loongsuite/bootstrap-config.json`** with the OpenTelemetry environments keys you need.
@@ -430,7 +433,7 @@ Run **without** changing codes or bootstrap commands: a **`.pth` hook** loads Lo
   }
   ```
 
-  Then run `python demo.py`. For **console** exporters, other backends, using **`loongsuite-instrument`** instead of plain `python`, or full precedence / edge cases, see [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md).
+  Then run `python demo.py`. For **console** exporters, other backends, using **`loongsuite-instrument`** instead of plain `python`, success logging controls, or full precedence / edge cases, see [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md).
 
 > **Beta:** Site-bootstrap affects every Python process in the environment where it is enabled; read the package README before using it in production.
 
