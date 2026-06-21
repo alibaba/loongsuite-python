@@ -113,7 +113,8 @@ class DefaultAgentRunWrapper:
             han.start_entry(entry_inv, context=context_api.get_current())
 
         inv = InvokeAgentInvocation(
-            provider="minisweagent", agent_name=agent_name
+            provider="minisweagent", agent_name=agent_name,
+            agent_id=agent_name,
         )
         inv.request_model = _request_model_from_agent(instance)
         inv.attributes.setdefault("gen_ai.framework", "minisweagent")

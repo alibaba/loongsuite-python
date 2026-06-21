@@ -613,6 +613,7 @@ def _create_agent_invocation(
     invocation = InvokeAgentInvocation(
         provider=provider_name,
         agent_name=agent_name,
+        agent_id=agent_name,
         agent_description=agent_description,
         request_model=request_model,
         input_messages=input_messages,
@@ -669,6 +670,7 @@ def _create_tool_invocation(
 
     return ExecuteToolInvocation(
         tool_name=tool_name,
+        tool_type="function",
         tool_call_arguments=parsed_args,
         tool_description=tool_description,
     )

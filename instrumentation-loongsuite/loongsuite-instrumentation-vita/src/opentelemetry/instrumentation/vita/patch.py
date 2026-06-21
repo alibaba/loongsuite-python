@@ -300,6 +300,7 @@ def wrap_generate_next_message(
         invocation = InvokeAgentInvocation(
             provider="vitabench",
             agent_name=agent_name,
+            agent_id=agent_name,
             request_model=model,
         )
 
@@ -398,6 +399,11 @@ def wrap_generate(
             # response_model_name
             invocation.response_model_name = model
 
+            # response_id
+            resp_id = getattr(result, "id", None) or getattr(result, "response_id", None)
+            if resp_id:
+                invocation.response_id = str(resp_id)
+
             # finish_reasons
             if getattr(result, "tool_calls", None):
                 invocation.finish_reasons = ["tool_calls"]
@@ -433,6 +439,7 @@ def wrap_get_response(
         tool_name=tool_name,
         tool_call_id=tool_call_id,
         provider="vitabench",
+        tool_type="function",
     )
 
     # tool_call_arguments

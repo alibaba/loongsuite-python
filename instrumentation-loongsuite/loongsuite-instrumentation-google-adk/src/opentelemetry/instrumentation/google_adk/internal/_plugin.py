@@ -119,6 +119,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             invocation = InvokeAgentInvocation(
                 provider="google_adk",
                 agent_name=invocation_context.app_name,
+                agent_id=invocation_context.app_name,
             )
 
             # Set conversation_id if available
@@ -275,6 +276,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             invocation = InvokeAgentInvocation(
                 provider="google_adk",
                 agent_name=agent.name,
+                agent_id=agent.name,
             )
 
             # Set agent attributes
@@ -508,6 +510,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             # Create invocation object
             invocation = ExecuteToolInvocation(
                 tool_name=tool.name,
+                tool_type="function",
                 provider="google_adk",
             )
 
