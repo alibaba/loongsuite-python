@@ -407,6 +407,7 @@ class LoongsuiteTracer(BaseTracer):
         invocation = InvokeAgentInvocation(
             provider="langchain",
             agent_name=agent_name,
+            agent_id=agent_name or None,
             input_messages=input_messages,
         )
         self._handler.start_invoke_agent(invocation, context=parent_ctx)
@@ -571,6 +572,7 @@ class LoongsuiteTracer(BaseTracer):
                 tool_name=run.name or "unknown_tool",
                 tool_call_arguments=input_str,
                 tool_call_id=tool_call_id,
+                tool_type="function",
             )
             self._handler.start_execute_tool(invocation, context=parent_ctx)
             rd = _RunData(

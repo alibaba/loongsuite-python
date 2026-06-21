@@ -469,6 +469,8 @@ def _create_invocation_from_generation(
 
     invocation = LLMInvocation(request_model=request_model)
     invocation.provider = "dashscope"
+    invocation.server_address = "dashscope.aliyuncs.com"
+    invocation.server_port = 443
     invocation.input_messages = _extract_input_messages(kwargs)
 
     # Extract tool definitions and convert to FunctionToolDefinition objects
