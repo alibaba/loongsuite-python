@@ -40,9 +40,10 @@ class LoongSuiteConfigurator(_OTelSDKConfigurator):
         resource_attributes = dict(
             kwargs.pop("resource_attributes", None) or {}
         )
-        resource_attributes.update(
-            LoongSuiteResourceDetector().detect().attributes
-        )
+        # Use setdefault so user-provided values take precedence over detector.
+        detected = LoongSuiteResourceDetector().detect().attributes
+        for k, v in detected.items():
+            resource_attributes.setdefault(k, v)
         super()._configure(resource_attributes=resource_attributes, **kwargs)
 
 

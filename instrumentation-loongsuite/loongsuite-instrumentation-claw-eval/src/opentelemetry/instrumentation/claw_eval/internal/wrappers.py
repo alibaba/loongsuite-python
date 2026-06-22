@@ -79,6 +79,8 @@ def _infer_provider_name(provider: Any) -> str:
         return "anthropic"
     if "dashscope" in cls_name:
         return "dashscope"
+    if "gemini" in cls_name or "google" in cls_name:
+        return "google"
     # Infer from model_id
     model_id = str(getattr(provider, "model_id", "") or "")
     if model_id.startswith(("gpt-", "o1-", "o3-", "chatgpt-")):
@@ -87,7 +89,9 @@ def _infer_provider_name(provider: Any) -> str:
         return "anthropic"
     if model_id.startswith(("qwen",)):
         return "dashscope"
-    return "openai"
+    if model_id.startswith(("gemini",)):
+        return "google"
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -544,8 +548,7 @@ class RunTaskWrapper:
 
             # Set gen_ai.provider.name (Required attribute)
             _provider_name = _infer_provider_name(provider)
-            if _provider_name:
-                span.set_attribute(GenAI.GEN_AI_PROVIDER_NAME, _provider_name)
+            span.set_attribute(GenAI.GEN_AI_PROVIDER_NAME, _provider_name)
 
             model_id = ""
             if provider is not None:

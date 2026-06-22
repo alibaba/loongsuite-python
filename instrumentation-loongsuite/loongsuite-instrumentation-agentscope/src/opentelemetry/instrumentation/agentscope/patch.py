@@ -401,6 +401,8 @@ async def wrap_tool_call(wrapped, instance, args, kwargs, handler):
     matched_skill = _match_skill_for_tool(instance, tool_args)
 
     # Create invocation object with all tool data
+    # NOTE: tool_type is set to "function" as agentscope currently only
+    # supports function-type tools. Update when other types are supported.
     invocation = ExecuteToolInvocation(
         tool_name=tool_name,
         tool_type="function",
