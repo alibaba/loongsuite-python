@@ -59,10 +59,11 @@ def instrumented(fake_cognee_v1_api, monkeypatch):
 @pytest.mark.asyncio
 async def test_entry_add_creates_entry_span(instrumented):
     instrumentor, exporter, provider = instrumented
-    # We need to call the wrapped cognee.add via the instrumented module.
-    import cognee.api.v1.add as add_mod
+    # The instrumentor wraps the top-level ``cognee.add`` attribute (v1.2.1
+    # re-exports the V1 API functions at the package root).
+    import cognee as cognee_root
 
-    result = await add_mod.add("hello world")
+    result = await cognee_root.add("hello world")
     assert result == {"added": "hello world"}
 
     spans = exporter.get_finished_spans()
@@ -78,11 +79,9 @@ async def test_entry_add_creates_entry_span(instrumented):
 @pytest.mark.asyncio
 async def test_entry_search_propagates_session_id(instrumented):
     instrumentor, exporter, _ = instrumented
-    import cognee.api.v1.search as search_mod
+    import cognee as cognee_root
 
-    await search_mod.search(
-        "what is cognee", session_id="sess-123"
-    )
+    await cognee_root.search("what is cognee", session_id="sess-123")
 
     spans = exporter.get_finished_spans()
     entry_spans = [

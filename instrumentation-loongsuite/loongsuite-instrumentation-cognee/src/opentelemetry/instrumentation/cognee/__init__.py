@@ -56,7 +56,6 @@ from opentelemetry.instrumentation.cognee.internal._llm_compat_wrapper import (
 )
 from opentelemetry.instrumentation.cognee.internal._span_processor import (
     CogneeAttributeSpanProcessor,
-    install_attribute_migration_patch,
 )
 from opentelemetry.instrumentation.cognee.internal._step_wrapper import (
     install_step_wrapper,
@@ -142,16 +141,15 @@ class CogneeInstrumentor(BaseInstrumentor):
         _enable_cognee_tracing(tracer_provider)
 
         # Step 2: attach SpanProcessor for cognee.* span normalization.
+        # The processor rewrites span name/kind/operation in on_start and
+        # wraps span.set_attribute so cognee.* attributes set during the span
+        # body are mirrored to gen_ai.* on the same span.
         self._cognee_processor = CogneeAttributeSpanProcessor()
         if hasattr(tracer_provider, "add_span_processor"):
             try:
                 tracer_provider.add_span_processor(self._cognee_processor)
             except Exception as e:
                 logger.debug("add_span_processor(CogneeAttributeSpanProcessor) failed: %s", e)
-
-        # Step 2b: wrap cognee.modules.observability.new_span so cognee.* attrs
-        # set during the span body are mirrored to gen_ai.* attrs on the same span.
-        install_attribute_migration_patch()
 
         # Step 3: install wrappers (each in its own try/except — single failure
         # does not break the rest).

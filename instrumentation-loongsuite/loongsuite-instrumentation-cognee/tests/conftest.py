@@ -128,7 +128,15 @@ def _ensure_fake_module(dotted_path: str, attrs: dict) -> types.ModuleType:
 
 @pytest.fixture
 def fake_cognee_v1_api():
-    """Install fake ``cognee.api.v1.{add,cognify,search,recall,remember}`` modules."""
+    """Install fake ``cognee.{add,cognify,search,recall,remember}`` entry points.
+
+    The instrumentor wraps the top-level ``cognee`` package attributes (not the
+    deep ``cognee.api.v1.add`` module path) because in v1.2.1
+    ``cognee.api.v1.remember`` is re-exported as a function into the v1
+    package namespace, which makes the dotted-path wrap ambiguous. We still
+    install the deep module hierarchy so callers that import it directly
+    keep working.
+    """
     async def add(data, *args, **kwargs):
         return {"added": data}
 
@@ -144,7 +152,7 @@ def fake_cognee_v1_api():
     async def remember(data, *args, **kwargs):
         return {"remembered": data}
 
-    _ensure_fake_module("cognee", {})
+    cognee_root = _ensure_fake_module("cognee", {})
     _ensure_fake_module("cognee.api", {})
     _ensure_fake_module("cognee.api.v1", {})
     _ensure_fake_module("cognee.api.v1.add", {"add": add})
@@ -152,6 +160,12 @@ def fake_cognee_v1_api():
     _ensure_fake_module("cognee.api.v1.search", {"search": search})
     _ensure_fake_module("cognee.api.v1.recall", {"recall": recall})
     _ensure_fake_module("cognee.api.v1.remember", {"remember": remember})
+    # Top-level re-exports — this is what the instrumentor wraps.
+    cognee_root.add = add
+    cognee_root.cognify = cognify
+    cognee_root.search = search
+    cognee_root.recall = recall
+    cognee_root.remember = remember
     yield
 
 

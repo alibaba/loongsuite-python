@@ -9,11 +9,16 @@ their name and inject ``gen_ai.span.kind`` / ``gen_ai.operation.name`` in
 Cognee-specific attributes (``cognee.search.query``, ``cognee.pipeline.task_name`` …)
 are set by Cognee's own code during the span body, after ``on_start`` runs.
 Because the SDK Span becomes read-only once ``end()`` is called, we cannot
-migrate them in ``on_end``. Instead, ``install_attribute_migration_patch``
-wraps ``cognee.modules.observability.new_span`` so the span returned to
-Cognee's caller has its ``set_attribute`` method intercepted — when Cognee
-sets a ``cognee.*`` key, we ALSO set the corresponding ``gen_ai.*`` key on
-the same span.
+migrate them in ``on_end``. Instead, ``on_start`` wraps the span's
+``set_attribute`` method so that when Cognee calls
+``span.set_attribute("cognee.search.query", value)`` we ALSO set the matching
+``gen_ai.*`` key on the same span. The wrapping is idempotent.
+
+This replaces the previous ``install_attribute_migration_patch`` which patched
+``cognee.modules.observability.new_span`` — that patch broke Cognee's
+exception path (``CollectionNotFoundError`` fallback was swallowed, triggering
+``RuntimeError: generator didn't stop after throw()``) and never actually ran
+because cognee re-imports ``new_span`` lazily in some code paths.
 """
 
 from __future__ import annotations
@@ -52,8 +57,8 @@ _PREFIX_RULES: tuple[tuple[str, str, str, Optional[str]], ...] = (
 )
 
 # Cognee attribute -> gen-ai attribute migration table.
-# Applied by the set_attribute interceptor installed via
-# ``install_attribute_migration_patch``.
+# Applied by the ``set_attribute`` interceptor installed on each Cognee span
+# in ``CogneeAttributeSpanProcessor.on_start``.
 _MIGRATION_MAP: dict[str, str] = {
     COGNEE_SEARCH_QUERY: "gen_ai.retrieval.query.text",
     COGNEE_PIPELINE_TASK_NAME: "gen_ai.task.name",
@@ -77,14 +82,23 @@ class CogneeAttributeSpanProcessor(SpanProcessor):
     Uses ``on_start`` because the SDK Span becomes immutable after ``end()``.
     The name is known at start time (passed to ``start_span``), so prefix-based
     rewriting works.
+
+    In ``on_start`` we also wrap the span's ``set_attribute`` method so that
+    when Cognee code later calls ``span.set_attribute("cognee.search.query", v)``
+    we mirror the write to ``gen_ai.retrieval.query.text`` on the same span.
+    This is the only reliable hook point because the SDK Span is still mutable
+    at ``on_start`` and the wrap is visible to all subsequent ``set_attribute``
+    calls in the span body.
     """
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         try:
             name = span.name or ""
+            matched = False
             for prefix, kind, op, new_name in _PREFIX_RULES:
                 if not name.startswith(prefix):
                     continue
+                matched = True
                 try:
                     span.set_attribute("gen_ai.span.kind", kind)
                     span.set_attribute("gen_ai.operation.name", op)
@@ -96,16 +110,30 @@ class CogneeAttributeSpanProcessor(SpanProcessor):
                     except Exception as e:  # pragma: no cover - defensive
                         logger.debug("update_name failed: %s", e)
                 elif prefix == "cognee.pipeline.task.":
+                    task_name = name[len(prefix) :]
                     try:
-                        span.update_name(f"task {name[len(prefix):]}")
+                        span.update_name(f"task {task_name}")
+                        # Pre-inject gen_ai.task.name from span name so the
+                        # attribute is present even if Cognee never sets
+                        # cognee.pipeline.task_name (e.g. for early-exit paths).
+                        span.set_attribute("gen_ai.task.name", task_name)
                     except Exception as e:  # pragma: no cover - defensive
                         logger.debug("update_name(task) failed: %s", e)
                 elif prefix == "cognee.retrieval.":
                     try:
-                        span.update_name(f"retrieval {name[len('cognee.retrieval.') :]}")
+                        span.update_name(
+                            f"retrieval {name[len('cognee.retrieval.') :]}"
+                        )
                     except Exception as e:  # pragma: no cover - defensive
                         logger.debug("update_name(retrieval) failed: %s", e)
-                return
+                break
+            # Wrap set_attribute for any Cognee-native span so cognee.* attrs
+            # set during the span body are mirrored to gen_ai.* on the same
+            # span. We do this regardless of whether the prefix matched,
+            # because Cognee may create spans whose names we don't recognize
+            # yet still set cognee.* attributes worth migrating.
+            if matched or name.startswith("cognee."):
+                _wrap_span_set_attribute(span)
         except Exception as e:  # pragma: no cover - defensive
             logger.debug("CogneeAttributeSpanProcessor.on_start failed: %s", e)
 
@@ -118,55 +146,6 @@ class CogneeAttributeSpanProcessor(SpanProcessor):
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
         return True
-
-
-def install_attribute_migration_patch() -> None:
-    """Patch ``cognee.modules.observability.new_span`` to migrate cognee.* attrs.
-
-    When Cognee calls ``span.set_attribute("cognee.search.query", value)``, we
-    also call ``span.set_attribute("gen_ai.retrieval.query.text", value)`` on
-    the same span. This runs before ``end()`` so the SDK Span is still mutable.
-    """
-    try:
-        import cognee.modules.observability as cognee_obs  # type: ignore
-    except ImportError:
-        logger.debug(
-            "cognee.modules.observability not importable — attribute migration patch skipped"
-        )
-        return
-
-    original = getattr(cognee_obs, "new_span", None)
-    if original is None or getattr(original, "_cognee_genai_patched", False):
-        return
-
-    try:
-        import contextlib
-
-        @contextlib.contextmanager
-        def _patched_new_span(name: str):
-            ctx = original(name) if original else _noop_ctx()
-            try:
-                with ctx as span:
-                    if span is not None and not isinstance(span, _NullSpanType):
-                        _wrap_span_set_attribute(span)
-                    yield span
-            except Exception:
-                # Fall back to yielding a null span if the original blows up.
-                yield cognee_obs._NullSpan()
-
-        def _noop_ctx():
-            import contextlib
-
-            @contextlib.contextmanager
-            def _cm():
-                yield None
-
-            return _cm()
-
-        _patched_new_span._cognee_genai_patched = True  # type: ignore[attr-defined]
-        cognee_obs.new_span = _patched_new_span
-    except Exception as e:
-        logger.debug("install_attribute_migration_patch failed: %s", e)
 
 
 def _wrap_span_set_attribute(span: Any) -> None:
@@ -199,14 +178,3 @@ def _wrap_span_set_attribute(span: Any) -> None:
         span._cognee_genai_set_attr_wrapped = True  # type: ignore[attr-defined]
     except (AttributeError, TypeError) as e:
         logger.debug("could not wrap span.set_attribute: %s", e)
-
-
-# Late import to avoid hard dependency on cognee at module load.
-try:
-    from cognee.modules.observability import (
-        _NullSpan as _NullSpanType,  # type: ignore
-    )
-except ImportError:  # pragma: no cover - cognee not installed
-
-    class _NullSpanType:  # type: ignore[no-redef]
-        pass

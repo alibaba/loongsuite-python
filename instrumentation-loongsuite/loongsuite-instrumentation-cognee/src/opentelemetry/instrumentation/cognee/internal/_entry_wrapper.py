@@ -27,12 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 # module_path, attr_name, operation_name (used for input extraction)
+# Cognee v1.2.1 re-exports ``add``/``cognify``/``search``/``recall``/``remember``
+# as top-level attributes of the ``cognee`` package (see ``cognee/__init__.py``).
+# ``cognee.api.v1.remember`` is also a function (re-exported into the v1 package
+# namespace by ``cognee/api/v1/__init__.py``), so wrapping at the v1 module
+# path would try to import a function as a module. Wrap at the top-level
+# ``cognee`` package instead — this is the canonical user-facing entry point.
 _ENTRY_TARGETS: tuple[tuple[str, str, str], ...] = (
-    ("cognee.api.v1.add", "add", "add"),
-    ("cognee.api.v1.cognify", "cognify", "cognify"),
-    ("cognee.api.v1.search", "search", "search"),
-    ("cognee.api.v1.recall", "recall", "recall"),
-    ("cognee.api.v1.remember", "remember", "remember"),
+    ("cognee", "add", "add"),
+    ("cognee", "cognify", "cognify"),
+    ("cognee", "search", "search"),
+    ("cognee", "recall", "recall"),
+    ("cognee", "remember", "remember"),
 )
 
 
