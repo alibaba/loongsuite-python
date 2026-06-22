@@ -38,6 +38,27 @@ so that `cognee.*` spans are emitted on the same TracerProvider the probe set up
 If Cognee's OpenTelemetry extras are not installed, the probe logs a warning but
 keeps its own ENTRY/AGENT/TOOL/STEP/EMBEDDING spans alive.
 
+## LLM Async-Compat Wrap (Cognee v1.2.1 + instructor 1.14.5)
+
+Cognee v1.2.1 builds its LLM client via
+`instructor.from_litellm(litellm.acompletion, mode=...)`. When
+`loongsuite-instrumentation-litellm` is loaded (which this package mandates),
+it patches `litellm.acompletion` to an instance of
+`AsyncCompletionWrapper` — a callable class with an `async def __call__`.
+`inspect.iscoroutinefunction(wrapper_instance)` returns `False` for such
+instances, so instructor 1.14.5's `is_async` picks the sync retry path
+(`new_create_sync`), calls `litellm.acompletion(...)` *without* `await`,
+and every LLM call raises
+`instructor.core.exceptions.InstructorRetryException: 'coroutine' object has no attribute 'choices'`.
+
+`CogneeInstrumentor._instrument` installs an additional wrap on
+`GenericAPIAdapter.__init__` that rebuilds `self.aclient` as an explicit
+`AsyncInstructor` (routing `litellm.acompletion` through a real `async def`
+so instructor picks `new_create_async`). This is a pure runtime compat
+fix — no span / metric / attribute is added or renamed. See
+`src/opentelemetry/instrumentation/cognee/internal/_llm_compat_wrapper.py`
+for the full root-cause analysis.
+
 ## Configuration
 
 | Environment variable                                          | Default | Effect                                                                 |

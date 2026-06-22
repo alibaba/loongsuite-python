@@ -50,6 +50,10 @@ from opentelemetry.instrumentation.cognee.internal._entry_wrapper import (
     install_entry_wrappers,
     uninstall_entry_wrappers,
 )
+from opentelemetry.instrumentation.cognee.internal._llm_compat_wrapper import (
+    install_llm_compat_wrapper,
+    uninstall_llm_compat_wrapper,
+)
 from opentelemetry.instrumentation.cognee.internal._span_processor import (
     CogneeAttributeSpanProcessor,
     install_attribute_migration_patch,
@@ -157,6 +161,17 @@ class CogneeInstrumentor(BaseInstrumentor):
         install_tool_wrapper(telemetry_handler)
         install_embedding_wrappers(telemetry_handler)
 
+        # Step 3b: GenericAPIAdapter async-compat wrap — see
+        # internal._llm_compat_wrapper for the root-cause analysis. Without
+        # this, Cognee's `instructor.from_litellm(litellm.acompletion, ...)`
+        # picks the sync retry path (because LiteLLMInstrumentor replaces
+        # `litellm.acompletion` with a class instance that
+        # `inspect.iscoroutinefunction` does not recognize as async), and
+        # every LLM call raises InstructorRetryException. The wrap rebuilds
+        # `self.aclient` as an explicit AsyncInstructor — purely a runtime
+        # compat fix, no telemetry impact.
+        install_llm_compat_wrapper()
+
         # Step 4: probe LiteLLM instrumentor availability — LLM spans depend on it.
         try:
             from opentelemetry.instrumentation.litellm import (
@@ -176,6 +191,7 @@ class CogneeInstrumentor(BaseInstrumentor):
         uninstall_step_wrapper()
         uninstall_tool_wrapper()
         uninstall_embedding_wrappers()
+        uninstall_llm_compat_wrapper()
         # Note: we cannot detach SpanProcessor from a TracerProvider that does
         # not expose a removal API. The processor becomes a no-op once
         # _is_instrumented flips back to False.
