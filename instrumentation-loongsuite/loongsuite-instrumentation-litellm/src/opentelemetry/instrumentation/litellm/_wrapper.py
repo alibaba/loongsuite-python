@@ -94,10 +94,8 @@ class CompletionWrapper:
                     callback=None,
                     invocation=invocation,
                 )
-                stream_wrapper.callback = (
-                    lambda span,
-                    last_chunk,
-                    error: self._handle_stream_end_with_handler(
+                stream_wrapper.callback = lambda span, last_chunk, error: (
+                    self._handle_stream_end_with_handler(
                         invocation, last_chunk, error, stream_wrapper
                     )
                 )
@@ -240,10 +238,8 @@ class AsyncCompletionWrapper:
                     callback=None,
                     invocation=invocation,
                 )
-                stream_wrapper.callback = (
-                    lambda span,
-                    last_chunk,
-                    error: self._handle_stream_end_with_handler(
+                stream_wrapper.callback = lambda span, last_chunk, error: (
+                    self._handle_stream_end_with_handler(
                         invocation, last_chunk, error, stream_wrapper
                     )
                 )

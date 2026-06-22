@@ -713,14 +713,17 @@ def update_llm_invocation_from_response(
             if cached and cached > 0:
                 invocation.usage_cache_read_input_tokens = cached
         # Direct fields (some providers)
-        cache_creation = (
-            getattr(usage, "cache_creation_input_tokens", None)
-            or getattr(usage, "cache_creation_tokens", None)
-        )
+        cache_creation = getattr(
+            usage, "cache_creation_input_tokens", None
+        ) or getattr(usage, "cache_creation_tokens", None)
         if cache_creation and cache_creation > 0:
             invocation.usage_cache_creation_input_tokens = cache_creation
         cache_read = getattr(usage, "cache_read_input_tokens", None)
-        if cache_read and cache_read > 0 and not invocation.usage_cache_read_input_tokens:
+        if (
+            cache_read
+            and cache_read > 0
+            and not invocation.usage_cache_read_input_tokens
+        ):
             invocation.usage_cache_read_input_tokens = cache_read
 
     return input_tokens, output_tokens, total_tokens

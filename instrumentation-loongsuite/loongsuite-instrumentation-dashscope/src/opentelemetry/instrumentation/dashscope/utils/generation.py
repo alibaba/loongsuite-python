@@ -571,7 +571,8 @@ def _update_invocation_from_response(
         invocation.output_tokens = output_tokens
 
         # Extract cache token usage
-        from ..utils.common import _extract_cache_tokens
+        from ..utils.common import _extract_cache_tokens  # noqa: PLC0415
+
         cache_creation, cache_read = _extract_cache_tokens(response)
         if cache_creation is not None:
             invocation.usage_cache_creation_input_tokens = cache_creation

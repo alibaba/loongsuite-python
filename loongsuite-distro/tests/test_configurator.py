@@ -28,9 +28,7 @@ class TestLoongSuiteConfigurator(unittest.TestCase):
         LoongSuiteConfigurator().configure()
 
         mock_init.assert_called_once()
-        resource_attributes = mock_init.call_args.kwargs[
-            "resource_attributes"
-        ]
+        resource_attributes = mock_init.call_args.kwargs["resource_attributes"]
         self.assertIn(HOST_IP, resource_attributes)
         self.assertEqual(
             resource_attributes[GEN_AI_INSTRUMENTATION_SDK_NAME],
@@ -43,16 +41,10 @@ class TestLoongSuiteConfigurator(unittest.TestCase):
             resource_attributes={"service.name": "my-service"}
         )
 
-        resource_attributes = mock_init.call_args.kwargs[
-            "resource_attributes"
-        ]
-        self.assertEqual(
-            resource_attributes["service.name"], "my-service"
-        )
+        resource_attributes = mock_init.call_args.kwargs["resource_attributes"]
+        self.assertEqual(resource_attributes["service.name"], "my-service")
         self.assertIn(HOST_IP, resource_attributes)
-        self.assertIn(
-            GEN_AI_INSTRUMENTATION_SDK_NAME, resource_attributes
-        )
+        self.assertIn(GEN_AI_INSTRUMENTATION_SDK_NAME, resource_attributes)
 
     @mock.patch("opentelemetry.sdk._configuration._initialize_components")
     def test_configure_forwards_other_kwargs(self, mock_init):

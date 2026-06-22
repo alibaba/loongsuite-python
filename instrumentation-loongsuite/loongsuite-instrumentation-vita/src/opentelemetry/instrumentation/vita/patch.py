@@ -354,7 +354,9 @@ def wrap_generate_next_message(
                         invocation.usage_cache_read_input_tokens = cached
                 cache_creation = usage.get("cache_creation_input_tokens")
                 if cache_creation and cache_creation > 0:
-                    invocation.usage_cache_creation_input_tokens = cache_creation
+                    invocation.usage_cache_creation_input_tokens = (
+                        cache_creation
+                    )
 
             handler.stop_invoke_agent(invocation)
             return result
@@ -409,7 +411,9 @@ def wrap_generate(
             invocation.response_model_name = model
 
             # response_id
-            resp_id = getattr(result, "id", None) or getattr(result, "response_id", None)
+            resp_id = getattr(result, "id", None) or getattr(
+                result, "response_id", None
+            )
             if resp_id:
                 invocation.response_id = str(resp_id)
 
@@ -432,7 +436,9 @@ def wrap_generate(
                         invocation.usage_cache_read_input_tokens = cached
                 cache_creation = usage.get("cache_creation_input_tokens")
                 if cache_creation and cache_creation > 0:
-                    invocation.usage_cache_creation_input_tokens = cache_creation
+                    invocation.usage_cache_creation_input_tokens = (
+                        cache_creation
+                    )
 
         handler.stop_llm(invocation)
         return result

@@ -88,7 +88,9 @@ def _extract_usage(response: Any) -> tuple[Optional[int], Optional[int]]:
         return None, None
 
 
-def _extract_cache_tokens(response: Any) -> tuple[Optional[int], Optional[int]]:
+def _extract_cache_tokens(
+    response: Any,
+) -> tuple[Optional[int], Optional[int]]:
     """Extract cache token usage from DashScope response.
 
     Args:
@@ -106,10 +108,9 @@ def _extract_cache_tokens(response: Any) -> tuple[Optional[int], Optional[int]]:
             return None, None
 
         # DashScope may report cache tokens in various fields
-        cache_creation = (
-            getattr(usage, "cache_creation_input_tokens", None)
-            or getattr(usage, "cache_creation_tokens", None)
-        )
+        cache_creation = getattr(
+            usage, "cache_creation_input_tokens", None
+        ) or getattr(usage, "cache_creation_tokens", None)
         cache_read = (
             getattr(usage, "cache_read_input_tokens", None)
             or getattr(usage, "cache_read_tokens", None)
