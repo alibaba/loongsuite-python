@@ -15,8 +15,6 @@
 import unittest
 from unittest import mock
 
-from opentelemetry.sdk.resources import Resource, ResourceDetector
-
 from loongsuite.distro.resource import (
     GEN_AI_INSTRUMENTATION_SDK_NAME,
     HOST_IP,
@@ -25,12 +23,12 @@ from loongsuite.distro.resource import (
     _get_host_ip_with_pid,
 )
 
+from opentelemetry.sdk.resources import Resource, ResourceDetector
+
 
 class TestLoongSuiteResourceDetector(unittest.TestCase):
     def test_is_resource_detector(self):
-        self.assertIsInstance(
-            LoongSuiteResourceDetector(), ResourceDetector
-        )
+        self.assertIsInstance(LoongSuiteResourceDetector(), ResourceDetector)
 
     def test_detect_returns_resource(self):
         resource = LoongSuiteResourceDetector().detect()

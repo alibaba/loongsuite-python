@@ -62,6 +62,7 @@ GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
 # string instead of reading it from ``gen_ai_attributes``.
 GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
 
+
 def _infer_provider_name(provider: Any) -> str:
     """Infer gen_ai.provider.name from the provider instance."""
     if provider is None:
@@ -87,7 +88,6 @@ def _infer_provider_name(provider: Any) -> str:
     if model_id.startswith(("qwen",)):
         return "dashscope"
     return "openai"
-
 
 
 # ---------------------------------------------------------------------------
@@ -545,9 +545,7 @@ class RunTaskWrapper:
             # Set gen_ai.provider.name (Required attribute)
             _provider_name = _infer_provider_name(provider)
             if _provider_name:
-                span.set_attribute(
-                    GenAI.GEN_AI_PROVIDER_NAME, _provider_name
-                )
+                span.set_attribute(GenAI.GEN_AI_PROVIDER_NAME, _provider_name)
 
             model_id = ""
             if provider is not None:

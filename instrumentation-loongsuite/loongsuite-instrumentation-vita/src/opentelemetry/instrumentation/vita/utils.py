@@ -149,7 +149,6 @@ def _infer_provider(model_name: str) -> str:
     return "unknown"
 
 
-
 def _infer_server_address(model: str) -> tuple[str | None, int | None]:
     """Infer server address from model name for vita."""
     model_lower = model.lower() if model else ""
