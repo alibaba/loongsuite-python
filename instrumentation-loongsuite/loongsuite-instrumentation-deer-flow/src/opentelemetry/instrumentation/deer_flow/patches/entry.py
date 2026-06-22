@@ -94,7 +94,10 @@ class _RunAgentWrapper:
             return await wrapped(*args, **kwargs)
 
         record = _call_arg(args, kwargs, 2, "record")
-        graph_input = kwargs.get("graph_input") or _call_arg(args, kwargs, 5, "graph_input")
+        # ``graph_input`` is kw-only in ``run_agent``; the positional fallback
+        # was dead code (the positional index would never contain it). Reading
+        # it from kwargs only.
+        graph_input = kwargs.get("graph_input")
         invocation = _safe_call(
             "build_entry_invocation", _build_entry_invocation, record, graph_input
         )

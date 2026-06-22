@@ -41,7 +41,8 @@ from opentelemetry.instrumentation.deer_flow.utils import (
     _should_capture_content,
     _should_capture_memory_content,
 )
-from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer
+from opentelemetry import context as otel_context
+from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer, set_span_in_context
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SPAN_KIND,
@@ -92,15 +93,26 @@ class _MemoryLoadSaveWrapper:
         span.set_attribute(DEER_FLOW_COMPONENT, "memory")
         span.set_attribute(DEER_FLOW_TASK_NAME, task_name)
 
+        # ``FileMemoryStorage.load`` signature: ``load(agent_name=None, *,
+        # user_id=None)`` — ``args[0]`` is ``agent_name``.
+        # ``FileMemoryStorage.save`` signature: ``save(memory_data,
+        # agent_name=None, *, user_id=None)`` — ``args[0]`` is ``memory_data``,
+        # ``args[1]`` is ``agent_name``. Using ``args[0]`` for both would write
+        # ``memory_data`` repr into ``gen_ai.agent.name``.
         agent_name = kwargs.get("agent_name") if kwargs else None
         if agent_name is None and args:
-            agent_name = args[0]
+            if method_name == "save":
+                agent_name = args[1] if len(args) > 1 else None
+            else:
+                agent_name = args[0]
         if agent_name is not None:
             span.set_attribute("gen_ai.agent.name", str(agent_name))
 
         user_id = kwargs.get("user_id") if kwargs else None
         if user_id is not None:
             span.set_attribute("gen_ai.user.id", str(user_id))
+
+        token = otel_context.attach(set_span_in_context(span))
 
         if _capture_memory():
             _safe_call(
@@ -112,6 +124,7 @@ class _MemoryLoadSaveWrapper:
                 ),
             )
 
+        result: Any = None
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
@@ -126,6 +139,7 @@ class _MemoryLoadSaveWrapper:
                         "output.value", _serialize(result) or ""
                     ),
                 )
+            otel_context.detach(token)
             span.end()
         return result
 
@@ -163,6 +177,8 @@ class _MemoryUpdaterWrapper:
         if agent_name is not None:
             span.set_attribute("gen_ai.agent.name", str(agent_name))
 
+        token = otel_context.attach(set_span_in_context(span))
+
         if _capture_memory():
             _safe_call(
                 "set_input_value",
@@ -173,6 +189,7 @@ class _MemoryUpdaterWrapper:
                 ),
             )
 
+        result: Any = None
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:
@@ -187,6 +204,7 @@ class _MemoryUpdaterWrapper:
                         "output.value", _serialize(result) or ""
                     ),
                 )
+            otel_context.detach(token)
             span.end()
         return result
 

@@ -36,7 +36,8 @@ from opentelemetry.instrumentation.deer_flow.utils import (
     _safe_call,
     _should_capture_content,
 )
-from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer
+from opentelemetry import context as otel_context
+from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer, set_span_in_context
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SPAN_KIND,
@@ -176,7 +177,9 @@ class _ProviderLifecycleWrapper:
     def __init__(self, tracer: Any):
         self._tracer = tracer
 
-    def _run(self, wrapped: Any, instance: Any, args: Any, kwargs: Any, *, method_name: str) -> Any:
+    def _start_span(
+        self, wrapped: Any, args: Any, kwargs: Any, *, method_name: str
+    ) -> tuple[Any, Any]:
         task_name = f"sandbox.{method_name}"
         span_name = f"run_task {task_name}"
         span = self._tracer.start_span(name=span_name, kind=SpanKind.INTERNAL)
@@ -190,6 +193,16 @@ class _ProviderLifecycleWrapper:
             thread_id = args[0]
         if thread_id is not None:
             span.set_attribute("gen_ai.session.id", str(thread_id))
+        # Attach so downstream spans (e.g. Sandbox TOOL spans created inside
+        # ``acquire``) become children of this lifecycle TASK span.
+        token = otel_context.attach(set_span_in_context(span))
+        return span, token
+
+    def _run(self, wrapped: Any, instance: Any, args: Any, kwargs: Any, *, method_name: str) -> Any:
+        span, token = self._start_span(
+            wrapped, args, kwargs, method_name=method_name
+        )
+        result: Any = None
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
@@ -197,6 +210,7 @@ class _ProviderLifecycleWrapper:
             span.set_status(Status(StatusCode.ERROR, str(exc)))
             raise
         finally:
+            otel_context.detach(token)
             span.end()
         return result
 
@@ -210,12 +224,24 @@ class _ProviderAcquireAsyncWrapper(_ProviderLifecycleWrapper):
         self, wrapped: Any, instance: Any, args: Any, kwargs: Any
     ) -> Any:
         method_name = getattr(wrapped, "__name__", "acquire_async")
-        # Run sync path in a thread so the span covers the actual work.
-        import asyncio
-
-        return await asyncio.to_thread(
-            self._run, wrapped, instance, args, kwargs, method_name=method_name
+        # ``wrapped`` is a coroutine function; awaiting it directly (rather
+        # than routing through ``asyncio.to_thread``) preserves the caller's
+        # event loop and returns the awaited ``str`` sandbox id instead of a
+        # coroutine object.
+        span, token = self._start_span(
+            wrapped, args, kwargs, method_name=method_name
         )
+        result: Any = None
+        try:
+            result = await wrapped(*args, **kwargs)
+        except Exception as exc:
+            span.record_exception(exc)
+            span.set_status(Status(StatusCode.ERROR, str(exc)))
+            raise
+        finally:
+            otel_context.detach(token)
+            span.end()
+        return result
 
 
 def instrument(handler: ExtendedTelemetryHandler) -> list[tuple[str, str]]:

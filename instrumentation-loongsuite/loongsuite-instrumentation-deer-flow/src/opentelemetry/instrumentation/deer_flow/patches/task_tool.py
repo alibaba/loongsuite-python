@@ -36,7 +36,8 @@ from opentelemetry.instrumentation.deer_flow.utils import (
     _safe_call,
     _should_capture_content,
 )
-from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer
+from opentelemetry import context as otel_context
+from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer, set_span_in_context
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SPAN_KIND,
@@ -92,6 +93,11 @@ class _TaskToolWrapper:
         span.set_attribute(DEER_FLOW_TASK_NAME, task_name)
         span.set_attribute(GenAI.GEN_AI_AGENT_NAME, f"subagent:{subagent_type}")
 
+        # Attach the TASK span to the OTel Context so the langchain TOOL span
+        # emitted inside ``wrapped`` becomes a child of this TASK span (see
+        # execute.md §3.4.3).
+        token = otel_context.attach(set_span_in_context(span))
+
         if _should_capture_content():
             try:
                 span.set_attribute(
@@ -109,6 +115,7 @@ class _TaskToolWrapper:
             except Exception:
                 pass
 
+        result: Any = None
         try:
             result = await wrapped(*args, **kwargs)
         except Exception as exc:
@@ -122,6 +129,7 @@ class _TaskToolWrapper:
                     lambda r: span.set_attribute("output.value", str(r)),
                     result,
                 )
+            otel_context.detach(token)
             span.end()
         return result
 

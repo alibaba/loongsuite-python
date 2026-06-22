@@ -69,3 +69,13 @@ opentelemetry-instrument --instrumentation_modules deer_flow
   span (langchain instrumentation, child). This is intentional — the TASK
   span describes "dispatch to subagent" semantics while the TOOL span covers
   the LangChain `@tool` invocation mechanics.
+* **Subagent AGENT span does not carry usage metrics.** DeerFlow constructs
+  `SubagentTokenCollector` locally inside `SubagentExecutor._aexecute`, so
+  the wrapper cannot reach it via an instance attribute. Token usage is still
+  emitted on the langchain LLM child span via `loongsuite-instrumentation-langchain`,
+  but `gen_ai_llm_usage_tokens` will not be set on the AGENT (subagent) span.
+  This is a known limitation of the v1 patch surface; a follow-up could
+  expose the collector on the instance.
+* **`run_agent` `graph_input` is keyword-only.** The ENTRY span builder reads
+  it from `kwargs` only; the previous positional fallback was dead code and
+  has been removed.
