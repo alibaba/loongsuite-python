@@ -408,6 +408,7 @@ async def wrap_tool_call(wrapped, instance, args, kwargs, handler):
     # Create invocation object with all tool data
     invocation = ExecuteToolInvocation(
         tool_name=tool_name,
+        tool_type="function",
         tool_call_id=tool_id,
         tool_description=tool_description,
         tool_call_arguments=tool_args,

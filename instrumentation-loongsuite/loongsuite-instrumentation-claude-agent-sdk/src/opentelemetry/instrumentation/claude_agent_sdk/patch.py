@@ -159,6 +159,7 @@ def _create_tool_spans_from_message(
             try:
                 tool_invocation = ExecuteToolInvocation(
                     tool_name=tool_name,
+                    tool_type="function",
                     tool_call_id=tool_use_id,
                     tool_call_arguments=tool_input,
                     tool_description=tool_name,

@@ -571,6 +571,7 @@ def create_agent_invocation(
     invocation = InvokeAgentInvocation(
         provider=_HERMES_AGENT_SYSTEM,
         agent_name="Hermes",
+        agent_id="hermes-agent",
         conversation_id=getattr(instance, "session_id", None),
         request_model=getattr(instance, "model", None),
         input_messages=[
@@ -609,6 +610,25 @@ def should_create_entry_for_agent(instance: Any) -> bool:
     return bool(_entry_platform(instance))
 
 
+def _extract_server_info(instance: Any) -> tuple[str | None, int | None]:
+    """Extract server address and port from instance base_url."""
+    base_url = getattr(instance, "base_url", None)
+    if not base_url:
+        return None, None
+    base_url_str = str(base_url).rstrip("/")
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(base_url_str)
+        address = parsed.hostname
+        port = parsed.port
+        if port is None:
+            port = 443 if parsed.scheme == "https" else 80
+        return address, port
+    except Exception:
+        return None, None
+
+
 def create_llm_invocation(instance: Any, api_kwargs: Any) -> LLMInvocation:
     if not isinstance(api_kwargs, dict):
         api_kwargs = {}
@@ -619,6 +639,8 @@ def create_llm_invocation(instance: Any, api_kwargs: Any) -> LLMInvocation:
     max_tokens = api_kwargs.get("max_tokens")
     if max_tokens is None:
         max_tokens = api_kwargs.get("max_output_tokens")
+
+    server_address, server_port = _extract_server_info(instance)
 
     invocation = LLMInvocation(
         provider=provider_name(instance),
@@ -633,6 +655,8 @@ def create_llm_invocation(instance: Any, api_kwargs: Any) -> LLMInvocation:
         presence_penalty=api_kwargs.get("presence_penalty"),
         seed=api_kwargs.get("seed"),
         stop_sequences=api_kwargs.get("stop"),
+        server_address=server_address,
+        server_port=server_port,
     )
     return invocation
 
@@ -669,6 +693,26 @@ def update_llm_invocation_from_response(
     if output_tokens > 0:
         invocation.output_tokens = output_tokens
 
+    # Extract cache token usage
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        # OpenAI-compatible: prompt_tokens_details.cached_tokens
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_details is not None:
+            cached = getattr(prompt_details, "cached_tokens", None)
+            if cached and cached > 0:
+                invocation.usage_cache_read_input_tokens = cached
+        # Direct fields (some providers)
+        cache_creation = (
+            getattr(usage, "cache_creation_input_tokens", None)
+            or getattr(usage, "cache_creation_tokens", None)
+        )
+        if cache_creation and cache_creation > 0:
+            invocation.usage_cache_creation_input_tokens = cache_creation
+        cache_read = getattr(usage, "cache_read_input_tokens", None)
+        if cache_read and cache_read > 0 and not invocation.usage_cache_read_input_tokens:
+            invocation.usage_cache_read_input_tokens = cache_read
+
     return input_tokens, output_tokens, total_tokens
 
 
@@ -683,6 +727,7 @@ def create_tool_invocation(
         tool_name=tool_name,
         provider=provider or _HERMES_AGENT_SYSTEM,
     )
+    invocation.tool_type = "function"
     if invocation.provider:
         invocation.attributes["gen_ai.provider.name"] = invocation.provider
     if arguments is not None:

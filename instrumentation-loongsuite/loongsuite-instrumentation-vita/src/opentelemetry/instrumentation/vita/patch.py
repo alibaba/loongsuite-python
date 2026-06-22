@@ -300,6 +300,7 @@ def wrap_generate_next_message(
         invocation = InvokeAgentInvocation(
             provider="vitabench",
             agent_name=agent_name,
+            agent_id=agent_name,
             request_model=model,
         )
 
@@ -345,6 +346,15 @@ def wrap_generate_next_message(
             if usage and isinstance(usage, dict):
                 invocation.input_tokens = usage.get("prompt_tokens")
                 invocation.output_tokens = usage.get("completion_tokens")
+                # Cache tokens
+                prompt_details = usage.get("prompt_tokens_details")
+                if isinstance(prompt_details, dict):
+                    cached = prompt_details.get("cached_tokens")
+                    if cached and cached > 0:
+                        invocation.usage_cache_read_input_tokens = cached
+                cache_creation = usage.get("cache_creation_input_tokens")
+                if cache_creation and cache_creation > 0:
+                    invocation.usage_cache_creation_input_tokens = cache_creation
 
             handler.stop_invoke_agent(invocation)
             return result
@@ -398,6 +408,11 @@ def wrap_generate(
             # response_model_name
             invocation.response_model_name = model
 
+            # response_id
+            resp_id = getattr(result, "id", None) or getattr(result, "response_id", None)
+            if resp_id:
+                invocation.response_id = str(resp_id)
+
             # finish_reasons
             if getattr(result, "tool_calls", None):
                 invocation.finish_reasons = ["tool_calls"]
@@ -409,6 +424,15 @@ def wrap_generate(
             if usage and isinstance(usage, dict):
                 invocation.input_tokens = usage.get("prompt_tokens")
                 invocation.output_tokens = usage.get("completion_tokens")
+                # Cache tokens (OpenAI-compatible format)
+                prompt_details = usage.get("prompt_tokens_details")
+                if isinstance(prompt_details, dict):
+                    cached = prompt_details.get("cached_tokens")
+                    if cached and cached > 0:
+                        invocation.usage_cache_read_input_tokens = cached
+                cache_creation = usage.get("cache_creation_input_tokens")
+                if cache_creation and cache_creation > 0:
+                    invocation.usage_cache_creation_input_tokens = cache_creation
 
         handler.stop_llm(invocation)
         return result
@@ -433,6 +457,7 @@ def wrap_get_response(
         tool_name=tool_name,
         tool_call_id=tool_call_id,
         provider="vitabench",
+        tool_type="function",
     )
 
     # tool_call_arguments

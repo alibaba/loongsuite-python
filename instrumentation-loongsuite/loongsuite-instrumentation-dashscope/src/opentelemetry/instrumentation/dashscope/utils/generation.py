@@ -469,6 +469,8 @@ def _create_invocation_from_generation(
 
     invocation = LLMInvocation(request_model=request_model)
     invocation.provider = "dashscope"
+    invocation.server_address = "dashscope.aliyuncs.com"
+    invocation.server_port = 443
     invocation.input_messages = _extract_input_messages(kwargs)
 
     # Extract tool definitions and convert to FunctionToolDefinition objects
@@ -567,6 +569,14 @@ def _update_invocation_from_response(
         input_tokens, output_tokens = _extract_usage(response)
         invocation.input_tokens = input_tokens
         invocation.output_tokens = output_tokens
+
+        # Extract cache token usage
+        from ..utils.common import _extract_cache_tokens
+        cache_creation, cache_read = _extract_cache_tokens(response)
+        if cache_creation is not None:
+            invocation.usage_cache_creation_input_tokens = cache_creation
+        if cache_read is not None:
+            invocation.usage_cache_read_input_tokens = cache_read
 
         # Extract response model name (if available)
         response_model = _safe_get(response, "model")
