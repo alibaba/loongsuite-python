@@ -194,15 +194,19 @@ class AgentRunWrapper:
         request_model = client_config.get("model") if isinstance(client_config, dict) else None
         conversation_id = state.get_entry_session_id()
 
+        capture = capture_message_content()
         inv = InvokeAgentInvocation(
             provider="openai",
             agent_name=agent_name,
             agent_description="Fara-7B Computer Use Agent",
             conversation_id=conversation_id,
             request_model=request_model,
-            attributes={"gen_ai.framework": FRAMEWORK_NAME},
+            attributes={
+                "gen_ai.framework": FRAMEWORK_NAME,
+                "gen_ai.tool.definitions": safe_json_dumps(tool_definitions(capture)),
+            },
         )
-        if capture_message_content() and user_message:
+        if capture and user_message:
             inv.input_messages = _make_input_messages(str(user_message))
 
         # Reset STEP rotation state for this agent run.

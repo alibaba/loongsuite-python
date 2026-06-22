@@ -21,6 +21,7 @@ content-capture gating.
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 
 import fara.fara_agent as fara_agent_mod
@@ -127,6 +128,56 @@ def test_agent_span_error_on_exception(instrument, span_exporter):
     agent_spans = spans_by_name(spans, "invoke_agent FaraAgent")
     assert len(agent_spans) == 1
     assert agent_spans[0].status.is_ok is False
+
+
+def _canonical_tool_names():
+    return [
+        "key",
+        "type",
+        "mouse_move",
+        "left_click",
+        "scroll",
+        "visit_url",
+        "web_search",
+        "history_back",
+        "pause_and_memorize_fact",
+        "wait",
+        "terminate",
+    ]
+
+
+def test_agent_span_tool_definitions_default(instrument, span_exporter):
+    # capture disabled: AGENT span must still carry gen_ai.tool.definitions
+    # as a JSON array of 11 {type, name} entries (no description).
+    agent = _build_agent()
+    _await(agent.run("click the search box"))
+    spans = span_exporter.get_finished_spans()
+    agent_span = spans_by_name(spans, "invoke_agent FaraAgent")[0]
+    raw = span_attr(agent_span, "gen_ai.tool.definitions")
+    assert raw is not None
+    defs = json.loads(raw)
+    assert isinstance(defs, list)
+    assert len(defs) == 11
+    assert [d["name"] for d in defs] == _canonical_tool_names()
+    for d in defs:
+        assert d["type"] == "function"
+        assert "description" not in d
+
+
+def test_agent_span_tool_definitions_with_content(instrument_with_content, span_exporter):
+    # capture enabled: each entry should also carry a description.
+    agent = _build_agent()
+    _await(agent.run("click the search box"))
+    spans = span_exporter.get_finished_spans()
+    agent_span = spans_by_name(spans, "invoke_agent FaraAgent")[0]
+    raw = span_attr(agent_span, "gen_ai.tool.definitions")
+    assert raw is not None
+    defs = json.loads(raw)
+    assert len(defs) == 11
+    assert [d["name"] for d in defs] == _canonical_tool_names()
+    for d in defs:
+        assert d["type"] == "function"
+        assert d.get("description")
 
 
 # ---------------------------------------------------------------------------
