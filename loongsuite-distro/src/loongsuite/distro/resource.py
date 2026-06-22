@@ -22,6 +22,7 @@ logger = getLogger(__name__)
 
 # Resource attribute keys contributed by LoongSuite.
 HOST_IP = "host.ip"
+SERVICE_INSTANCE_ID = "service.instance.id"
 GEN_AI_INSTRUMENTATION_SDK_NAME = "gen_ai.instrumentation.sdk.name"
 
 # Fixed value identifying the GenAI instrumentation SDK shipped with LoongSuite.
@@ -67,14 +68,18 @@ class LoongSuiteResourceDetector(ResourceDetector):
 
     Contributes the following attributes to the resource:
 
-    * ``host.ip`` formatted as ``<ip>-<pid>`` (e.g. ``127.0.0.1-1``).
+    * ``host.ip`` — the raw host IP address (e.g. ``127.0.0.1``).
+    * ``service.instance.id`` — ``<ip>-<pid>`` uniquely identifying the process
+      instance (e.g. ``127.0.0.1-1``).
     * ``gen_ai.instrumentation.sdk.name`` set to ``loongsuite-genai-utils``.
     """
 
     def detect(self) -> Resource:
+        host_ip = _get_host_ip()
         return Resource(
             {
-                HOST_IP: _get_host_ip_with_pid(),
+                HOST_IP: host_ip,
+                SERVICE_INSTANCE_ID: f"{host_ip}-{os.getpid()}",
                 GEN_AI_INSTRUMENTATION_SDK_NAME: _GEN_AI_INSTRUMENTATION_SDK_NAME_VALUE,
             }
         )

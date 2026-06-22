@@ -149,20 +149,6 @@ def _infer_provider(model_name: str) -> str:
     return "unknown"
 
 
-def _infer_server_address(model: str) -> tuple[str | None, int | None]:
-    """Infer server address from model name for vita."""
-    model_lower = model.lower() if model else ""
-    if "qwen" in model_lower or "dashscope" in model_lower:
-        return "dashscope.aliyuncs.com", 443
-    if "gpt" in model_lower or "openai" in model_lower:
-        return "api.openai.com", 443
-    if "claude" in model_lower or "anthropic" in model_lower:
-        return "api.anthropic.com", 443
-    if "deepseek" in model_lower:
-        return "api.deepseek.com", 443
-    return None, None
-
-
 def _get_tool_definitions(
     tools: Any,
 ) -> Optional[List[FunctionToolDefinition]]:

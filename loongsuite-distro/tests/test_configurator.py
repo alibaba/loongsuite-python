@@ -19,6 +19,7 @@ from loongsuite.distro import LoongSuiteConfigurator
 from loongsuite.distro.resource import (
     GEN_AI_INSTRUMENTATION_SDK_NAME,
     HOST_IP,
+    SERVICE_INSTANCE_ID,
 )
 
 
@@ -30,6 +31,7 @@ class TestLoongSuiteConfigurator(unittest.TestCase):
         mock_init.assert_called_once()
         resource_attributes = mock_init.call_args.kwargs["resource_attributes"]
         self.assertIn(HOST_IP, resource_attributes)
+        self.assertIn(SERVICE_INSTANCE_ID, resource_attributes)
         self.assertEqual(
             resource_attributes[GEN_AI_INSTRUMENTATION_SDK_NAME],
             "loongsuite-genai-utils",
@@ -37,13 +39,19 @@ class TestLoongSuiteConfigurator(unittest.TestCase):
 
     @mock.patch("opentelemetry.sdk._configuration._initialize_components")
     def test_configure_preserves_existing_attributes(self, mock_init):
+        """User-provided values take precedence over detector values."""
         LoongSuiteConfigurator().configure(
-            resource_attributes={"service.name": "my-service"}
+            resource_attributes={
+                "service.name": "my-service",
+                HOST_IP: "custom-ip",
+            }
         )
 
         resource_attributes = mock_init.call_args.kwargs["resource_attributes"]
         self.assertEqual(resource_attributes["service.name"], "my-service")
-        self.assertIn(HOST_IP, resource_attributes)
+        # User-provided host.ip should NOT be overwritten by detector
+        self.assertEqual(resource_attributes[HOST_IP], "custom-ip")
+        self.assertIn(SERVICE_INSTANCE_ID, resource_attributes)
         self.assertIn(GEN_AI_INSTRUMENTATION_SDK_NAME, resource_attributes)
 
     @mock.patch("opentelemetry.sdk._configuration._initialize_components")

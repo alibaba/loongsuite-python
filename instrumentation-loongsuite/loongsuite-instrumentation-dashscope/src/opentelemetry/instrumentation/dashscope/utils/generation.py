@@ -469,6 +469,8 @@ def _create_invocation_from_generation(
 
     invocation = LLMInvocation(request_model=request_model)
     invocation.provider = "dashscope"
+    # DashScope SDK always targets dashscope.aliyuncs.com; if custom endpoint
+    # support is added in the future, extract from instance/env instead.
     invocation.server_address = "dashscope.aliyuncs.com"
     invocation.server_port = 443
     invocation.input_messages = _extract_input_messages(kwargs)
