@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Capture `gen_ai.skill.name`, `gen_ai.skill.id`, `gen_ai.skill.description`
+  and `gen_ai.skill.version` on the `execute_tool` span of the built-in
+  `Skill` tool. Skill metadata is read best-effort from the project-level
+  `SKILL.md` frontmatter (located via `SystemMessage.data.cwd`); `skill.id`
+  is reported as `claude:project:<skill-name>`. Metadata read failures never
+  affect the SDK call.
+
 ## Version 0.6.0 (2026-06-03)
 
 There are no changelog entries for this release.
