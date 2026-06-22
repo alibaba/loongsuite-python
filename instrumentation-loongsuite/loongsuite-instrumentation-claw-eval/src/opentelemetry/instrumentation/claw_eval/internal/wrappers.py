@@ -62,6 +62,34 @@ GEN_AI_TOOL_CALL_RESULT = "gen_ai.tool.call.result"
 # string instead of reading it from ``gen_ai_attributes``.
 GEN_AI_TOOL_DEFINITIONS = "gen_ai.tool.definitions"
 
+def _infer_provider_name(provider: Any) -> str:
+    """Infer gen_ai.provider.name from the provider instance."""
+    if provider is None:
+        return "claw-eval"
+    # Try provider_name attribute
+    pn = getattr(provider, "provider_name", None)
+    if pn:
+        return str(pn)
+    # Infer from class name
+    cls_name = type(provider).__name__.lower()
+    if "openai" in cls_name:
+        return "openai"
+    if "anthropic" in cls_name:
+        return "anthropic"
+    if "dashscope" in cls_name:
+        return "dashscope"
+    # Infer from model_id
+    model_id = str(getattr(provider, "model_id", "") or "")
+    if model_id.startswith(("gpt-", "o1-", "o3-", "chatgpt-")):
+        return "openai"
+    if model_id.startswith(("claude-",)):
+        return "anthropic"
+    if model_id.startswith(("qwen",)):
+        return "dashscope"
+    return "openai"
+
+
+
 # ---------------------------------------------------------------------------
 # ContextVars for STEP lifecycle & compact-depth tracking
 # ---------------------------------------------------------------------------
@@ -513,6 +541,13 @@ class RunTaskWrapper:
             span.set_attribute(GEN_AI_FRAMEWORK, "claw-eval")
             span.set_attribute(GenAI.GEN_AI_AGENT_NAME, "claw-eval")
             span.set_attribute("claw_eval.task_id", str(task_id))
+
+            # Set gen_ai.provider.name (Required attribute)
+            _provider_name = _infer_provider_name(provider)
+            if _provider_name:
+                span.set_attribute(
+                    GenAI.GEN_AI_PROVIDER_NAME, _provider_name
+                )
 
             model_id = ""
             if provider is not None:
