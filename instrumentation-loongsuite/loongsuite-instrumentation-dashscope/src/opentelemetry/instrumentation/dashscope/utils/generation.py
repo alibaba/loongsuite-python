@@ -570,6 +570,14 @@ def _update_invocation_from_response(
         invocation.input_tokens = input_tokens
         invocation.output_tokens = output_tokens
 
+        # Extract cache token usage
+        from ..utils.common import _extract_cache_tokens
+        cache_creation, cache_read = _extract_cache_tokens(response)
+        if cache_creation is not None:
+            invocation.usage_cache_creation_input_tokens = cache_creation
+        if cache_read is not None:
+            invocation.usage_cache_read_input_tokens = cache_read
+
         # Extract response model name (if available)
         response_model = _safe_get(response, "model")
         if response_model:

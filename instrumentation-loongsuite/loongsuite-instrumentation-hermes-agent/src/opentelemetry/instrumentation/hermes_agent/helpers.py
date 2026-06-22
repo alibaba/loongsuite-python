@@ -693,6 +693,26 @@ def update_llm_invocation_from_response(
     if output_tokens > 0:
         invocation.output_tokens = output_tokens
 
+    # Extract cache token usage
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        # OpenAI-compatible: prompt_tokens_details.cached_tokens
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_details is not None:
+            cached = getattr(prompt_details, "cached_tokens", None)
+            if cached and cached > 0:
+                invocation.usage_cache_read_input_tokens = cached
+        # Direct fields (some providers)
+        cache_creation = (
+            getattr(usage, "cache_creation_input_tokens", None)
+            or getattr(usage, "cache_creation_tokens", None)
+        )
+        if cache_creation and cache_creation > 0:
+            invocation.usage_cache_creation_input_tokens = cache_creation
+        cache_read = getattr(usage, "cache_read_input_tokens", None)
+        if cache_read and cache_read > 0 and not invocation.usage_cache_read_input_tokens:
+            invocation.usage_cache_read_input_tokens = cache_read
+
     return input_tokens, output_tokens, total_tokens
 
 
