@@ -30,6 +30,7 @@ from opentelemetry.context import Context
 from opentelemetry.instrumentation.cognee.config import MAX_PAYLOAD_BYTES
 from opentelemetry.instrumentation.cognee.semconv import (
     COGNEE_PIPELINE_TASK_NAME,
+    COGNEE_RECALL_TOP_K,
     COGNEE_RESULT_COUNT,
     COGNEE_RESULT_SUMMARY,
     COGNEE_RETRIEVAL_TOP_K,
@@ -67,6 +68,7 @@ _MIGRATION_MAP: dict[str, str] = {
     COGNEE_VECTOR_COLLECTION: "gen_ai.data_source.id",
     COGNEE_SEARCH_TOP_K: "gen_ai.request.top_k",
     COGNEE_RETRIEVAL_TOP_K: "gen_ai.request.top_k",
+    COGNEE_RECALL_TOP_K: "gen_ai.request.top_k",
 }
 
 

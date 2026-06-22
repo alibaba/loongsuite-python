@@ -25,6 +25,7 @@ COGNEE_LLM_RESPONSE_LENGTH = "cognee.llm.response_length"
 
 COGNEE_SEARCH_TOP_K = "cognee.search.top_k"
 COGNEE_RETRIEVAL_TOP_K = "cognee.retrieval.top_k"
+COGNEE_RECALL_TOP_K = "cognee.recall.top_k"
 
 # Default prompt-path constant used by AgenticRetriever (v1.2.1)
 AGENTIC_USER_PROMPT_FILENAME = "agentic_user.txt"

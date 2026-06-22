@@ -13,6 +13,7 @@ The public fallback still creates an AGENT span but loses STEP granularity.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from typing import Any, Callable
 
@@ -28,9 +29,37 @@ from opentelemetry.instrumentation.cognee.internal._util import (
 )
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import InvokeAgentInvocation
-from opentelemetry.util.genai.types import Error
+from opentelemetry.util.genai.types import Error, FunctionToolDefinition
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_tool_definitions(tool_defs: list) -> list:
+    """Ensure every entry is a dataclass instance safe for ``dataclasses.asdict``.
+
+    ``stop_invoke_agent`` → ``_get_tool_definitions_for_span`` calls
+    ``dataclasses.asdict`` on each tool definition. Plain dicts or other
+    non-dataclass objects raise ``TypeError: asdict() should be called on
+    dataclass instances`` and break the AGENTIC_COMPLETION chain. We coerce
+    dict-like entries to ``FunctionToolDefinition`` and drop anything we
+    cannot coerce so the chain stays intact.
+    """
+    sanitized: list = []
+    for td in tool_defs or []:
+        if dataclasses.is_dataclass(td):
+            sanitized.append(td)
+            continue
+        if isinstance(td, dict) and "name" in td:
+            sanitized.append(
+                FunctionToolDefinition(
+                    name=str(td["name"]),
+                    description=td.get("description"),
+                    parameters=td.get("parameters"),
+                )
+            )
+            continue
+        logger.debug("dropping non-dataclass tool_definition: %r", td)
+    return sanitized
 
 
 _AGENT_MODULE = "cognee.modules.retrieval.agentic_retriever"
@@ -98,12 +127,37 @@ def _make_agent_wrapper(handler: ExtendedTelemetryHandler) -> Callable:
                 invocation.output_messages = [
                     {"role": "assistant", "content": captured_out}
                 ]
-            handler.stop_invoke_agent(invocation)
+            invocation.tool_definitions = _sanitize_tool_definitions(
+                invocation.tool_definitions
+            )
+            try:
+                handler.stop_invoke_agent(invocation)
+            except Exception as stop_err:
+                logger.debug(
+                    "stop_invoke_agent failed; closing span defensively: %s",
+                    stop_err,
+                )
+                try:
+                    if invocation.span is not None:
+                        invocation.span.end()
+                except Exception:
+                    pass
             return result
         except Exception as e:
-            handler.fail_invoke_agent(
-                invocation, Error(message=str(e), type=type(e))
-            )
+            try:
+                handler.fail_invoke_agent(
+                    invocation, Error(message=str(e), type=type(e))
+                )
+            except Exception as fail_err:
+                logger.debug(
+                    "fail_invoke_agent failed; closing span defensively: %s",
+                    fail_err,
+                )
+                try:
+                    if invocation.span is not None:
+                        invocation.span.end()
+                except Exception:
+                    pass
             raise
         finally:
             reset_react_round(token)
