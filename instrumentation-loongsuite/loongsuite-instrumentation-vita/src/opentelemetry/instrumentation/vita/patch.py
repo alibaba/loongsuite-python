@@ -346,6 +346,15 @@ def wrap_generate_next_message(
             if usage and isinstance(usage, dict):
                 invocation.input_tokens = usage.get("prompt_tokens")
                 invocation.output_tokens = usage.get("completion_tokens")
+                # Cache tokens
+                prompt_details = usage.get("prompt_tokens_details")
+                if isinstance(prompt_details, dict):
+                    cached = prompt_details.get("cached_tokens")
+                    if cached and cached > 0:
+                        invocation.usage_cache_read_input_tokens = cached
+                cache_creation = usage.get("cache_creation_input_tokens")
+                if cache_creation and cache_creation > 0:
+                    invocation.usage_cache_creation_input_tokens = cache_creation
 
             handler.stop_invoke_agent(invocation)
             return result
@@ -415,6 +424,15 @@ def wrap_generate(
             if usage and isinstance(usage, dict):
                 invocation.input_tokens = usage.get("prompt_tokens")
                 invocation.output_tokens = usage.get("completion_tokens")
+                # Cache tokens (OpenAI-compatible format)
+                prompt_details = usage.get("prompt_tokens_details")
+                if isinstance(prompt_details, dict):
+                    cached = prompt_details.get("cached_tokens")
+                    if cached and cached > 0:
+                        invocation.usage_cache_read_input_tokens = cached
+                cache_creation = usage.get("cache_creation_input_tokens")
+                if cache_creation and cache_creation > 0:
+                    invocation.usage_cache_creation_input_tokens = cache_creation
 
         handler.stop_llm(invocation)
         return result

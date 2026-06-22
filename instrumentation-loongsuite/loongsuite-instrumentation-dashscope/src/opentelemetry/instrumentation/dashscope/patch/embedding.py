@@ -52,6 +52,8 @@ def wrap_text_embedding_call(wrapped, instance, args, kwargs, handler=None):
         # Create embedding invocation object
         invocation = EmbeddingInvocation(request_model=model)
         invocation.provider = "dashscope"
+        invocation.server_address = "dashscope.aliyuncs.com"
+        invocation.server_port = 443
 
         # Extract parameters from kwargs or kwargs["parameters"] dict
         parameters = kwargs.get("parameters", {})
