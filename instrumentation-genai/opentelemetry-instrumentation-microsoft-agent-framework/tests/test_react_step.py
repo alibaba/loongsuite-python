@@ -187,3 +187,106 @@ def test_unwrap_to_function_peels_wrappers(monkeypatch):
     w1 = _Wrapper(original)
     w2 = _Wrapper(w1)
     assert react_step_patch._unwrap_to_function(w2) is original
+
+
+def test_fil_wrapper_returns_coroutine(monkeypatch):
+    """[P0] regression: ``FunctionInvocationLayer.get_response`` wrapper must
+    return a coroutine when wrapping an ``async def`` function, so the MAF
+    runtime's ``await layer.get_response(...)`` (``_agents.py:964``) does not
+    raise ``TypeError``. The previous ``@wrapt.decorator`` + ``async def``
+    variant produced a non-awaitable FunctionWrapper under MAF 1.0.0.
+    """
+    import asyncio
+    import sys
+    import types
+
+    async def _fil_get_response(self, *args, **kwargs):
+        return ("fil-ok", self, args, kwargs)
+
+    class _FunctionInvocationLayer:
+        get_response = staticmethod(_fil_get_response)
+
+    tools_mod = types.ModuleType("agent_framework._tools")
+    tools_mod.FunctionInvocationLayer = _FunctionInvocationLayer  # type: ignore[attr-defined]
+    obs_mod = types.ModuleType("agent_framework.observability")
+
+    class _ChatTelemetryLayer:
+        get_response = staticmethod(lambda *a, **kw: None)
+
+    obs_mod.ChatTelemetryLayer = _ChatTelemetryLayer  # type: ignore[attr-defined]
+    af_mod = types.ModuleType("agent_framework")
+    af_mod._tools = tools_mod  # type: ignore[attr-defined]
+    af_mod.observability = obs_mod  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._tools", tools_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
+
+    # Reset module state.
+    react_step_patch.revert_react_step_patch()
+    react_step_patch._applied = False
+    react_step_patch._original_fil_get_response = None
+    react_step_patch._original_chat_get_response = None
+    react_step_patch._handler = None
+
+    react_step_patch.apply_react_step_patch(tracer_provider=None)
+    assert react_step_patch._applied is True
+
+    # Call the wrapped method directly (no instance — staticmethod-style).
+    coro = _FunctionInvocationLayer.get_response("self-arg", "a", kw="v")
+    assert asyncio.iscoroutine(coro), (
+        "FIL wrapper must return a coroutine so MAF can `await` it"
+    )
+    result = asyncio.get_event_loop().run_until_complete(coro)
+    assert result[0] == "fil-ok"
+
+    react_step_patch.revert_react_step_patch()
+
+
+def test_chat_wrapper_outside_loop_passes_through(monkeypatch):
+    """[P0] Outside a react-loop scope, the chat wrapper must return the raw
+    coroutine produced by the wrapped function (no react_step span). This
+    preserves the normal ``await layer.get_response(...)`` path used by MAF
+    when ReAct is not active.
+    """
+    import asyncio
+    import sys
+    import types
+
+    async def _chat_get_response(self, *args, **kwargs):
+        return ("chat-ok", self, args, kwargs)
+
+    class _FunctionInvocationLayer:
+        get_response = staticmethod(lambda *a, **kw: None)
+
+    class _ChatTelemetryLayer:
+        get_response = staticmethod(_chat_get_response)
+
+    tools_mod = types.ModuleType("agent_framework._tools")
+    tools_mod.FunctionInvocationLayer = _FunctionInvocationLayer  # type: ignore[attr-defined]
+    obs_mod = types.ModuleType("agent_framework.observability")
+    obs_mod.ChatTelemetryLayer = _ChatTelemetryLayer  # type: ignore[attr-defined]
+    af_mod = types.ModuleType("agent_framework")
+    af_mod._tools = tools_mod  # type: ignore[attr-defined]
+    af_mod.observability = obs_mod  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._tools", tools_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
+
+    react_step_patch.revert_react_step_patch()
+    react_step_patch._applied = False
+    react_step_patch._original_fil_get_response = None
+    react_step_patch._original_chat_get_response = None
+    react_step_patch._handler = None
+
+    react_step_patch.apply_react_step_patch(tracer_provider=None)
+
+    coro = _ChatTelemetryLayer.get_response("self-arg")
+    assert asyncio.iscoroutine(coro), (
+        "Chat wrapper must pass through the wrapped coroutine unchanged"
+    )
+    result = asyncio.get_event_loop().run_until_complete(coro)
+    assert result[0] == "chat-ok"
+
+    react_step_patch.revert_react_step_patch()

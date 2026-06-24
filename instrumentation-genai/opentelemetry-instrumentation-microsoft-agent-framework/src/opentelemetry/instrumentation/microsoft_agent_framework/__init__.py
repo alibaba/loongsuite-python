@@ -103,6 +103,43 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         except Exception as exc:
             logger.warning("add_span_processor failed: %s", exc)
             raise
+
+        # Ensure our processor runs FIRST in the pipeline so its ``on_end``
+        # enrichments (gen_ai.span.kind / operation.name / framework / rename
+        # map / provider normalization) are visible to any exporter processors
+        # that were registered before us (e.g. by user bootstrap scripts that
+        # add ``ConsoleSpanExporter`` / ``OTLPSpanExporter`` before
+        # ``instrument()``). ``add_span_processor`` appends; processors are
+        # invoked in registration order on ``on_end``, so we move ourselves
+        # to index 0. The SDK stores the list as a tuple on
+        # ``_active_span_processor._span_processors`` (defensive — falls back
+        # to a list-style attribute on alternative provider layouts).
+        try:
+            asp = getattr(tracer_provider, "_active_span_processor", None)
+            span_processors = (
+                getattr(asp, "_span_processors", None)
+                if asp is not None
+                else None
+            )
+            if span_processors is None:
+                span_processors = getattr(
+                    tracer_provider, "_span_processors", None
+                )
+            # ``span_processors`` may be a tuple (current SDK) or a list.
+            if isinstance(span_processors, tuple):
+                others = tuple(p for p in span_processors if p is not processor)
+                new_procs = (processor,) + others
+                if asp is not None:
+                    asp._span_processors = new_procs  # type: ignore[attr-defined]
+                else:
+                    tracer_provider._span_processors = new_procs  # type: ignore[attr-defined]
+            elif isinstance(span_processors, list):
+                if processor in span_processors:
+                    span_processors.remove(processor)
+                span_processors.insert(0, processor)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("prepend processor failed: %s", exc)
+
         self._processor = processor
 
         # 3) Optional ReAct step patch (default OFF).

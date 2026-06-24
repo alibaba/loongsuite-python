@@ -215,11 +215,33 @@ def _rename_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
 
 
 def _normalize_provider(value: Any) -> Optional[str]:
-    if not value:
+    """Normalize ``gen_ai.provider.name`` to the ARMS canonical value.
+
+    MAF writes a few variants (``azure_openai``, ``microsoft.agent_framework``,
+    different casing on AGENT vs LLM spans, or wraps the value in a sequence
+    for some span types). We:
+
+    1. Unwrap sequence attribute values (OTel allows ``str | sequence[str]``).
+    2. Try an exact match against ``PROVIDER_NAME_NORMALIZE``.
+    3. Fall back to a case-insensitive match — MAF emits
+       ``microsoft.agent_framework`` on AGENT spans in a slightly different
+       spelling than the LLM span's ``openai``, and we want both to collapse
+       to the same dimension regardless of casing.
+    """
+    if value is None:
         return None
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return None
+        value = value[0]
     if not isinstance(value, str):
         value = str(value)
-    return PROVIDER_NAME_NORMALIZE.get(value, value)
+    if value in PROVIDER_NAME_NORMALIZE:
+        return PROVIDER_NAME_NORMALIZE[value]
+    lowered = value.lower()
+    if lowered in PROVIDER_NAME_NORMALIZE:
+        return PROVIDER_NAME_NORMALIZE[lowered]
+    return value
 
 
 _MCP_METHOD_NAME_ATTR = "mcp.method.name"
@@ -564,15 +586,21 @@ class MAFSemanticProcessor(SpanProcessor):
                 _set_attr(live, GEN_AI_SPAN_KIND, span_kind)
 
             # 2) gen_ai.operation.name (set if missing or freshly derived for
-            #    workflow spans where MAF does not write it)
+            #    workflow spans where MAF does not write it). For spans MAF
+            #    mislabels (e.g. MCP ``tools/call`` written by MAF as
+            #    ``execute_tool`` — see ``create_mcp_client_span`` at
+            #    ``observability.py:2101``) we also override when our
+            #    classification disagrees, provided the span is one of the
+            #    kinds whose operation.name we own (TASK/AGENT reclassification
+            #    of ``executor.process``, plus CLIENT for MCP — MAF writes the
+            #    LLM's ``execute_tool`` value onto MCP inner spans).
             if not existing_op:
                 _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
             elif existing_op != op_name and span_kind in {
                 GenAISpanKind.TASK,
                 GenAISpanKind.AGENT,
+                GenAISpanKind.CLIENT,
             }:
-                # executor.process reclassification (FunctionExecutor -> TASK,
-                # AgentExecutor -> AGENT/invoke_agent)
                 _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
 
             # 3) gen_ai.framework (always — ARMS extension)

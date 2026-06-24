@@ -91,45 +91,74 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
 
     handler = _get_extended_handler(tracer_provider)
 
-    @wrapt.decorator
-    async def _fil_wrapper(wrapped, self, args, kwargs):  # type: ignore[no-untyped-def]
-        # Outer function is async per MAF's signature (overloads collapse to
-        # one async implementation). Set the react-loop scope for the duration
-        # of the call.
-        token_active = _maf_react_loop_active.set(True)
-        token_counter = _maf_react_step_counter.set(0)
-        try:
-            return await wrapped(*args, **kwargs)
-        finally:
-            _maf_react_loop_active.reset(token_active)
-            _maf_react_step_counter.reset(token_counter)
+    # The wrappers are *synchronous* functions that return coroutines. We
+    # deliberately avoid ``@wrapt.decorator`` on ``async def`` here:
+    # ``wrapt.wrap_function_wrapper`` installs a ``FunctionWrapper`` whose
+    # ``__call__`` invokes our wrapper and returns whatever it returns. If our
+    # wrapper were ``async def``, the FunctionWrapper would still return a
+    # coroutine — *but* MAF 1.0.0's ``_call_chat_client`` is itself ``async def``
+    # and is called as ``await layer.get_response(...)`` from ``_agents.py``.
+    # Empirically (validation report P0) the async-wrapped variant does NOT
+    # produce a coroutine on ``await`` — the call site raises ``TypeError``.
+    # Returning a coroutine from a sync wrapper is the simplest, robust fix:
+    # the caller's ``await`` resolves the coroutine normally.
+    #
+    # ContextVar tokens are set *inside* the coroutine body (not at wrapper
+    # entry) so set/reset share the same asyncio Task context. asyncio copies
+    # the context when a Task is created; tokens created outside the task
+    # cannot be reset inside it (``ValueError: created in a different
+    # Context``). Doing the ``set`` inside the coroutine guarantees the token
+    # belongs to whichever context ends up running the coroutine.
+    def _fil_wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+        async def _scoped():  # type: ignore[no-untyped-def]
+            token_active = _maf_react_loop_active.set(True)
+            token_counter = _maf_react_step_counter.set(0)
+            try:
+                return await wrapped(*args, **kwargs)
+            finally:
+                _maf_react_loop_active.reset(token_active)
+                _maf_react_step_counter.reset(token_counter)
 
-    @wrapt.decorator
-    async def _chat_wrapper(wrapped, self, args, kwargs):  # type: ignore[no-untyped-def]
+        return _scoped()
+
+    def _chat_wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+        # Read the loop-active flag synchronously (cheap; copied into the
+        # coroutine below). When False we pass the wrapped coroutine through
+        # unchanged — ``wrapped`` is a coroutine function so calling it returns
+        # a coroutine and the caller awaits it directly.
         if not _maf_react_loop_active.get():
-            return await wrapped(*args, **kwargs)
+            return wrapped(*args, **kwargs)
 
-        # Each LLM call within the ReAct loop = one step.
+        # Pre-compute the round number for this call (read before the
+        # coroutine body so subsequent chat calls in the same loop see the
+        # incremented value at the same context level — same semantics as the
+        # prior implementation).
         round_num = _maf_react_step_counter.get() + 1
-        token_counter = _maf_react_step_counter.set(round_num)
+        local_handler = handler
 
-        from opentelemetry.util.genai.extended_types import ReactStepInvocation
+        async def _step_scoped():  # type: ignore[no-untyped-def]
+            from opentelemetry.util.genai.extended_types import (
+                ReactStepInvocation,
+            )
 
-        step_inv = ReactStepInvocation(round=round_num)
-        try:
-            with handler.react_step(step_inv) as step:
-                try:
-                    result = await wrapped(*args, **kwargs)
-                    # Best-effort finish_reason extraction from the response.
-                    finish = _extract_finish_reason(result)
-                    if finish is not None:
-                        step.finish_reason = finish
-                    return result
-                except Exception as exc:
-                    step.finish_reason = "error"
-                    raise
-        finally:
-            _maf_react_step_counter.reset(token_counter)
+            step_inv = ReactStepInvocation(round=round_num)
+            token_counter = _maf_react_step_counter.set(round_num)
+            try:
+                with local_handler.react_step(step_inv) as step:
+                    try:
+                        result = await wrapped(*args, **kwargs)
+                        # Best-effort finish_reason extraction from the response.
+                        finish = _extract_finish_reason(result)
+                        if finish is not None:
+                            step.finish_reason = finish
+                        return result
+                    except Exception:
+                        step.finish_reason = "error"
+                        raise
+            finally:
+                _maf_react_step_counter.reset(token_counter)
+
+        return _step_scoped()
 
     # ``wrap_function_wrapper`` takes (module_or_obj, name, wrapper). When
     # given a class object + attribute name it patches the attribute on the

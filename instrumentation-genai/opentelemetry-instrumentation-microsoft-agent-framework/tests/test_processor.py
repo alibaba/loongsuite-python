@@ -369,3 +369,116 @@ def test_non_mcp_client_span_is_not_misclassified_as_mcp():
     spans = _flush(exporter)
     s = spans[0]
     assert s.attributes.get(GEN_AI_SPAN_KIND) != GenAISpanKind.CLIENT
+
+
+def test_mcp_span_op_name_overridden_to_mcp_when_maf_writes_execute_tool():
+    """[P1] regression: MAF emits ``gen_ai.operation.name=execute_tool`` on the
+    MCP ``tools/call`` inner span (its ``create_mcp_client_span`` reuses the
+    tool-call op name even though it sets ``mcp.method.name``). The processor
+    must override the op name to ``mcp`` so the span is not mislabeled as a
+    TOOL call in the ARMS pipeline.
+
+    Before the fix, ``on_end``'s op-name override only fired when
+    ``span_kind in {TASK, AGENT}`` — CLIENT (MCP) was missing, so the inner
+    span kept MAF's ``execute_tool`` value.
+    """
+    from opentelemetry.trace import SpanKind
+
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span(
+        "tools/call slow_summary", kind=SpanKind.CLIENT
+    ) as span:
+        # MAF writes both mcp.method.name AND gen_ai.operation.name=execute_tool.
+        span.set_attribute("mcp.method.name", "tools/call")
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.EXECUTE_TOOL)
+    spans = _flush(exporter)
+    s = spans[0]
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CLIENT
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+
+
+def test_provider_normalization_microsoft_agent_framework_to_openai():
+    """[P3] regression: AGENT spans written by MAF carry
+    ``gen_ai.provider.name=microsoft.agent_framework``. The
+    ``PROVIDER_NAME_NORMALIZE`` map must collapse this to ``openai`` so AGENT
+    spans share the same dimension as the LLM spans beneath them. Before the
+    fix, the AGENT span's provider stayed at the raw MAF value while LLM was
+    already ``openai``.
+    """
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("invoke_agent my-agent") as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, "microsoft.agent_framework")
+    spans = _flush(exporter)
+    assert (
+        spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai"
+    ), "AGENT provider.name should normalize from microsoft.agent_framework to openai"
+
+
+def test_provider_normalization_case_insensitive_variant():
+    """[P3] MAF may emit the provider value in different casing across span
+    types (AGENT vs LLM). Normalization should collapse to the same canonical
+    value regardless of case."""
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("invoke_agent my-agent") as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, "Microsoft.Agent_Framework")
+    spans = _flush(exporter)
+    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai"
+
+
+def test_provider_normalization_list_wrapped_value():
+    """[P3] OTel attributes may be a sequence of strings. MAF occasionally
+    writes ``gen_ai.provider.name`` as ``["microsoft.agent_framework"]`` on
+    AGENT spans. The normalizer should unwrap the sequence and collapse the
+    first element."""
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("invoke_agent my-agent") as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, ["microsoft.agent_framework"])
+    spans = _flush(exporter)
+    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai"
+
+
+def test_instrument_prepends_processor_before_existing_exporters():
+    """[P5] When exporters were registered before ``instrument()`` (the common
+    bootstrap order: provider → exporter processor → instrument()), the MAF
+    semantic processor must run FIRST in the pipeline so its ``on_end``
+    enrichments (gen_ai.span.kind, operation.name, framework, rename map,
+    provider normalization) are visible to those exporters. Without the
+    prepend, an exporter that captured the span before our ``on_end`` would
+    ship an un-enriched span.
+    """
+    from opentelemetry.instrumentation.microsoft_agent_framework import (
+        MicrosoftAgentFrameworkInstrumentor,
+    )
+
+    tp = TracerProvider()
+    exporter = InMemorySpanExporter()
+    # Bootstrap-style order: exporter processor FIRST, then our instrumentor.
+    tp.add_span_processor(SimpleSpanProcessor(exporter))
+
+    inst = MicrosoftAgentFrameworkInstrumentor()
+    # Skip MAF enable_instrumentation (MAF not installed in this env).
+    inst._instrument(
+        tracer_provider=tp,
+        react_step_enabled=False,
+    )
+    try:
+        asp = getattr(tp, "_active_span_processor", None)
+        procs = (
+            getattr(asp, "_span_processors", None)
+            if asp is not None
+            else getattr(tp, "_span_processors", None)
+        )
+        assert procs is not None and len(procs) >= 2
+        from opentelemetry.instrumentation.microsoft_agent_framework.span_processor import (
+            MAFSemanticProcessor as _Proc,
+        )
+
+        assert isinstance(procs[0], _Proc), (
+            "MAFSemanticProcessor must be at index 0 so it runs before "
+            "exporter processors"
+        )
+    finally:
+        inst._uninstrument()
