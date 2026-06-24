@@ -309,3 +309,63 @@ def test_safe_dumps_uses_gen_ai_json_dumps():
     out = sp._safe_dumps({"a": 1, "b": [1, 2]})
     assert isinstance(out, str)
     assert "a" in out and "b" in out
+
+
+def test_safe_dumps_truncates_at_4kb():
+    """_safe_dumps must cap output at 4096 chars (execute.md single-field cap)."""
+    from opentelemetry.instrumentation.microsoft_agent_framework import (
+        span_processor as sp,
+    )
+
+    big = {"k": "x" * 10_000}
+    out = sp._safe_dumps(big)
+    assert isinstance(out, str)
+    assert len(out) <= 4096
+
+
+def test_mcp_span_classified_as_client():
+    """MCP spans emitted by MAF's ``create_mcp_client_span`` carry no
+    ``gen_ai.operation.name``; their name is ``{mcp.method.name} {target}``
+    (unbounded), so they must be detected via the ``mcp.method.name``
+    attribute and classified as ``(CLIENT, mcp)``. Regression for [M1].
+    """
+    from opentelemetry.trace import SpanKind
+
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span(
+        "tools/call get_weather", kind=SpanKind.CLIENT
+    ) as span:
+        # MAF writes mcp.method.name (no gen_ai.operation.name).
+        span.set_attribute("mcp.method.name", "tools/call")
+        span.set_attribute("mcp.session.id", "sess-1")
+    spans = _flush(exporter)
+    s = spans[0]
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CLIENT
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+
+
+def test_mcp_span_via_client_kind_and_mcp_attr_fallback():
+    """Fallback path: a CLIENT span with any ``mcp.*`` attribute (but missing
+    ``mcp.method.name``) is still classified as MCP."""
+    from opentelemetry.trace import SpanKind
+
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("initialize", kind=SpanKind.CLIENT) as span:
+        span.set_attribute("mcp.protocol.version", "2024-11-05")
+    spans = _flush(exporter)
+    s = spans[0]
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CLIENT
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+
+
+def test_non_mcp_client_span_is_not_misclassified_as_mcp():
+    """A CLIENT span without any ``mcp.*`` attribute must NOT be classified as
+    MCP — guards against false positives on unrelated client spans."""
+    from opentelemetry.trace import SpanKind
+
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("http request", kind=SpanKind.CLIENT) as span:
+        span.set_attribute("http.method", "GET")
+    spans = _flush(exporter)
+    s = spans[0]
+    assert s.attributes.get(GEN_AI_SPAN_KIND) != GenAISpanKind.CLIENT

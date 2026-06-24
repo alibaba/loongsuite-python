@@ -48,6 +48,13 @@ class GenAIOperation:
 
 # MAF span-name prefixes (from observability.py OtelAttr) — used to classify a
 # span when ``gen_ai.operation.name`` is not already set on it.
+#
+# Note: MCP spans are *not* listed here. Their names follow
+# ``{mcp.method.name} {target}`` (e.g. ``tools/call get_weather``,
+# ``initialize``) so the method name is unbounded and would collide with other
+# prefixes. MCP is detected via the ``mcp.method.name`` attribute (set
+# unconditionally by MAF's ``create_mcp_client_span`` at
+# ``observability.py:2101``) in :func:`span_processor._is_mcp_span`.
 MAF_SPAN_NAME_PREFIXES: Final[dict[str, str]] = {
     "chat ": GenAIOperation.CHAT,
     "embeddings ": GenAIOperation.EMBEDDINGS,

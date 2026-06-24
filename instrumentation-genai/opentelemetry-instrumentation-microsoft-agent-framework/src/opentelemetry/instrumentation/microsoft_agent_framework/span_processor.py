@@ -18,9 +18,11 @@ This processor:
    / ``genai_calls_error_count`` / ``genai_calls_slow_count`` / ``genai_llm_first_token_seconds``
    / ``genai_llm_usage_tokens``) in-process, exposed via observable gauges.
 
-Truncation / PII helpers are reused from ``opentelemetry.util.genai.utils``
+Truncation / JSON serialization are reused from ``opentelemetry.util.genai.utils``
 (``gen_ai_json_dumps``) — aligned with the pattern at
 ``instrumentation-genai/opentelemetry-instrumentation-openai-agents-v2/.../span_processor.py:27``.
+``gen_ai_json_dumps`` itself only serializes (it does not truncate), so the
+single-field 4 KB cap from execute.md is enforced in :func:`_safe_dumps`.
 """
 
 from __future__ import annotations
@@ -90,17 +92,23 @@ def _attr_value(span: Any, key: str) -> Any:
 
 
 def _safe_dumps(obj: Any) -> Optional[str]:
-    """Serialize ``obj`` via the shared ``gen_ai_json_dumps`` helper.
+    """Serialize ``obj`` to a JSON string capped at 4 KB.
 
-    Reuses the truncation / PII / canonicalization logic from
+    Uses the shared ``gen_ai_json_dumps`` helper from
     ``opentelemetry.util.genai.utils`` (the same path as
-    ``openai-agents-v2/span_processor.py:27`` / ``safe_json_dumps`` at
-    ``:370``). Falls back to ``str(obj)`` if JSON serialization fails.
+    ``openai-agents-v2/span_processor.py:27``) for compact, ASCII-preserving
+    JSON serialization of arbitrary objects (bytes / datetimes / nested
+    dicts). Note that ``gen_ai_json_dumps`` itself does *not* truncate — it is
+    just ``json.dumps`` with a custom encoder — so we cap the output at 4 KB
+    here to honour the execute.md single-field cap (per-attribute budget
+    shared with the rename path). Falls back to ``str(obj)`` if JSON
+    serialization fails.
     """
     try:
-        return gen_ai_json_dumps(obj)
+        out = gen_ai_json_dumps(obj)
     except (TypeError, ValueError):
-        return str(obj)
+        out = str(obj)
+    return out[:4096]
 
 
 _PRIMITIVE_ATTR_TYPES = (str, bool, int, float)
@@ -214,6 +222,31 @@ def _normalize_provider(value: Any) -> Optional[str]:
     return PROVIDER_NAME_NORMALIZE.get(value, value)
 
 
+_MCP_METHOD_NAME_ATTR = "mcp.method.name"
+
+
+def _is_mcp_span(readable: Any) -> bool:
+    """Return True if ``readable`` is an MCP client span.
+
+    MAF's ``create_mcp_client_span`` (``observability.py:2101``) always sets
+    ``mcp.method.name``. We also accept ``SpanKind.CLIENT`` + any ``mcp.*``
+    attribute as a fallback in case MAF later renames the attribute.
+    """
+    if _attr_value(readable, _MCP_METHOD_NAME_ATTR) is not None:
+        return True
+    try:
+        from opentelemetry.trace import SpanKind
+
+        kind = getattr(readable, "kind", None)
+        if kind == SpanKind.CLIENT:
+            attrs = getattr(readable, "attributes", None) or {}
+            if any(str(k).startswith("mcp.") for k in attrs):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _classify_span(
     name: str, operation: Optional[str], readable: Any
 ) -> Tuple[str, str]:
@@ -221,9 +254,23 @@ def _classify_span(
 
     Classification priority:
     1. Existing ``gen_ai.operation.name`` (set by MAF for chat/embeddings/tool/agent).
-    2. Span-name prefix matching (workflow spans have no operation.name from MAF).
-    3. ``react step`` literal name (emitted by our react_step patch).
+    2. MCP attribute detection — MAF's ``create_mcp_client_span``
+       (``observability.py:2083``) emits spans named ``{mcp.method.name} {target}``
+       with no ``gen_ai.operation.name`` set; the ``mcp.method.name`` attribute
+       (always present) is the reliable signal. Falls back to
+       ``SpanKind.CLIENT`` + any ``mcp.*`` attribute. MCP is intentionally
+       *not* in ``MAF_SPAN_NAME_PREFIXES`` because its method names are
+       unbounded (``initialize``, ``tools/call`` …) and would collide with
+       other prefixes.
+    3. Span-name prefix matching (workflow spans have no operation.name from MAF).
+    4. ``react step`` literal name (emitted by our react_step patch).
     """
+    # MCP detection — runs before operation-based matching because MAF does not
+    # write ``gen_ai.operation.name`` for MCP spans. We check the attribute
+    # directly (cheap; happens once per span on_end).
+    if _is_mcp_span(readable):
+        return GenAISpanKind.CLIENT, GenAIOperation.MCP
+
     if operation:
         op = operation
     else:
