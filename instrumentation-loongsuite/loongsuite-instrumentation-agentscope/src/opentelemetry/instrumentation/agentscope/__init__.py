@@ -356,6 +356,8 @@ class AgentScopeInstrumentor(BaseInstrumentor):
                 args, kwargs = append_loongsuite_middleware(
                     args,
                     kwargs,
+                    # Resolve the handler lazily so reinstrumentation uses the
+                    # current handler instead of the one captured at init time.
                     AgentScopeV2Middleware(handler=lambda: self._handler),
                 )
                 return wrapped(*args, **kwargs)
