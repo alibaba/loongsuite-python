@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import os
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -31,22 +32,50 @@ if not importlib.metadata.version("agentscope").startswith("2."):
 
 from agentscope.agent import Agent  # noqa: E402
 from agentscope.credential import DashScopeCredential  # noqa: E402
-from agentscope.message import TextBlock, UserMsg  # noqa: E402
+from agentscope.message import (  # noqa: E402
+    Msg,
+    TextBlock,
+    ToolResultBlock,
+    UserMsg,
+)
 from agentscope.model import ChatResponse, DashScopeChatModel  # noqa: E402
 from agentscope.tool import ToolResponse  # noqa: E402
 
 from opentelemetry.instrumentation.agentscope._v2_middleware import (  # noqa: E402
     AgentScopeV2Middleware,
+    _message_to_input,
 )
 from opentelemetry.instrumentation.agentscope.package import (  # noqa: E402
     get_installed_instrumentation_dependencies,
 )
 from opentelemetry.trace.status import StatusCode  # noqa: E402
+from opentelemetry.util.genai.utils import gen_ai_json_dumps  # noqa: E402
 
 
 def test_v2_dependency_detection():
     assert get_installed_instrumentation_dependencies() == (
         "agentscope >= 2.0.0, < 3.0.0",
+    )
+
+
+def test_v2_tool_result_message_content_is_jsonable():
+    msg = Msg(
+        name="assistant",
+        role="assistant",
+        content=[
+            ToolResultBlock(
+                id="tool-call-content",
+                name="lookup_weather",
+                output=[TextBlock(text="sunny")],
+            )
+        ],
+    )
+
+    input_message = _message_to_input(msg)
+
+    assert (
+        gen_ai_json_dumps([asdict(input_message)])
+        == '[{"role":"assistant","parts":[{"response":[{"content":"sunny","type":"text"}],"id":"tool-call-content","type":"tool_call_response"}]}]'
     )
 
 

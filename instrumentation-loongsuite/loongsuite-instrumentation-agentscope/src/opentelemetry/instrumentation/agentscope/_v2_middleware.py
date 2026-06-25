@@ -420,10 +420,18 @@ def _blocks_to_parts(blocks: Sequence[Any]) -> list[Any]:
             parts.append(
                 ToolCallResponse(
                     id=getattr(block, "id", None),
-                    response=getattr(block, "output", ""),
+                    response=_tool_result_response(
+                        getattr(block, "output", "")
+                    ),
                 )
             )
     return parts
+
+
+def _tool_result_response(value: Any) -> Any:
+    if isinstance(value, list | tuple):
+        return _blocks_to_parts(value)
+    return value
 
 
 def _tool_definitions(tools: list[dict[str, Any]] | None) -> list[Any]:
