@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections import defaultdict
 from typing import Any, Dict, Optional, Tuple
 
@@ -75,6 +76,7 @@ _WORKFLOW_BUILD = "workflow.build"
 _MESSAGE_SEND = "message.send"
 _EXECUTOR_PROCESS = "executor.process"
 _EDGE_GROUP_PROCESS = "edge_group.process"
+_LIVE_SPAN_MAX_AGE_NS = 60 * 1_000_000_000
 
 
 def _attr_value(span: Any, key: str) -> Any:
@@ -217,16 +219,15 @@ def _rename_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
 def _normalize_provider(value: Any) -> Optional[str]:
     """Normalize ``gen_ai.provider.name`` to the ARMS canonical value.
 
-    MAF writes a few variants (``azure_openai``, ``microsoft.agent_framework``,
-    different casing on AGENT vs LLM spans, or wraps the value in a sequence
-    for some span types). We:
+    MAF can write OpenAI aliases or framework-level values, and may wrap the
+    value in a sequence for some span types. We:
 
     1. Unwrap sequence attribute values (OTel allows ``str | sequence[str]``).
     2. Try an exact match against ``PROVIDER_NAME_NORMALIZE``.
-    3. Fall back to a case-insensitive match — MAF emits
-       ``microsoft.agent_framework`` on AGENT spans in a slightly different
-       spelling than the LLM span's ``openai``, and we want both to collapse
-       to the same dimension regardless of casing.
+    3. Fall back to a case-insensitive match.
+    4. Return the lower-cased raw value for unknown providers. We intentionally
+       do not map ``microsoft.agent_framework`` to ``openai`` because MAF can
+       route to multiple underlying model providers.
     """
     if value is None:
         return None
@@ -241,7 +242,7 @@ def _normalize_provider(value: Any) -> Optional[str]:
     lowered = value.lower()
     if lowered in PROVIDER_NAME_NORMALIZE:
         return PROVIDER_NAME_NORMALIZE[lowered]
-    return value
+    return lowered
 
 
 def _normalize_finish_reasons(live_span: OtelSpan, readable: Any) -> None:
@@ -466,6 +467,7 @@ class MAFSemanticProcessor(SpanProcessor):
     ) -> None:
         self._live_spans: Dict[str, OtelSpan] = {}
         self._span_parents: Dict[str, Optional[str]] = {}
+        self._live_span_lock = threading.Lock()
         self._slow_threshold_ns = int(slow_threshold_ms) * 1_000_000
         self._capture_sensitive = capture_sensitive_data
         self._counters = _Counters()
@@ -656,7 +658,6 @@ class MAFSemanticProcessor(SpanProcessor):
             key = format(sid, "016x")
         except Exception:
             return
-        self._live_spans[key] = span
         parent = getattr(span, "_parent", None)
         parent_id = None
         if parent is not None:
@@ -664,7 +665,9 @@ class MAFSemanticProcessor(SpanProcessor):
                 parent_id = format(parent.span_id, "016x")
             except Exception:
                 parent_id = None
-        self._span_parents[key] = parent_id
+        with self._live_span_lock:
+            self._live_spans[key] = span
+            self._span_parents[key] = parent_id
 
     def on_end(self, span: Any) -> None:
         """Enrich a just-ended MAF span with ARMS GenAI semantic conventions."""
@@ -673,8 +676,9 @@ class MAFSemanticProcessor(SpanProcessor):
             key = format(ctx.span_id, "016x")
         except Exception:
             return
-        live = self._live_spans.pop(key, None)
-        parent_id = self._span_parents.pop(key, None)
+        with self._live_span_lock:
+            live = self._live_spans.pop(key, None)
+            parent_id = self._span_parents.pop(key, None)
         if live is None:
             return
         # NOTE: by the time on_end runs, the SDK has already called Span.end(),
@@ -819,11 +823,33 @@ class MAFSemanticProcessor(SpanProcessor):
             logger.debug("MAF metrics aggregation failed: %s", exc)
 
     def shutdown(self) -> None:
-        self._live_spans.clear()
-        self._span_parents.clear()
+        with self._live_span_lock:
+            self._live_spans.clear()
+            self._span_parents.clear()
 
     def force_flush(self, timeout_millis: int = 30000) -> bool:
+        self._sweep_stale_live_spans()
         return True
+
+    def _sweep_stale_live_spans(
+        self, max_age_ns: int = _LIVE_SPAN_MAX_AGE_NS
+    ) -> None:
+        """Bound live-span bookkeeping if a span is started but never ended."""
+        now_ns = time.time_ns()
+        stale_keys = []
+        with self._live_span_lock:
+            for key, live_span in list(self._live_spans.items()):
+                start_time = getattr(live_span, "start_time", None)
+                if start_time is None:
+                    continue
+                try:
+                    if now_ns - int(start_time) > max_age_ns:
+                        stale_keys.append(key)
+                except (TypeError, ValueError):
+                    continue
+            for key in stale_keys:
+                self._live_spans.pop(key, None)
+                self._span_parents.pop(key, None)
 
 
 def _obs(value: float, attrs: Dict[str, str]):

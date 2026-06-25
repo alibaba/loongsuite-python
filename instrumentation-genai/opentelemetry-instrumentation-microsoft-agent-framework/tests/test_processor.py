@@ -451,47 +451,68 @@ def test_mcp_span_op_name_overridden_to_mcp_when_maf_writes_execute_tool():
     assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
 
 
-def test_provider_normalization_microsoft_agent_framework_to_openai():
-    """[P3] regression: AGENT spans written by MAF carry
-    ``gen_ai.provider.name=microsoft.agent_framework``. The
-    ``PROVIDER_NAME_NORMALIZE`` map must collapse this to ``openai`` so AGENT
-    spans share the same dimension as the LLM spans beneath them. Before the
-    fix, the AGENT span's provider stayed at the raw MAF value while LLM was
-    already ``openai``.
+def test_provider_normalization_keeps_framework_provider_separate():
+    """Framework-level provider names must not be collapsed to ``openai``.
+
+    MAF can route to multiple underlying providers, so ``microsoft.agent_framework``
+    is lower-cased and kept distinct instead of pretending every MAF span used
+    OpenAI.
     """
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("invoke_agent my-agent") as span:
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
         span.set_attribute(GEN_AI_PROVIDER_NAME, "microsoft.agent_framework")
     spans = _flush(exporter)
-    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai", (
-        "AGENT provider.name should normalize from microsoft.agent_framework to openai"
+    assert (
+        spans[0].attributes.get(GEN_AI_PROVIDER_NAME)
+        == "microsoft.agent_framework"
     )
 
 
 def test_provider_normalization_case_insensitive_variant():
-    """[P3] MAF may emit the provider value in different casing across span
-    types (AGENT vs LLM). Normalization should collapse to the same canonical
-    value regardless of case."""
+    """Unknown provider values should lower-case to avoid metric cardinality."""
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("invoke_agent my-agent") as span:
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
         span.set_attribute(GEN_AI_PROVIDER_NAME, "Microsoft.Agent_Framework")
     spans = _flush(exporter)
-    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai"
+    assert (
+        spans[0].attributes.get(GEN_AI_PROVIDER_NAME)
+        == "microsoft.agent_framework"
+    )
 
 
 def test_provider_normalization_list_wrapped_value():
     """[P3] OTel attributes may be a sequence of strings. MAF occasionally
     writes ``gen_ai.provider.name`` as ``["microsoft.agent_framework"]`` on
-    AGENT spans. The normalizer should unwrap the sequence and collapse the
-    first element."""
+    AGENT spans. The normalizer should unwrap the sequence and normalize the
+    first element's casing."""
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("invoke_agent my-agent") as span:
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
-        span.set_attribute(GEN_AI_PROVIDER_NAME, ["microsoft.agent_framework"])
+        span.set_attribute(GEN_AI_PROVIDER_NAME, ["Microsoft.Agent_Framework"])
     spans = _flush(exporter)
-    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai"
+    assert (
+        spans[0].attributes.get(GEN_AI_PROVIDER_NAME)
+        == "microsoft.agent_framework"
+    )
+
+
+def test_force_flush_sweeps_stale_live_spans():
+    class _StartedSpan:
+        start_time = 0
+
+    processor = MAFSemanticProcessor(
+        meter_provider=None,
+        metrics_enabled=False,
+        capture_sensitive_data=False,
+    )
+    processor._live_spans["deadbeef"] = _StartedSpan()
+    processor._span_parents["deadbeef"] = None
+
+    assert processor.force_flush()
+    assert "deadbeef" not in processor._live_spans
+    assert "deadbeef" not in processor._span_parents
 
 
 def test_instrument_prepends_processor_before_existing_exporters():

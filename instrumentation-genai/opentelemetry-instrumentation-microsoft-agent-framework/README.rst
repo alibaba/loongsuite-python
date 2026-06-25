@@ -42,7 +42,7 @@ The framework dependency is intentionally not included in the package's
 ``1.37`` OpenTelemetry API line.
 
 Configuration
-============
+=============
 
 ======================================  ==========  ==============================================================
 Env                                     Default     Description

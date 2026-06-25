@@ -96,13 +96,14 @@ MAF_ATTR_RENAME_MAP: Final[dict[str, str]] = {
     "message.destination_executor_id": "gen_ai.message.destination_executor_id",
 }
 
-# Provider name normalization — collapse MAF-specific provider spellings to the
-# canonical OTel/ARMS value to avoid dimension sprawl in metrics.
+# Provider name normalization — collapse known aliases to the canonical OTel/ARMS
+# value to avoid dimension sprawl in metrics. Framework names such as
+# ``microsoft.agent_framework`` are intentionally not mapped to a concrete model
+# provider because MAF can route to different underlying providers.
 PROVIDER_NAME_NORMALIZE: Final[dict[str, str]] = {
     "azure_openai": "openai",
     "azure_ai_openai": "openai",
     "azure.openai": "openai",
-    "microsoft.agent_framework": "openai",
 }
 
 # Attribute keys we read off the span. Centralized so tests can import them.
@@ -117,7 +118,4 @@ GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
 GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
 GEN_AI_REACT_ROUND = "gen_ai.react.round"
 GEN_AI_REACT_FINISH_REASON = "gen_ai.react.finish_reason"
-GEN_AI_FRAMEWORK = "gen_ai.framework"
 ERROR_TYPE = "error.type"
-
-FRAMEWORK_NAME = "microsoft-agent-framework"

@@ -27,11 +27,15 @@ ENV_METRICS_ENABLED = "ARMS_MAF_METRICS_ENABLED"
 
 
 def is_instrumentation_enabled(default: bool = True) -> bool:
-    return _resolve_bool(os.getenv(ENV_INSTRUMENTATION_ENABLED), default=default)
+    return _resolve_bool(
+        os.getenv(ENV_INSTRUMENTATION_ENABLED), default=default
+    )
 
 
 def is_sensitive_data_enabled(default: bool = False) -> bool:
-    return _resolve_bool(os.getenv(ENV_SENSITIVE_DATA_ENABLED), default=default)
+    return _resolve_bool(
+        os.getenv(ENV_SENSITIVE_DATA_ENABLED), default=default
+    )
 
 
 def is_react_step_enabled(default: bool = False) -> bool:
