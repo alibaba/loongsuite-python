@@ -15,15 +15,18 @@ from __future__ import annotations
 
 import logging
 
+from opentelemetry.instrumentation.microsoft_agent_framework import (
+    react_step_patch,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler
+from opentelemetry.util.genai.extended_handler import (
+    get_extended_telemetry_handler,
+)
 from opentelemetry.util.genai.extended_types import ReactStepInvocation
-
-from opentelemetry.instrumentation.microsoft_agent_framework import react_step_patch
 
 
 def test_module_imports_without_maf():
@@ -32,9 +35,31 @@ def test_module_imports_without_maf():
     assert hasattr(react_step_patch, "revert_react_step_patch")
 
 
-def test_apply_is_noop_when_maf_missing(caplog):
+def _reset_extended_handler_singletons():
+    react_step_patch._handler = None
+    if hasattr(get_extended_telemetry_handler, "_default_handler"):
+        delattr(get_extended_telemetry_handler, "_default_handler")
+
+
+def test_apply_is_noop_when_maf_missing(caplog, monkeypatch):
     # MAF is not installed in this test env, so apply should warn and return.
+    import builtins
+
+    original_import = builtins.__import__
+
+    def _blocked_import(
+        name, globals_=None, locals_=None, fromlist=(), level=0
+    ):
+        if name.startswith("agent_framework"):
+            raise ImportError("blocked agent_framework")
+        return original_import(name, globals_, locals_, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked_import)
     react_step_patch.revert_react_step_patch()  # ensure clean state
+    react_step_patch._applied = False
+    react_step_patch._original_fil_get_response = None
+    react_step_patch._original_chat_get_response = None
+    _reset_extended_handler_singletons()
     with caplog.at_level(logging.WARNING):
         react_step_patch.apply_react_step_patch(tracer_provider=None)
     assert react_step_patch._applied is False
@@ -54,6 +79,7 @@ def test_handler_react_step_emits_step_span():
     tp = TracerProvider()
     exporter = InMemorySpanExporter()
     tp.add_span_processor(SimpleSpanProcessor(exporter))
+    _reset_extended_handler_singletons()
     handler = get_extended_telemetry_handler(tracer_provider=tp)
 
     step_inv = ReactStepInvocation(round=3)
@@ -78,7 +104,6 @@ def _install_fake_maf_modules(monkeypatch):
     Returns ``(fil_cls, chat_cls)`` — the two fake classes with their original
     ``get_response`` callables recorded.
     """
-    import asyncio
     import sys
     import types
 
@@ -104,9 +129,7 @@ def _install_fake_maf_modules(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
     monkeypatch.setitem(sys.modules, "agent_framework._tools", tools_mod)
-    monkeypatch.setitem(
-        sys.modules, "agent_framework.observability", obs_mod
-    )
+    monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
     return _FunctionInvocationLayer, _ChatTelemetryLayer
 
 
@@ -127,7 +150,7 @@ def test_react_patch_apply_revert_apply_no_multi_wrap(monkeypatch):
     react_step_patch._applied = False
     react_step_patch._original_fil_get_response = None
     react_step_patch._original_chat_get_response = None
-    react_step_patch._handler = None
+    _reset_extended_handler_singletons()
 
     fil_before = fil_cls.get_response
     chat_before = chat_cls.get_response
@@ -137,16 +160,24 @@ def test_react_patch_apply_revert_apply_no_multi_wrap(monkeypatch):
     assert react_step_patch._applied is True
     fil_after_1 = fil_cls.get_response
     chat_after_1 = chat_cls.get_response
-    assert fil_after_1 is not fil_before, "wrapt did not replace FIL.get_response"
-    assert chat_after_1 is not chat_before, "wrapt did not replace Chat.get_response"
+    assert fil_after_1 is not fil_before, (
+        "wrapt did not replace FIL.get_response"
+    )
+    assert chat_after_1 is not chat_before, (
+        "wrapt did not replace Chat.get_response"
+    )
 
     # 2) revert
     react_step_patch.revert_react_step_patch()
     assert react_step_patch._applied is False
     # After revert the attribute must point to the *original* (unwrapped)
     # function — not to the wrapper.
-    assert fil_cls.get_response is fil_before, "revert did not restore FIL.get_response"
-    assert chat_cls.get_response is chat_before, "revert did not restore Chat.get_response"
+    assert fil_cls.get_response is fil_before, (
+        "revert did not restore FIL.get_response"
+    )
+    assert chat_cls.get_response is chat_before, (
+        "revert did not restore Chat.get_response"
+    )
 
     # 3) apply again
     react_step_patch.apply_react_step_patch(tracer_provider=None)
@@ -162,7 +193,10 @@ def test_react_patch_apply_revert_apply_no_multi_wrap(monkeypatch):
     # original in a bounded number of steps (== 1, since revert restored it).
     depth = 0
     cur = fil_after_2
-    while getattr(cur, "__wrapped__", None) is not None and cur.__wrapped__ is not cur:
+    while (
+        getattr(cur, "__wrapped__", None) is not None
+        and cur.__wrapped__ is not cur
+    ):
         cur = cur.__wrapped__
         depth += 1
         assert depth < 8, "wrapper chain too deep — multi-wrap detected"
@@ -227,7 +261,7 @@ def test_fil_wrapper_returns_coroutine(monkeypatch):
     react_step_patch._applied = False
     react_step_patch._original_fil_get_response = None
     react_step_patch._original_chat_get_response = None
-    react_step_patch._handler = None
+    _reset_extended_handler_singletons()
 
     react_step_patch.apply_react_step_patch(tracer_provider=None)
     assert react_step_patch._applied is True
@@ -243,13 +277,78 @@ def test_fil_wrapper_returns_coroutine(monkeypatch):
     react_step_patch.revert_react_step_patch()
 
 
+def test_fil_wrapper_preserves_streaming_response_type(monkeypatch):
+    """When MAF calls ``get_response(stream=True)``, the wrapped method returns
+    a ResponseStream-like object, not an awaitable. The patch must preserve
+    that contract so ``agent.run(..., stream=True)`` can keep using ``.map``
+    and async iteration.
+    """
+    import asyncio
+    import sys
+    import types
+
+    class _Stream:
+        def __await__(self):
+            async def _done():
+                return self
+
+            return _done().__await__()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        def map(self, *args, **kwargs):
+            return self
+
+        async def get_final_response(self):
+            return None
+
+    stream = _Stream()
+
+    def _fil_get_response(self, *args, **kwargs):
+        return stream
+
+    class _FunctionInvocationLayer:
+        get_response = staticmethod(_fil_get_response)
+
+    class _ChatTelemetryLayer:
+        get_response = staticmethod(lambda *a, **kw: None)
+
+    tools_mod = types.ModuleType("agent_framework._tools")
+    tools_mod.FunctionInvocationLayer = _FunctionInvocationLayer  # type: ignore[attr-defined]
+    obs_mod = types.ModuleType("agent_framework.observability")
+    obs_mod.ChatTelemetryLayer = _ChatTelemetryLayer  # type: ignore[attr-defined]
+    af_mod = types.ModuleType("agent_framework")
+    af_mod._tools = tools_mod  # type: ignore[attr-defined]
+    af_mod.observability = obs_mod  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._tools", tools_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
+
+    react_step_patch.revert_react_step_patch()
+    react_step_patch._applied = False
+    react_step_patch._original_fil_get_response = None
+    react_step_patch._original_chat_get_response = None
+    _reset_extended_handler_singletons()
+
+    react_step_patch.apply_react_step_patch(tracer_provider=None)
+    result = _FunctionInvocationLayer.get_response("self-arg", stream=True)
+    assert result is stream
+    assert not asyncio.iscoroutine(result)
+
+    react_step_patch.revert_react_step_patch()
+
+
 def test_chat_wrapper_outside_loop_passes_through(monkeypatch):
     """[P0] Outside a react-loop scope, the chat wrapper must return the raw
     coroutine produced by the wrapped function (no react_step span). This
     preserves the normal ``await layer.get_response(...)`` path used by MAF
     when ReAct is not active.
     """
-    import asyncio
     import sys
     import types
 
@@ -275,18 +374,71 @@ def test_chat_wrapper_outside_loop_passes_through(monkeypatch):
     monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
 
     react_step_patch.revert_react_step_patch()
+
+
+def test_chat_wrapper_inside_loop_preserves_streaming_response_type(
+    monkeypatch,
+):
+    """Inside the ReAct ContextVar scope, a streaming ResponseStream-like value
+    must still pass through unchanged. ReAct step spans are only added around
+    awaitable non-streaming chat calls.
+    """
+    import asyncio
+    import sys
+    import types
+
+    class _Stream:
+        def __await__(self):
+            async def _done():
+                return self
+
+            return _done().__await__()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        def map(self, *args, **kwargs):
+            return self
+
+        async def get_final_response(self):
+            return None
+
+    stream = _Stream()
+
+    class _FunctionInvocationLayer:
+        get_response = staticmethod(lambda *a, **kw: None)
+
+    class _ChatTelemetryLayer:
+        get_response = staticmethod(lambda *a, **kw: stream)
+
+    tools_mod = types.ModuleType("agent_framework._tools")
+    tools_mod.FunctionInvocationLayer = _FunctionInvocationLayer  # type: ignore[attr-defined]
+    obs_mod = types.ModuleType("agent_framework.observability")
+    obs_mod.ChatTelemetryLayer = _ChatTelemetryLayer  # type: ignore[attr-defined]
+    af_mod = types.ModuleType("agent_framework")
+    af_mod._tools = tools_mod  # type: ignore[attr-defined]
+    af_mod.observability = obs_mod  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._tools", tools_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
+
+    react_step_patch.revert_react_step_patch()
     react_step_patch._applied = False
     react_step_patch._original_fil_get_response = None
     react_step_patch._original_chat_get_response = None
-    react_step_patch._handler = None
+    _reset_extended_handler_singletons()
 
     react_step_patch.apply_react_step_patch(tracer_provider=None)
-
-    coro = _ChatTelemetryLayer.get_response("self-arg")
-    assert asyncio.iscoroutine(coro), (
-        "Chat wrapper must pass through the wrapped coroutine unchanged"
-    )
-    result = asyncio.get_event_loop().run_until_complete(coro)
-    assert result[0] == "chat-ok"
+    token = react_step_patch._maf_react_loop_active.set(True)
+    try:
+        result = _ChatTelemetryLayer.get_response("self-arg", stream=True)
+        assert result is stream
+        assert not asyncio.iscoroutine(result)
+    finally:
+        react_step_patch._maf_react_loop_active.reset(token)
 
     react_step_patch.revert_react_step_patch()

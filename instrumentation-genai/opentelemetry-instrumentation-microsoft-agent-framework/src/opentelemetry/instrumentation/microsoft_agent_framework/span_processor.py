@@ -13,8 +13,7 @@ This processor:
 3. Backfills ``gen_ai.response.time_to_first_token`` from the first streaming
    chunk event timestamp.
 4. Normalizes ``gen_ai.provider.name`` (``azure_openai`` → ``openai``).
-5. Sets ``StatusCode.OK`` on successful spans (MAF only sets ``ERROR``).
-6. Aggregates 6 ARMS gauges (``genai_calls_count`` / ``genai_calls_duration_seconds``
+5. Aggregates 6 ARMS gauges (``genai_calls_count`` / ``genai_calls_duration_seconds``
    / ``genai_calls_error_count`` / ``genai_calls_slow_count`` / ``genai_llm_first_token_seconds``
    / ``genai_llm_usage_tokens``) in-process, exposed via observable gauges.
 
@@ -27,38 +26,39 @@ single-field 4 KB cap from execute.md is enforced in :func:`_safe_dumps`.
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 from collections import defaultdict
 from typing import Any, Dict, Optional, Tuple
 
 from opentelemetry.context import Context
 from opentelemetry.metrics import ObservableGauge, get_meter
-from opentelemetry.sdk.trace import SpanProcessor
-from opentelemetry.sdk.trace import TracerProvider  # noqa: F401  (typing hint)
-from opentelemetry.trace import Span as OtelSpan, Status, StatusCode
+from opentelemetry.sdk.trace import (
+    SpanProcessor,
+    TracerProvider,  # noqa: F401  (typing hint)
+)
+from opentelemetry.trace import Span as OtelSpan
+from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.trace.span import TraceState  # noqa: F401
 from opentelemetry.util.genai.utils import gen_ai_json_dumps
-from opentelemetry.util.types import AttributeValue
 
 from .semantic_conventions import (
     ERROR_TYPE,
-    FRAMEWORK_NAME,
-    GEN_AI_FRAMEWORK,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
-    GEN_AI_REACT_ROUND,
     GEN_AI_REQUEST_MODEL,
+    GEN_AI_RESPONSE_FINISH_REASONS,
     GEN_AI_RESPONSE_MODEL,
     GEN_AI_RESPONSE_TTFT,
     GEN_AI_SPAN_KIND,
     GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS,
-    GEN_AI_USER_TTFT,
-    GenAIOperation,
-    GenAISpanKind,
     MAF_ATTR_RENAME_MAP,
     MAF_SPAN_NAME_PREFIXES,
     PROVIDER_NAME_NORMALIZE,
+    GenAIOperation,
+    GenAISpanKind,
 )
 
 logger = logging.getLogger(__name__)
@@ -244,6 +244,30 @@ def _normalize_provider(value: Any) -> Optional[str]:
     return value
 
 
+def _normalize_finish_reasons(live_span: OtelSpan, readable: Any) -> None:
+    """Normalize JSON-encoded finish reasons to an OTel string array."""
+    value = _attr_value(readable, GEN_AI_RESPONSE_FINISH_REASONS)
+    if not isinstance(value, str):
+        return
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return
+    if isinstance(parsed, list) and all(
+        isinstance(item, str) for item in parsed
+    ):
+        _set_attr(live_span, GEN_AI_RESPONSE_FINISH_REASONS, parsed)
+
+
+def _set_span_kind(live_span: OtelSpan, readable: Any, kind: SpanKind) -> None:
+    """Mutate the SDK span kind before downstream exporters receive the span."""
+    for target in (readable, live_span):
+        try:
+            target._kind = kind  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 _MCP_METHOD_NAME_ATTR = "mcp.method.name"
 
 
@@ -267,6 +291,20 @@ def _is_mcp_span(readable: Any) -> bool:
     except Exception:
         pass
     return False
+
+
+def _is_maf_span(name: str, operation: Optional[str], readable: Any) -> bool:
+    """Return True when the span carries a Microsoft Agent Framework signal."""
+    if operation:
+        return True
+    if _is_mcp_span(readable):
+        return True
+    if name == _REACT_STEP_NAME:
+        return True
+    if any(name.startswith(prefix) for prefix in MAF_SPAN_NAME_PREFIXES):
+        return True
+    attrs = getattr(readable, "attributes", None) or {}
+    return any(key in attrs for key in MAF_ATTR_RENAME_MAP)
 
 
 def _classify_span(
@@ -305,9 +343,15 @@ def _classify_span(
             if name == _REACT_STEP_NAME:
                 op = GenAIOperation.REACT
             else:
-                op = GenAIOperation.WORKFLOW  # safe default for MAF internal spans
+                op = (
+                    GenAIOperation.WORKFLOW
+                )  # safe default for MAF internal spans
 
-    if op == GenAIOperation.CHAT or op == GenAIOperation.TEXT_COMPLETION or op == GenAIOperation.GENERATE_CONTENT:
+    if (
+        op == GenAIOperation.CHAT
+        or op == GenAIOperation.TEXT_COMPLETION
+        or op == GenAIOperation.GENERATE_CONTENT
+    ):
         return GenAISpanKind.LLM, op
     if op == GenAIOperation.EMBEDDINGS:
         return GenAISpanKind.EMBEDDING, op
@@ -391,13 +435,23 @@ class _Counters:
 
     def __init__(self) -> None:
         self.calls_count: Dict[Tuple[str, str], int] = defaultdict(int)
-        self.calls_duration_ns_sum: Dict[Tuple[str, str], int] = defaultdict(int)
+        self.calls_duration_ns_sum: Dict[Tuple[str, str], int] = defaultdict(
+            int
+        )
         self.calls_error_count: Dict[Tuple[str, str], int] = defaultdict(int)
         self.calls_slow_count: Dict[Tuple[str, str], int] = defaultdict(int)
-        self.llm_first_token_ns_sum: Dict[Tuple[str, str], int] = defaultdict(int)
-        self.llm_first_token_count: Dict[Tuple[str, str], int] = defaultdict(int)
-        self.llm_usage_input_tokens: Dict[Tuple[str, str], int] = defaultdict(int)
-        self.llm_usage_output_tokens: Dict[Tuple[str, str], int] = defaultdict(int)
+        self.llm_first_token_ns_sum: Dict[Tuple[str, str], int] = defaultdict(
+            int
+        )
+        self.llm_first_token_count: Dict[Tuple[str, str], int] = defaultdict(
+            int
+        )
+        self.llm_usage_input_tokens: Dict[Tuple[str, str], int] = defaultdict(
+            int
+        )
+        self.llm_usage_output_tokens: Dict[Tuple[str, str], int] = defaultdict(
+            int
+        )
 
 
 class MAFSemanticProcessor(SpanProcessor):
@@ -415,6 +469,7 @@ class MAFSemanticProcessor(SpanProcessor):
         self._slow_threshold_ns = int(slow_threshold_ms) * 1_000_000
         self._capture_sensitive = capture_sensitive_data
         self._counters = _Counters()
+        self._counter_lock = threading.Lock()
         self._meter = None
         self._gauges: list[ObservableGauge] = []
         self._metrics_enabled = metrics_enabled
@@ -434,63 +489,115 @@ class MAFSemanticProcessor(SpanProcessor):
         c = self._counters
 
         def _calls_cb(options):
-            for (model, kind), count in c.calls_count.items():
-                yield _obs(
-                    count,
-                    {"modelName": model or "unknown", "spanKind": kind},
-                )
+            observations = []
+            with self._counter_lock:
+                for (model, kind), count in c.calls_count.items():
+                    observations.append(
+                        _obs(
+                            count,
+                            {
+                                "modelName": model or "unknown",
+                                "spanKind": kind,
+                            },
+                        )
+                    )
+            yield from observations
 
         def _duration_cb(options):
-            for (model, kind), total in c.calls_duration_ns_sum.items():
-                count = max(c.calls_count.get((model, kind), 0), 1)
-                yield _obs(
-                    total / count / 1e9,
-                    {"modelName": model or "unknown", "spanKind": kind},
-                )
+            observations = []
+            with self._counter_lock:
+                for (model, kind), total in c.calls_duration_ns_sum.items():
+                    count = max(c.calls_count.get((model, kind), 0), 1)
+                    observations.append(
+                        _obs(
+                            total / count / 1e9,
+                            {
+                                "modelName": model or "unknown",
+                                "spanKind": kind,
+                            },
+                        )
+                    )
+            yield from observations
 
         def _error_cb(options):
-            for (model, kind), count in c.calls_error_count.items():
-                yield _obs(
-                    count,
-                    {"modelName": model or "unknown", "spanKind": kind},
-                )
+            observations = []
+            with self._counter_lock:
+                for (model, kind), count in c.calls_error_count.items():
+                    observations.append(
+                        _obs(
+                            count,
+                            {
+                                "modelName": model or "unknown",
+                                "spanKind": kind,
+                            },
+                        )
+                    )
+            yield from observations
 
         def _slow_cb(options):
-            for (model, kind), count in c.calls_slow_count.items():
-                yield _obs(
-                    count,
-                    {"modelName": model or "unknown", "spanKind": kind},
-                )
+            observations = []
+            with self._counter_lock:
+                for (model, kind), count in c.calls_slow_count.items():
+                    observations.append(
+                        _obs(
+                            count,
+                            {
+                                "modelName": model or "unknown",
+                                "spanKind": kind,
+                            },
+                        )
+                    )
+            yield from observations
 
         def _ttft_cb(options):
-            for (model, kind), total in c.llm_first_token_ns_sum.items():
-                count = max(c.llm_first_token_count.get((model, kind), 0), 1)
-                yield _obs(
-                    total / count / 1e9,
-                    {"modelName": model or "unknown", "spanKind": kind},
-                )
+            observations = []
+            with self._counter_lock:
+                for (model, kind), total in c.llm_first_token_ns_sum.items():
+                    count = max(
+                        c.llm_first_token_count.get((model, kind), 0), 1
+                    )
+                    observations.append(
+                        _obs(
+                            total / count / 1e9,
+                            {
+                                "modelName": model or "unknown",
+                                "spanKind": kind,
+                            },
+                        )
+                    )
+            yield from observations
 
         def _tokens_input_cb(options):
-            for (model, kind), total in c.llm_usage_input_tokens.items():
-                yield _obs(
-                    total,
-                    {
-                        "modelName": model or "unknown",
-                        "spanKind": kind,
-                        "usageType": "input",
-                    },
-                )
+            observations = []
+            with self._counter_lock:
+                for (model, kind), total in c.llm_usage_input_tokens.items():
+                    observations.append(
+                        _obs(
+                            total,
+                            {
+                                "modelName": model or "unknown",
+                                "spanKind": kind,
+                                "usageType": "input",
+                            },
+                        )
+                    )
+            yield from observations
 
         def _tokens_output_cb(options):
-            for (model, kind), total in c.llm_usage_output_tokens.items():
-                yield _obs(
-                    total,
-                    {
-                        "modelName": model or "unknown",
-                        "spanKind": kind,
-                        "usageType": "output",
-                    },
-                )
+            observations = []
+            with self._counter_lock:
+                for (model, kind), total in c.llm_usage_output_tokens.items():
+                    observations.append(
+                        _obs(
+                            total,
+                            {
+                                "modelName": model or "unknown",
+                                "spanKind": kind,
+                                "usageType": "output",
+                            },
+                        )
+                    )
+            yield from observations
 
         self._gauges.append(
             self._meter.create_observable_gauge(
@@ -579,6 +686,8 @@ class MAFSemanticProcessor(SpanProcessor):
             name = span.name or ""
             existing_op = _attr_value(span, GEN_AI_OPERATION_NAME)
             existing_op = existing_op if isinstance(existing_op, str) else None
+            if not _is_maf_span(name, existing_op, span):
+                return
             span_kind, op_name = _classify_span(name, existing_op, span)
 
             # 1) gen_ai.span.kind (only set if not already present)
@@ -603,27 +712,26 @@ class MAFSemanticProcessor(SpanProcessor):
             }:
                 _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
 
-            # 3) gen_ai.framework (always — ARMS extension)
-            if not _attr_value(span, GEN_AI_FRAMEWORK):
-                _set_attr(live, GEN_AI_FRAMEWORK, FRAMEWORK_NAME)
-
-            # 4) Rename MAF private-prefix attributes
+            # 3) Rename MAF private-prefix attributes
             _rename_maf_attrs(live, span)
 
-            # 5) Normalize provider.name
+            # 4) Normalize provider.name
             provider = _attr_value(span, GEN_AI_PROVIDER_NAME)
             normalized = _normalize_provider(provider)
             if normalized is not None and normalized != provider:
                 _set_attr(live, GEN_AI_PROVIDER_NAME, normalized)
 
+            # 5) Normalize finish reasons written by MAF as a JSON string.
+            _normalize_finish_reasons(live, span)
+
             # 6) TTFT backfill for LLM spans with streaming events
             if span_kind == GenAISpanKind.LLM:
+                _set_span_kind(live, span, SpanKind.CLIENT)
                 ttft = _ttft_from_events(span)
                 if ttft is not None and not _attr_value(
                     span, GEN_AI_RESPONSE_TTFT
                 ):
                     _set_attr(live, GEN_AI_RESPONSE_TTFT, ttft)
-                    _set_attr(live, GEN_AI_USER_TTFT, ttft)
 
             # 7) ENTRY detection: a root invoke_agent span with no parent becomes
             #    the trace entry point.
@@ -640,24 +748,9 @@ class MAFSemanticProcessor(SpanProcessor):
                 # unless an application-level ENTRY span exists.
                 pass
 
-            # 8) Status: set OK on success (MAF only sets ERROR). The SDK
-            #    passes a ``ReadableSpan`` snapshot to ``on_end``; its
-            #    ``_status`` is a separate field from the live Span's, so we
-            #    mutate the ReadableSpan's ``_status`` directly (and the live
-            #    Span's too, for symmetry). The shared ``_attributes`` dict is
-            #    mutated via ``_set_attr`` above and is visible to exporters.
-            current_status = getattr(span, "status", None)
-            status_code = getattr(current_status, "status_code", None)
-            if status_code != StatusCode.ERROR:
-                ok_status = Status(StatusCode.OK)
-                try:
-                    span._status = ok_status  # type: ignore[attr-defined]
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.debug("set_status OK on readable failed: %s", exc)
-                try:
-                    live._status = ok_status  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+            # 8) Status: MAF already sets ERROR on failed spans. Successful
+            # spans are left UNSET, matching the OTel SDK default and Weaver's
+            # validation model.
 
             # 9) error.type already set by MAF via capture_exception; nothing to do.
 
@@ -680,37 +773,48 @@ class MAFSemanticProcessor(SpanProcessor):
                 model = _attr_value(readable, GEN_AI_RESPONSE_MODEL)
             model = model if isinstance(model, str) else "unknown"
             key = (model, span_kind)
-            self._counters.calls_count[key] += 1
+            with self._counter_lock:
+                self._counters.calls_count[key] += 1
 
-            start = getattr(readable, "start_time", None)
-            end = getattr(readable, "end_time", None)
-            if start is not None and end is not None:
-                try:
-                    duration_ns = int(end - start)
-                    self._counters.calls_duration_ns_sum[key] += duration_ns
-                    if duration_ns >= self._slow_threshold_ns:
-                        self._counters.calls_slow_count[key] += 1
-                except (TypeError, ValueError):
-                    pass
+                start = getattr(readable, "start_time", None)
+                end = getattr(readable, "end_time", None)
+                if start is not None and end is not None:
+                    try:
+                        duration_ns = int(end - start)
+                        self._counters.calls_duration_ns_sum[key] += (
+                            duration_ns
+                        )
+                        if duration_ns >= self._slow_threshold_ns:
+                            self._counters.calls_slow_count[key] += 1
+                    except (TypeError, ValueError):
+                        pass
 
-            current_status = getattr(readable, "status", None)
-            status_code = getattr(current_status, "status_code", None)
-            if status_code == StatusCode.ERROR:
-                self._counters.calls_error_count[key] += 1
-            elif _attr_value(readable, ERROR_TYPE):
-                self._counters.calls_error_count[key] += 1
+                current_status = getattr(readable, "status", None)
+                status_code = getattr(current_status, "status_code", None)
+                if status_code == StatusCode.ERROR:
+                    self._counters.calls_error_count[key] += 1
+                elif _attr_value(readable, ERROR_TYPE):
+                    self._counters.calls_error_count[key] += 1
 
-            if span_kind == GenAISpanKind.LLM:
-                ttft = _attr_value(readable, GEN_AI_RESPONSE_TTFT)
-                if isinstance(ttft, (int, float)) and ttft > 0:
-                    self._counters.llm_first_token_ns_sum[key] += int(ttft)
-                    self._counters.llm_first_token_count[key] += 1
-                input_tokens = _attr_value(readable, GEN_AI_USAGE_INPUT_TOKENS)
-                if isinstance(input_tokens, (int, float)):
-                    self._counters.llm_usage_input_tokens[key] += int(input_tokens)
-                output_tokens = _attr_value(readable, GEN_AI_USAGE_OUTPUT_TOKENS)
-                if isinstance(output_tokens, (int, float)):
-                    self._counters.llm_usage_output_tokens[key] += int(output_tokens)
+                if span_kind == GenAISpanKind.LLM:
+                    ttft = _attr_value(readable, GEN_AI_RESPONSE_TTFT)
+                    if isinstance(ttft, (int, float)) and ttft > 0:
+                        self._counters.llm_first_token_ns_sum[key] += int(ttft)
+                        self._counters.llm_first_token_count[key] += 1
+                    input_tokens = _attr_value(
+                        readable, GEN_AI_USAGE_INPUT_TOKENS
+                    )
+                    if isinstance(input_tokens, (int, float)):
+                        self._counters.llm_usage_input_tokens[key] += int(
+                            input_tokens
+                        )
+                    output_tokens = _attr_value(
+                        readable, GEN_AI_USAGE_OUTPUT_TOKENS
+                    )
+                    if isinstance(output_tokens, (int, float)):
+                        self._counters.llm_usage_output_tokens[key] += int(
+                            output_tokens
+                        )
         except Exception as exc:  # pragma: no cover - defensive
             logger.debug("MAF metrics aggregation failed: %s", exc)
 

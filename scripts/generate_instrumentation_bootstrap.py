@@ -84,6 +84,11 @@ packages_to_exclude = [
     # development. This filter will get removed once it is further along in its
     # development lifecycle and ready to be included by default.
     "opentelemetry-instrumentation-claude-agent-sdk",
+    # Microsoft Agent Framework instrumentation is currently excluded because
+    # the official framework package requires a newer OpenTelemetry API than
+    # this workspace line. Users should install agent-framework-core in their
+    # application environment explicitly.
+    "opentelemetry-instrumentation-microsoft-agent-framework",
 ]
 
 # Static version specifiers for instrumentations that are released independently

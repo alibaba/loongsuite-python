@@ -25,6 +25,7 @@ failure of a renamed MAF internal does not break the rest of instrumentation.
 from __future__ import annotations
 
 import contextvars
+import inspect
 import logging
 from typing import Any
 
@@ -54,7 +55,9 @@ def _get_extended_handler(tracer_provider: Any = None) -> Any:
             get_extended_telemetry_handler,
         )
 
-        _handler = get_extended_telemetry_handler(tracer_provider=tracer_provider)
+        _handler = get_extended_telemetry_handler(
+            tracer_provider=tracer_provider
+        )
     return _handler
 
 
@@ -66,8 +69,12 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
 
     try:
         import wrapt  # type: ignore
-        from agent_framework._tools import FunctionInvocationLayer  # type: ignore
-        from agent_framework.observability import ChatTelemetryLayer  # type: ignore
+        from agent_framework._tools import (
+            FunctionInvocationLayer,  # type: ignore
+        )
+        from agent_framework.observability import (
+            ChatTelemetryLayer,  # type: ignore
+        )
     except (ImportError, AttributeError) as exc:
         logger.warning(
             "ReAct step patch skipped: MAF internals not found (%s). "
@@ -91,30 +98,20 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
 
     handler = _get_extended_handler(tracer_provider)
 
-    # The wrappers are *synchronous* functions that return coroutines. We
-    # deliberately avoid ``@wrapt.decorator`` on ``async def`` here:
-    # ``wrapt.wrap_function_wrapper`` installs a ``FunctionWrapper`` whose
-    # ``__call__`` invokes our wrapper and returns whatever it returns. If our
-    # wrapper were ``async def``, the FunctionWrapper would still return a
-    # coroutine — *but* MAF 1.0.0's ``_call_chat_client`` is itself ``async def``
-    # and is called as ``await layer.get_response(...)`` from ``_agents.py``.
-    # Empirically (validation report P0) the async-wrapped variant does NOT
-    # produce a coroutine on ``await`` — the call site raises ``TypeError``.
-    # Returning a coroutine from a sync wrapper is the simplest, robust fix:
-    # the caller's ``await`` resolves the coroutine normally.
-    #
-    # ContextVar tokens are set *inside* the coroutine body (not at wrapper
-    # entry) so set/reset share the same asyncio Task context. asyncio copies
-    # the context when a Task is created; tokens created outside the task
-    # cannot be reset inside it (``ValueError: created in a different
-    # Context``). Doing the ``set`` inside the coroutine guarantees the token
-    # belongs to whichever context ends up running the coroutine.
+    # These MAF methods are synchronous dispatchers: stream=False returns an
+    # awaitable while stream=True returns a ResponseStream. The wrapper must
+    # preserve that public contract, so it only wraps awaitables and passes
+    # streaming ResponseStream values through unchanged.
     def _fil_wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
+        result = wrapped(*args, **kwargs)
+        if _is_response_stream(result) or not inspect.isawaitable(result):
+            return result
+
         async def _scoped():  # type: ignore[no-untyped-def]
             token_active = _maf_react_loop_active.set(True)
             token_counter = _maf_react_step_counter.set(0)
             try:
-                return await wrapped(*args, **kwargs)
+                return await result
             finally:
                 _maf_react_loop_active.reset(token_active)
                 _maf_react_step_counter.reset(token_counter)
@@ -122,12 +119,15 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
         return _scoped()
 
     def _chat_wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyped-def]
-        # Read the loop-active flag synchronously (cheap; copied into the
-        # coroutine below). When False we pass the wrapped coroutine through
-        # unchanged — ``wrapped`` is a coroutine function so calling it returns
-        # a coroutine and the caller awaits it directly.
+        result = wrapped(*args, **kwargs)
+
+        # Read the loop-active flag synchronously. When False we pass the
+        # wrapped result through unchanged. When True, only awaitables are
+        # wrapped; streaming ResponseStream values keep their original type.
         if not _maf_react_loop_active.get():
-            return wrapped(*args, **kwargs)
+            return result
+        if _is_response_stream(result) or not inspect.isawaitable(result):
+            return result
 
         # Pre-compute the round number for this call (read before the
         # coroutine body so subsequent chat calls in the same loop see the
@@ -146,12 +146,12 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
             try:
                 with local_handler.react_step(step_inv) as step:
                     try:
-                        result = await wrapped(*args, **kwargs)
+                        response = await result
                         # Best-effort finish_reason extraction from the response.
-                        finish = _extract_finish_reason(result)
+                        finish = _extract_finish_reason(response)
                         if finish is not None:
                             step.finish_reason = finish
-                        return result
+                        return response
                     except Exception:
                         step.finish_reason = "error"
                         raise
@@ -198,6 +198,19 @@ def _unwrap_to_function(func: Any) -> Any:
     return cur
 
 
+def _is_response_stream(result: Any) -> bool:
+    """Return True for MAF ResponseStream-like values.
+
+    ``ResponseStream`` is awaitable as a convenience, so ``inspect.isawaitable``
+    alone cannot distinguish it from the non-streaming coroutine path.
+    """
+    return (
+        hasattr(result, "map")
+        and hasattr(result, "__aiter__")
+        and hasattr(result, "get_final_response")
+    )
+
+
 def _extract_finish_reason(result: Any) -> Any:
     """Best-effort extraction of a finish_reason string from a ChatResponse."""
     try:
@@ -224,12 +237,18 @@ def revert_react_step_patch() -> None:
     if not _applied:
         return
     try:
-        from agent_framework._tools import FunctionInvocationLayer  # type: ignore
-        from agent_framework.observability import ChatTelemetryLayer  # type: ignore
+        from agent_framework._tools import (
+            FunctionInvocationLayer,  # type: ignore
+        )
+        from agent_framework.observability import (
+            ChatTelemetryLayer,  # type: ignore
+        )
 
         if _original_fil_get_response is not None:
             try:
-                FunctionInvocationLayer.get_response = _original_fil_get_response  # type: ignore[assignment]
+                FunctionInvocationLayer.get_response = (
+                    _original_fil_get_response  # type: ignore[assignment]
+                )
             except Exception:
                 pass
         if _original_chat_get_response is not None:

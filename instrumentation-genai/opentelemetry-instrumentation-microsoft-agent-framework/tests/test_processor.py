@@ -6,7 +6,7 @@ Tests verify that the processor correctly:
 - Reclassifies ``executor.process`` spans by ``executor.type``.
 - Normalizes ``gen_ai.provider.name``.
 - Backfills ``gen_ai.response.time_to_first_token`` from streaming events.
-- Sets ``StatusCode.OK`` on success, preserves ``ERROR`` on failure.
+- Leaves successful spans with the SDK's default status, preserves ``ERROR`` on failure.
 - Aggregates metrics counters.
 """
 
@@ -14,28 +14,26 @@ from __future__ import annotations
 
 import time
 
+from opentelemetry.instrumentation.microsoft_agent_framework.semantic_conventions import (
+    GEN_AI_OPERATION_NAME,
+    GEN_AI_PROVIDER_NAME,
+    GEN_AI_RESPONSE_FINISH_REASONS,
+    GEN_AI_RESPONSE_TTFT,
+    GEN_AI_SPAN_KIND,
+    GEN_AI_USAGE_INPUT_TOKENS,
+    GEN_AI_USAGE_OUTPUT_TOKENS,
+    GenAIOperation,
+    GenAISpanKind,
+)
+from opentelemetry.instrumentation.microsoft_agent_framework.span_processor import (
+    MAFSemanticProcessor,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.trace import Status, StatusCode
-
-from opentelemetry.instrumentation.microsoft_agent_framework.span_processor import (
-    MAFSemanticProcessor,
-)
-from opentelemetry.instrumentation.microsoft_agent_framework.semantic_conventions import (
-    GEN_AI_FRAMEWORK,
-    GEN_AI_OPERATION_NAME,
-    GEN_AI_PROVIDER_NAME,
-    GEN_AI_RESPONSE_TTFT,
-    GEN_AI_SPAN_KIND,
-    GEN_AI_USAGE_INPUT_TOKENS,
-    GEN_AI_USAGE_OUTPUT_TOKENS,
-    GEN_AI_USER_TTFT,
-    GenAIOperation,
-    GenAISpanKind,
-)
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 
 def _setup():
@@ -43,7 +41,9 @@ def _setup():
     tp = TracerProvider()
     exporter = InMemorySpanExporter()
     processor = MAFSemanticProcessor(
-        meter_provider=None, metrics_enabled=False, capture_sensitive_data=False
+        meter_provider=None,
+        metrics_enabled=False,
+        capture_sensitive_data=False,
     )
     tp.add_span_processor(processor)
     tp.add_span_processor(SimpleSpanProcessor(exporter))
@@ -69,8 +69,8 @@ def test_llm_span_gets_llm_kind_and_chat_operation():
     s = spans[0]
     assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.LLM
     assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.CHAT
-    assert s.attributes.get(GEN_AI_FRAMEWORK) == "microsoft-agent-framework"
-    assert s.status.status_code == StatusCode.OK
+    assert s.kind == SpanKind.CLIENT
+    assert s.status.status_code == StatusCode.UNSET
 
 
 def test_tool_span_gets_tool_kind():
@@ -84,7 +84,9 @@ def test_tool_span_gets_tool_kind():
 
 def test_embedding_span():
     tp, tracer, exporter, _ = _setup()
-    with tracer.start_as_current_span("embeddings text-embedding-3-small") as span:
+    with tracer.start_as_current_span(
+        "embeddings text-embedding-3-small"
+    ) as span:
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.EMBEDDINGS)
         span.set_attribute("gen_ai.request.model", "text-embedding-3-small")
     spans = _flush(exporter)
@@ -139,7 +141,9 @@ def test_executor_process_agent_executor_becomes_agent():
     spans = _flush(exporter)
     s = spans[0]
     assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.AGENT
-    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.INVOKE_AGENT
+    assert (
+        s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.INVOKE_AGENT
+    )
 
 
 def test_executor_process_unknown_executor_stays_chain():
@@ -188,9 +192,16 @@ def test_ttft_backfill_from_first_event():
     spans = _flush(exporter)
     s = spans[0]
     ttft = s.attributes.get(GEN_AI_RESPONSE_TTFT)
-    user_ttft = s.attributes.get(GEN_AI_USER_TTFT)
     assert ttft is not None and ttft > 0
-    assert user_ttft == ttft
+
+
+def test_finish_reasons_json_string_normalized_to_array():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
+        span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, '["stop"]')
+    spans = _flush(exporter)
+    assert spans[0].attributes.get(GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
 
 
 def _setup_with_metrics():
@@ -237,13 +248,23 @@ def test_metrics_counters_incremented_on_llm_span():
         span.set_attribute(GEN_AI_USAGE_OUTPUT_TOKENS, 7)
     _ = _flush(exporter)
     assert processor._counters.calls_count[("gpt-4o", GenAISpanKind.LLM)] == 1
-    assert processor._counters.llm_usage_input_tokens[("gpt-4o", GenAISpanKind.LLM)] == 5
-    assert processor._counters.llm_usage_output_tokens[("gpt-4o", GenAISpanKind.LLM)] == 7
+    assert (
+        processor._counters.llm_usage_input_tokens[
+            ("gpt-4o", GenAISpanKind.LLM)
+        ]
+        == 5
+    )
+    assert (
+        processor._counters.llm_usage_output_tokens[
+            ("gpt-4o", GenAISpanKind.LLM)
+        ]
+        == 7
+    )
 
 
 def test_react_step_span_classification():
     tp, tracer, exporter, _ = _setup()
-    with tracer.start_as_current_span("react step") as span:
+    with tracer.start_as_current_span("react step"):
         # When emitted by our react_step_patch, the handler sets
         # gen_ai.operation.name=react and gen_ai.span.kind=STEP itself. But
         # if the processor sees a "react step" name without op set, it should
@@ -260,13 +281,41 @@ def test_uninstrument_releases_processor():
         MicrosoftAgentFrameworkInstrumentor,
     )
 
-    # Without MAF installed we just exercise that _uninstrument does not raise
-    # and clears state. We construct the instrumentor and call _uninstrument
-    # without _instrument to ensure idempotent teardown.
     inst = MicrosoftAgentFrameworkInstrumentor()
     inst._uninstrument()
     assert inst._processor is None
     assert inst._react_applied is False
+
+
+def test_uninstrument_removes_registered_processor_from_provider():
+    from opentelemetry.instrumentation.microsoft_agent_framework import (
+        MicrosoftAgentFrameworkInstrumentor,
+    )
+
+    tp = TracerProvider()
+    inst = MicrosoftAgentFrameworkInstrumentor()
+    inst._instrument(tracer_provider=tp, react_step_enabled=False)
+    processor = inst._processor
+    assert processor is not None
+    inst._uninstrument()
+    asp = getattr(tp, "_active_span_processor", None)
+    procs = (
+        getattr(asp, "_span_processors", None)
+        if asp is not None
+        else getattr(tp, "_span_processors", None)
+    )
+    assert procs is not None and processor not in procs
+
+
+def test_non_maf_span_is_left_untouched():
+    tp, tracer, exporter, processor = _setup_with_metrics()
+    with tracer.start_as_current_span("http request") as span:
+        span.set_attribute("http.method", "GET")
+    spans = _flush(exporter)
+    s = spans[0]
+    assert GEN_AI_SPAN_KIND not in s.attributes
+    assert GEN_AI_OPERATION_NAME not in s.attributes
+    assert not processor._counters.calls_count
 
 
 def test_maf_dict_attribute_is_serialized_via_gen_ai_json_dumps():
@@ -350,7 +399,9 @@ def test_mcp_span_via_client_kind_and_mcp_attr_fallback():
     from opentelemetry.trace import SpanKind
 
     tp, tracer, exporter, _ = _setup()
-    with tracer.start_as_current_span("initialize", kind=SpanKind.CLIENT) as span:
+    with tracer.start_as_current_span(
+        "initialize", kind=SpanKind.CLIENT
+    ) as span:
         span.set_attribute("mcp.protocol.version", "2024-11-05")
     spans = _flush(exporter)
     s = spans[0]
@@ -364,11 +415,14 @@ def test_non_mcp_client_span_is_not_misclassified_as_mcp():
     from opentelemetry.trace import SpanKind
 
     tp, tracer, exporter, _ = _setup()
-    with tracer.start_as_current_span("http request", kind=SpanKind.CLIENT) as span:
+    with tracer.start_as_current_span(
+        "http request", kind=SpanKind.CLIENT
+    ) as span:
         span.set_attribute("http.method", "GET")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) != GenAISpanKind.CLIENT
+    assert GEN_AI_SPAN_KIND not in s.attributes
+    assert GEN_AI_OPERATION_NAME not in s.attributes
 
 
 def test_mcp_span_op_name_overridden_to_mcp_when_maf_writes_execute_tool():
@@ -410,9 +464,9 @@ def test_provider_normalization_microsoft_agent_framework_to_openai():
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
         span.set_attribute(GEN_AI_PROVIDER_NAME, "microsoft.agent_framework")
     spans = _flush(exporter)
-    assert (
-        spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai"
-    ), "AGENT provider.name should normalize from microsoft.agent_framework to openai"
+    assert spans[0].attributes.get(GEN_AI_PROVIDER_NAME) == "openai", (
+        "AGENT provider.name should normalize from microsoft.agent_framework to openai"
+    )
 
 
 def test_provider_normalization_case_insensitive_variant():
@@ -444,7 +498,7 @@ def test_instrument_prepends_processor_before_existing_exporters():
     """[P5] When exporters were registered before ``instrument()`` (the common
     bootstrap order: provider → exporter processor → instrument()), the MAF
     semantic processor must run FIRST in the pipeline so its ``on_end``
-    enrichments (gen_ai.span.kind, operation.name, framework, rename map,
+    enrichments (gen_ai.span.kind, operation.name, rename map,
     provider normalization) are visible to those exporters. Without the
     prepend, an exporter that captured the span before our ``on_end`` would
     ship an un-enriched span.

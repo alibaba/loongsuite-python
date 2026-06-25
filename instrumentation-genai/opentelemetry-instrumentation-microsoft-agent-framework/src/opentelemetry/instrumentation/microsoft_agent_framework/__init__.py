@@ -49,6 +49,7 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
     def __init__(self) -> None:
         super().__init__()
         self._processor: Optional[MAFSemanticProcessor] = None
+        self._tracer_provider: Any = None
         self._react_applied: bool = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -64,7 +65,9 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         if self._processor is not None:
             return
 
-        tracer_provider = kwargs.get("tracer_provider") or get_tracer_provider()
+        tracer_provider = (
+            kwargs.get("tracer_provider") or get_tracer_provider()
+        )
         meter_provider = kwargs.get("meter_provider")
 
         # 1) Enable MAF's built-in OTel instrumentation. ``force=True`` clears
@@ -74,7 +77,8 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         #    PII/data redaction by default, per ARMS privacy guardrails).
         sensitive = bool(
             kwargs.get(
-                "enable_sensitive_data", is_sensitive_data_enabled(default=False)
+                "enable_sensitive_data",
+                is_sensitive_data_enabled(default=False),
             )
         )
         try:
@@ -127,7 +131,9 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
                 )
             # ``span_processors`` may be a tuple (current SDK) or a list.
             if isinstance(span_processors, tuple):
-                others = tuple(p for p in span_processors if p is not processor)
+                others = tuple(
+                    p for p in span_processors if p is not processor
+                )
                 new_procs = (processor,) + others
                 if asp is not None:
                     asp._span_processors = new_procs  # type: ignore[attr-defined]
@@ -141,10 +147,13 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
             logger.debug("prepend processor failed: %s", exc)
 
         self._processor = processor
+        self._tracer_provider = tracer_provider
 
         # 3) Optional ReAct step patch (default OFF).
         react_enabled = bool(
-            kwargs.get("react_step_enabled", is_react_step_enabled(default=False))
+            kwargs.get(
+                "react_step_enabled", is_react_step_enabled(default=False)
+            )
         )
         if react_enabled:
             try:
@@ -159,12 +168,35 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
             self._react_applied = False
         if self._processor is not None:
             try:
+                if self._tracer_provider is not None:
+                    _remove_span_processor(
+                        self._tracer_provider, self._processor
+                    )
                 self._processor.shutdown()
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug("processor shutdown error: %s", exc)
             self._processor = None
+            self._tracer_provider = None
 
         # We intentionally do NOT call ``disable_instrumentation()`` — that
         # would set MAF's sticky ``_user_disabled`` flag and prevent the user
         # from re-enabling later without ``force=True``. Respects the user's
         # own MAF observability state.
+
+
+def _remove_span_processor(tracer_provider: Any, processor: Any) -> None:
+    """Best-effort removal of the processor this instrumentor registered."""
+    asp = getattr(tracer_provider, "_active_span_processor", None)
+    span_processors = (
+        getattr(asp, "_span_processors", None)
+        if asp is not None
+        else getattr(tracer_provider, "_span_processors", None)
+    )
+    if isinstance(span_processors, tuple):
+        new_procs = tuple(p for p in span_processors if p is not processor)
+        if asp is not None:
+            asp._span_processors = new_procs  # type: ignore[attr-defined]
+        else:
+            tracer_provider._span_processors = new_procs  # type: ignore[attr-defined]
+    elif isinstance(span_processors, list):
+        span_processors[:] = [p for p in span_processors if p is not processor]
