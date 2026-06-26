@@ -1,8 +1,8 @@
-=====================================================
-Microsoft Agent Framework Instrumentation
-=====================================================
+========================================================
+LoongSuite Microsoft Agent Framework Instrumentation
+========================================================
 
-This package provides OpenTelemetry instrumentation for
+This package provides LoongSuite instrumentation for
 `Microsoft Agent Framework <https://github.com/microsoft/agent-framework>`_
 (``agent-framework-core``).
 
@@ -23,7 +23,7 @@ described in ``llm-dev/microsoft-agent-framework/investigate/execute.md``:
 
 Truncation / PII helpers are reused from ``opentelemetry.util.genai.utils``
 (``gen_ai_json_dumps``), aligned with
-``instrumentation-genai/opentelemetry-instrumentation-openai-agents-v2/.../span_processor.py``.
+the OpenAI Agents v2 GenAI instrumentation.
 
 Installation
 ============
@@ -33,13 +33,15 @@ the target application environment:
 
 .. code-block:: console
 
-   pip install opentelemetry-instrumentation-microsoft-agent-framework
-   pip install agent-framework-core
+   pip install "loongsuite-instrumentation-microsoft-agent-framework[instruments]"
 
-The framework dependency is intentionally not included in the package's
-``instruments`` extra because current ``agent-framework-core`` releases require
-``opentelemetry-api>=1.39`` while this LoongSuite workspace still builds on the
-``1.37`` OpenTelemetry API line.
+To keep the framework dependency controlled by the application, install the
+instrumentation package and framework separately:
+
+.. code-block:: console
+
+   pip install loongsuite-instrumentation-microsoft-agent-framework
+   pip install agent-framework-core
 
 Configuration
 =============

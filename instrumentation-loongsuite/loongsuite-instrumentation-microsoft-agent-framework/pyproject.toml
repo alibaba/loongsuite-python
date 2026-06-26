@@ -3,14 +3,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "opentelemetry-instrumentation-microsoft-agent-framework"
+name = "loongsuite-instrumentation-microsoft-agent-framework"
 dynamic = ["version"]
-description = "OpenTelemetry instrumentation for Microsoft Agent Framework (agent-framework-core)"
+description = "LoongSuite Microsoft Agent Framework instrumentation"
 readme = "README.rst"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-  { name = "ARMS LoongSuite Authors" },
+  { name = "LoongSuite Python Agent Authors", email = "caishipeng.csp@alibaba-inc.com" },
+  { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
@@ -24,22 +25,24 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-  "opentelemetry-api >= 1.37",
+  "opentelemetry-api ~= 1.37",
   "opentelemetry-instrumentation >= 0.58b0",
   "opentelemetry-semantic-conventions >= 0.58b0",
   "opentelemetry-util-genai",
-  "wrapt >= 1.14",
+  "wrapt >= 1.14, < 2.0.0",
 ]
 
 [project.optional-dependencies]
-instruments = []
+instruments = [
+  "agent-framework-core >= 1.0.0",
+]
 
 [project.entry-points.opentelemetry_instrumentor]
 microsoft_agent_framework = "opentelemetry.instrumentation.microsoft_agent_framework:MicrosoftAgentFrameworkInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-microsoft-agent-framework"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/microsoft_agent_framework/version.py"
@@ -53,3 +56,6 @@ include = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentelemetry"]
+
+[tool.loongsuite.readme]
+supported-packages = ["agent-framework-core >= 1.0.0"]

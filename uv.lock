@@ -46,7 +46,6 @@ members = [
     "opentelemetry-instrumentation-kafka-python",
     "opentelemetry-instrumentation-langchain",
     "opentelemetry-instrumentation-logging",
-    "opentelemetry-instrumentation-microsoft-agent-framework",
     "opentelemetry-instrumentation-mysql",
     "opentelemetry-instrumentation-mysqlclient",
     "opentelemetry-instrumentation-openai-agents-v2",
@@ -3134,27 +3133,6 @@ dependencies = [
 requires-dist = [
     { name = "opentelemetry-api", git = "https://github.com/open-telemetry/opentelemetry-python?subdirectory=opentelemetry-api&branch=main" },
     { name = "opentelemetry-instrumentation", editable = "opentelemetry-instrumentation" },
-]
-provides-extras = ["instruments"]
-
-[[package]]
-name = "opentelemetry-instrumentation-microsoft-agent-framework"
-source = { editable = "instrumentation-genai/opentelemetry-instrumentation-microsoft-agent-framework" }
-dependencies = [
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-instrumentation" },
-    { name = "opentelemetry-semantic-conventions" },
-    { name = "opentelemetry-util-genai" },
-    { name = "wrapt" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "opentelemetry-api", git = "https://github.com/open-telemetry/opentelemetry-python?subdirectory=opentelemetry-api&branch=main" },
-    { name = "opentelemetry-instrumentation", editable = "opentelemetry-instrumentation" },
-    { name = "opentelemetry-semantic-conventions", git = "https://github.com/open-telemetry/opentelemetry-python?subdirectory=opentelemetry-semantic-conventions&branch=main" },
-    { name = "opentelemetry-util-genai", editable = "util/opentelemetry-util-genai" },
-    { name = "wrapt", specifier = ">=1.14" },
 ]
 provides-extras = ["instruments"]
 

@@ -11,3 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add Microsoft Agent Framework instrumentation aligned with LoongSuite GenAI semantic conventions.
   ([#229](https://github.com/alibaba/loongsuite-python/pull/229))
+
+## Version 0.6.0 (2026-06-03)
+
+There are no changelog entries for this release.
