@@ -201,6 +201,8 @@ ignore = [
 "instrumentation-loongsuite/loongsuite-instrumentation-widesearch/tests/**/*.py" = ["E402", "F811"]
 "instrumentation-loongsuite/loongsuite-instrumentation-wildtool/**/*.py" = ["PLC0415"]
 "instrumentation-loongsuite/loongsuite-instrumentation-wildtool/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-mempalace/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-mempalace/tests/**/*.py" = ["E402", "F811"]
 
 [tool.ruff.lint.isort]
 detect-same-package = false # to not consider instrumentation packages as first-party
