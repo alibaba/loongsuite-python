@@ -21,9 +21,11 @@ MAF already emits OTel spans via its telemetry layers (``ChatTelemetryLayer``,
 This processor:
 
 1. Injects ``gen_ai.span.kind`` (MAF does not set it).
-2. Renames MAF private-prefix attributes (``workflow.id`` → ``gen_ai.workflow.id``,
-   ``executor.id`` → ``gen_ai.task.name`` …) per the local mapping table in
-   :mod:`semantic_conventions`.
+2. Copies registry-defined MAF private-prefix attributes
+   (``workflow.name`` → ``gen_ai.workflow.name``) per the local mapping table in
+   :mod:`semantic_conventions`; other MAF private attributes are kept under
+   their original names to avoid extending the ``gen_ai`` namespace with
+   unregistered keys.
 3. Backfills ``gen_ai.response.time_to_first_token`` from the first streaming
    chunk event timestamp.
 4. Normalizes ``gen_ai.provider.name`` (``azure_openai`` → ``openai``).
@@ -91,6 +93,7 @@ _MESSAGE_SEND = "message.send"
 _EXECUTOR_PROCESS = "executor.process"
 _EDGE_GROUP_PROCESS = "edge_group.process"
 _LIVE_SPAN_MAX_AGE_NS = 60 * 1_000_000_000
+_GEN_AI_TOOL_NAME = "gen_ai.tool.name"
 
 
 def _attr_value(span: Any, key: str) -> Any:
@@ -230,6 +233,18 @@ def _rename_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
     return renamed
 
 
+def _copy_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
+    """Copy MAF-private attributes to canonical keys without removing sources."""
+    copied: list[str] = []
+    for old_key, new_key in MAF_ATTR_RENAME_MAP.items():
+        value = _attr_value(readable, old_key)
+        if value is None:
+            continue
+        _set_attr(live_span, new_key, value)
+        copied.append(new_key)
+    return copied
+
+
 def _normalize_provider(value: Any) -> Optional[str]:
     """Normalize ``gen_ai.provider.name`` to the ARMS canonical value.
 
@@ -308,6 +323,17 @@ def _is_mcp_span(readable: Any) -> bool:
     return False
 
 
+def _mcp_tool_name(name: str, readable: Any) -> Optional[str]:
+    """Return a low-cardinality tool name for an MCP client span."""
+    method = _attr_value(readable, _MCP_METHOD_NAME_ATTR)
+    method = method if isinstance(method, str) else None
+    if method and name.startswith(f"{method} "):
+        target = name[len(method) + 1 :].strip()
+        if target:
+            return target
+    return method or (name.strip() if name else None)
+
+
 def _is_maf_span(name: str, operation: Optional[str], readable: Any) -> bool:
     """Return True when the span carries a Microsoft Agent Framework signal."""
     if operation:
@@ -344,7 +370,7 @@ def _classify_span(
     # write ``gen_ai.operation.name`` for MCP spans. We check the attribute
     # directly (cheap; happens once per span on_end).
     if _is_mcp_span(readable):
-        return GenAISpanKind.CLIENT, GenAIOperation.MCP
+        return GenAISpanKind.MCP, GenAIOperation.MCP
 
     if operation:
         op = operation
@@ -380,23 +406,20 @@ def _classify_span(
         return GenAISpanKind.STEP, op
     if op == GenAIOperation.RETRIEVAL:
         return GenAISpanKind.RETRIEVER, op
-    if op == GenAIOperation.WORKFLOW or op == GenAIOperation.TASK:
-        # ``executor.process`` splits by ``executor.type``:
-        #   FunctionExecutor  -> TASK
-        #   AgentExecutor     -> AGENT (kind) + invoke_agent (op)
-        #   anything else     -> CHAIN
+    if op == GenAIOperation.WORKFLOW:
+        # ``executor.process`` splits by ``executor.type`` when it represents
+        # an agent invocation. Other executor/message/edge spans remain part of
+        # the workflow operation.
         if name.startswith(_EXECUTOR_PROCESS):
             executor_type = _attr_value(readable, "executor.type")
             if isinstance(executor_type, str):
                 et = executor_type.lower()
-                if "function" in et:
-                    return GenAISpanKind.TASK, GenAIOperation.TASK
                 if "agent" in et:
                     return GenAISpanKind.AGENT, GenAIOperation.INVOKE_AGENT
-        return GenAISpanKind.CHAIN, op
+        return GenAISpanKind.WORKFLOW, op
     if op == GenAIOperation.MCP:
-        return GenAISpanKind.CLIENT, op
-    return GenAISpanKind.CHAIN, op
+        return GenAISpanKind.MCP, op
+    return GenAISpanKind.WORKFLOW, op
 
 
 def _ttft_from_events(readable: Any) -> Optional[int]:
@@ -701,6 +724,7 @@ class MAFSemanticProcessor(SpanProcessor):
         with self._live_span_lock:
             self._live_spans[key] = span
             self._span_parents[key] = parent_id
+        self._apply_semantic_attributes(span, span, remove_private_attrs=True)
 
     def on_end(self, span: Any) -> None:
         """Enrich a just-ended MAF span with ARMS GenAI semantic conventions."""
@@ -720,50 +744,15 @@ class MAFSemanticProcessor(SpanProcessor):
         # ``_set_attr``). Same approach as the OpenInference processor.
 
         try:
-            name = span.name or ""
-            existing_op = _attr_value(span, GEN_AI_OPERATION_NAME)
-            existing_op = existing_op if isinstance(existing_op, str) else None
-            if not _is_maf_span(name, existing_op, span):
+            classified = self._apply_semantic_attributes(
+                live, span, remove_private_attrs=True
+            )
+            if classified is None:
                 return
-            span_kind, op_name = _classify_span(name, existing_op, span)
+            span_kind, op_name = classified
 
-            # 1) gen_ai.span.kind (only set if not already present)
-            if not _attr_value(span, GEN_AI_SPAN_KIND):
-                _set_attr(live, GEN_AI_SPAN_KIND, span_kind)
-
-            # 2) gen_ai.operation.name (set if missing or freshly derived for
-            #    workflow spans where MAF does not write it). For spans MAF
-            #    mislabels (e.g. MCP ``tools/call`` written by MAF as
-            #    ``execute_tool`` — see ``create_mcp_client_span`` at
-            #    ``observability.py:2101``) we also override when our
-            #    classification disagrees, provided the span is one of the
-            #    kinds whose operation.name we own (TASK/AGENT reclassification
-            #    of ``executor.process``, plus CLIENT for MCP — MAF writes the
-            #    LLM's ``execute_tool`` value onto MCP inner spans).
-            if not existing_op:
-                _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
-            elif existing_op != op_name and span_kind in {
-                GenAISpanKind.TASK,
-                GenAISpanKind.AGENT,
-                GenAISpanKind.CLIENT,
-            }:
-                _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
-
-            # 3) Rename MAF private-prefix attributes
-            _rename_maf_attrs(live, span)
-
-            # 4) Normalize provider.name
-            provider = _attr_value(span, GEN_AI_PROVIDER_NAME)
-            normalized = _normalize_provider(provider)
-            if normalized is not None and normalized != provider:
-                _set_attr(live, GEN_AI_PROVIDER_NAME, normalized)
-
-            # 5) Normalize finish reasons written by MAF as a JSON string.
-            _normalize_finish_reasons(live, span)
-
-            # 6) TTFT backfill for LLM spans with streaming events
+            # TTFT backfill for LLM spans with streaming events
             if span_kind == GenAISpanKind.LLM:
-                _set_span_kind(live, span, SpanKind.CLIENT)
                 ttft = _ttft_from_events(span)
                 if ttft is not None and not _attr_value(
                     span, GEN_AI_RESPONSE_TTFT
@@ -800,6 +789,87 @@ class MAFSemanticProcessor(SpanProcessor):
         finally:
             # Span has already been ended by the SDK; nothing to do here.
             pass
+
+    def _apply_semantic_attributes(
+        self,
+        live: OtelSpan,
+        readable: Any,
+        *,
+        remove_private_attrs: bool,
+    ) -> Optional[Tuple[str, str]]:
+        """Write GenAI semantic attributes while the span is still exportable.
+
+        ``on_start`` runs before any downstream exporter receives a completed
+        span, so workflow spans must be normalized there. ``on_end`` keeps the
+        same logic as a fallback for attributes written after span creation.
+        """
+        name = getattr(readable, "name", "") or getattr(live, "name", "") or ""
+        existing_op = _attr_value(readable, GEN_AI_OPERATION_NAME)
+        existing_op = existing_op if isinstance(existing_op, str) else None
+        if not _is_maf_span(name, existing_op, readable):
+            return None
+
+        span_kind, op_name = _classify_span(name, existing_op, readable)
+        existing_kind = _attr_value(readable, GEN_AI_SPAN_KIND)
+        if (
+            isinstance(existing_kind, str)
+            and existing_kind
+            and span_kind == GenAISpanKind.WORKFLOW
+            and existing_kind != GenAISpanKind.WORKFLOW
+        ):
+            span_kind = existing_kind
+
+        # 1) gen_ai.span.kind (only set if not already present)
+        if not existing_kind or (
+            existing_kind != span_kind
+            and existing_kind == GenAISpanKind.WORKFLOW
+            and span_kind != GenAISpanKind.WORKFLOW
+        ):
+            _set_attr(live, GEN_AI_SPAN_KIND, span_kind)
+
+        # 2) gen_ai.operation.name (set if missing or freshly derived for
+        #    workflow spans where MAF does not write it). For spans MAF
+        #    mislabels (e.g. MCP ``tools/call`` written by MAF as
+        #    ``execute_tool`` — see ``create_mcp_client_span`` at
+        #    ``observability.py:2101``) we also override when our
+        #    classification disagrees, provided the span is one of the
+        #    kinds whose operation.name we own (AGENT reclassification of
+        #    ``executor.process``, plus MCP logical spans).
+        if not existing_op:
+            _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
+        elif existing_op != op_name and span_kind in {
+            GenAISpanKind.AGENT,
+            GenAISpanKind.MCP,
+        }:
+            _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
+
+        if span_kind == GenAISpanKind.MCP and not _attr_value(
+            readable, _GEN_AI_TOOL_NAME
+        ):
+            tool_name = _mcp_tool_name(name, readable)
+            if tool_name:
+                _set_attr(live, _GEN_AI_TOOL_NAME, tool_name)
+
+        # 3) Rename MAF private-prefix attributes
+        if remove_private_attrs:
+            _rename_maf_attrs(live, readable)
+        else:
+            _copy_maf_attrs(live, readable)
+
+        # 4) Normalize provider.name
+        provider = _attr_value(readable, GEN_AI_PROVIDER_NAME)
+        normalized = _normalize_provider(provider)
+        if normalized is not None and normalized != provider:
+            _set_attr(live, GEN_AI_PROVIDER_NAME, normalized)
+
+        # 5) Normalize finish reasons written by MAF as a JSON string.
+        _normalize_finish_reasons(live, readable)
+
+        # 6) LLM/embedding spans should use CLIENT OTel span kind.
+        if span_kind == GenAISpanKind.LLM:
+            _set_span_kind(live, readable, SpanKind.CLIENT)
+
+        return span_kind, op_name
 
     def _aggregate_metrics(
         self, readable: Any, span_kind: str, op_name: str

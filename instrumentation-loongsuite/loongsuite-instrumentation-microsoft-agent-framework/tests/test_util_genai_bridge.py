@@ -314,8 +314,9 @@ def test_mcp_span_is_seeded_before_export(monkeypatch):
         util_genai_bridge.revert_util_genai_bridge()
 
     span = exporter.get_finished_spans()[0]
-    assert span.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CLIENT
+    assert span.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
     assert span.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+    assert span.attributes.get("gen_ai.tool.name") == "city_score"
 
 
 def test_apply_revert_apply_keeps_single_wrapper_layer(monkeypatch):

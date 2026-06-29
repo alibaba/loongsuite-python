@@ -80,6 +80,7 @@ from .span_processor import (
     _classify_span,
     _is_exception_event,
     _is_maf_span,
+    _mcp_tool_name,
     _normalize_provider,
     _ttft_from_events,
 )
@@ -392,7 +393,8 @@ def _wrap_create_mcp_client_span(
     ) -> Generator[OtelSpan, Any, Any]:
         bridge_attrs = dict(attributes or {})
         bridge_attrs[GEN_AI_OPERATION_NAME] = GenAIOperation.MCP
-        bridge_attrs[GEN_AI_SPAN_KIND] = GenAISpanKind.CLIENT
+        bridge_attrs[GEN_AI_SPAN_KIND] = GenAISpanKind.MCP
+        bridge_attrs.setdefault("gen_ai.tool.name", target or method_name)
         with original(method_name, target, bridge_attrs) as span:
             yield span
 
@@ -521,7 +523,7 @@ def _prepare_start_attributes(attributes: Mapping[Any, Any]) -> dict[str, Any]:
         return bridge_attrs
     if not _mapping_value(bridge_attrs, GEN_AI_OPERATION_NAME):
         bridge_attrs[GEN_AI_OPERATION_NAME] = classified_op
-    elif classified_op == GenAIOperation.MCP:
+    elif span_kind == GenAISpanKind.MCP:
         bridge_attrs[GEN_AI_OPERATION_NAME] = classified_op
     if not _mapping_value(bridge_attrs, GEN_AI_SPAN_KIND):
         bridge_attrs[GEN_AI_SPAN_KIND] = span_kind
@@ -583,9 +585,15 @@ def _set_common_live_attributes(
     if not current_op or (
         current_op != op_name
         and span_kind
-        in {GenAISpanKind.AGENT, GenAISpanKind.TASK, GenAISpanKind.CLIENT}
+        in {GenAISpanKind.AGENT, GenAISpanKind.MCP}
     ):
         span.set_attribute(GEN_AI_OPERATION_NAME, op_name)
+    if span_kind == GenAISpanKind.MCP and not _attr_value(
+        span, "gen_ai.tool.name"
+    ):
+        tool_name = _mcp_tool_name(getattr(span, "name", "") or "", span)
+        if tool_name:
+            span.set_attribute("gen_ai.tool.name", tool_name)
     provider = _normalize_provider(_attr_value(span, GEN_AI_PROVIDER_NAME))
     if provider is not None:
         span.set_attribute(GEN_AI_PROVIDER_NAME, provider)

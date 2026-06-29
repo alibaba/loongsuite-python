@@ -34,13 +34,12 @@ class GenAISpanKind:
     LLM = "LLM"
     TOOL = "TOOL"
     EMBEDDING = "EMBEDDING"
-    CHAIN = "CHAIN"
-    TASK = "TASK"
+    WORKFLOW = "WORKFLOW"
     STEP = "STEP"
     ENTRY = "ENTRY"
     RETRIEVER = "RETRIEVER"
     RERANKER = "RERANKER"
-    CLIENT = "CLIENT"
+    MCP = "MCP"
 
 
 class GenAIOperation:
@@ -54,10 +53,9 @@ class GenAIOperation:
     CREATE_AGENT = "create_agent"
     INVOKE_AGENT = "invoke_agent"
     RETRIEVAL = "retrieval"
-    WORKFLOW = "workflow"
-    TASK = "task"
+    WORKFLOW = "invoke_workflow"
     REACT = "react"
-    MCP = "mcp"
+    MCP = EXECUTE_TOOL
 
 
 # MAF span-name prefixes (from observability.py OtelAttr) — used to classify a
@@ -89,25 +87,10 @@ MAF_SPAN_NAME_PREFIXES: Final[dict[str, str]] = {
 # if MAF later writes the canonical key directly, the rename becomes a no-op
 # because the source key won't be present.
 MAF_ATTR_RENAME_MAP: Final[dict[str, str]] = {
-    # Workflow / chain attributes (observability.py:247-281)
-    "workflow.id": "gen_ai.workflow.id",
+    # Workflow attributes. The LoongSuite registry currently defines only
+    # ``gen_ai.workflow.name``; keep other MAF-private keys under their original
+    # names instead of extending the ``gen_ai`` namespace with unregistered keys.
     "workflow.name": "gen_ai.workflow.name",
-    "workflow.description": "gen_ai.workflow.description",
-    "workflow.definition": "gen_ai.workflow.definition",
-    "workflow_builder.name": "gen_ai.workflow.builder.name",
-    "workflow_builder.description": "gen_ai.workflow.builder.description",
-    # Executor / task attributes (observability.py:266-272)
-    "executor.id": "gen_ai.task.name",
-    "executor.type": "gen_ai.task.type",
-    # Edge group attributes (observability.py:270-274)
-    "edge_group.type": "gen_ai.edge_group.type",
-    "edge_group.id": "gen_ai.edge_group.id",
-    # Message attributes (observability.py:276-281)
-    "message.source_id": "gen_ai.message.source_id",
-    "message.target_id": "gen_ai.message.target_id",
-    "message.type": "gen_ai.message.type",
-    "message.payload_type": "gen_ai.message.payload_type",
-    "message.destination_executor_id": "gen_ai.message.destination_executor_id",
 }
 
 # Provider name normalization — collapse known aliases to the canonical OTel/ARMS

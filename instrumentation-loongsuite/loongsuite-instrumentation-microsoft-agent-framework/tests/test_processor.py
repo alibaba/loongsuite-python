@@ -16,7 +16,7 @@
 
 Tests verify that the processor correctly:
 - Injects ``gen_ai.span.kind`` for each MAF span type.
-- Renames MAF private-prefix attributes (``workflow.id`` → ``gen_ai.workflow.id`` …).
+- Copies registry-defined MAF attributes (``workflow.name`` → ``gen_ai.workflow.name``).
 - Reclassifies ``executor.process`` spans by ``executor.type``.
 - Normalizes ``gen_ai.provider.name``.
 - Backfills ``gen_ai.response.time_to_first_token`` from streaming events.
@@ -61,6 +61,21 @@ def _setup():
     )
     tp.add_span_processor(processor)
     tp.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = tp.get_tracer("test")
+    return tp, tracer, exporter, processor
+
+
+def _setup_exporter_before_processor():
+    """Simulate exporters registered before the MAF semantic processor."""
+    tp = TracerProvider()
+    exporter = InMemorySpanExporter()
+    processor = MAFSemanticProcessor(
+        meter_provider=None,
+        metrics_enabled=False,
+        capture_sensitive_data=False,
+    )
+    tp.add_span_processor(SimpleSpanProcessor(exporter))
+    tp.add_span_processor(processor)
     tracer = tp.get_tracer("test")
     return tp, tracer, exporter, processor
 
@@ -116,7 +131,7 @@ def test_agent_span():
     assert spans[0].attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.AGENT
 
 
-def test_workflow_run_span_gets_chain_kind_and_workflow_op():
+def test_workflow_run_span_gets_workflow_kind_and_invoke_workflow_op():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("workflow.run abc-123") as span:
         span.set_attribute("workflow.id", "abc-123")
@@ -124,16 +139,33 @@ def test_workflow_run_span_gets_chain_kind_and_workflow_op():
         span.set_attribute("workflow.description", "d")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CHAIN
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.WORKFLOW
     assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.WORKFLOW
-    # MAF private-prefix renamed to gen_ai.* canonical keys
-    assert s.attributes.get("gen_ai.workflow.id") == "abc-123"
+    # Only registry-defined workflow attributes are copied into gen_ai.*.
     assert s.attributes.get("gen_ai.workflow.name") == "MyWorkflow"
-    # The original MAF private key should be removed (best-effort).
-    assert "workflow.id" not in s.attributes
+    assert s.attributes.get("workflow.id") == "abc-123"
+    assert "gen_ai.workflow.id" not in s.attributes
 
 
-def test_executor_process_function_executor_becomes_task():
+def test_workflow_start_attrs_are_exported_if_exporter_runs_first():
+    tp, tracer, exporter, _ = _setup_exporter_before_processor()
+    with tracer.start_as_current_span(
+        "workflow.run abc-123",
+        attributes={
+            "workflow.id": "abc-123",
+            "workflow.name": "MyWorkflow",
+        },
+    ):
+        pass
+    s = _flush(exporter)[0]
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.WORKFLOW
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.WORKFLOW
+    assert s.attributes.get("gen_ai.workflow.name") == "MyWorkflow"
+    assert s.attributes.get("workflow.id") == "abc-123"
+    assert "gen_ai.workflow.id" not in s.attributes
+
+
+def test_executor_process_function_executor_stays_workflow():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("executor.process fid-1") as span:
         # MAF does NOT set gen_ai.operation.name for executor.process spans.
@@ -141,10 +173,27 @@ def test_executor_process_function_executor_becomes_task():
         span.set_attribute("executor.type", "FunctionExecutor")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.TASK
-    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.TASK
-    assert s.attributes.get("gen_ai.task.name") == "fid-1"
-    assert s.attributes.get("gen_ai.task.type") == "FunctionExecutor"
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.WORKFLOW
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.WORKFLOW
+    assert s.attributes.get("executor.id") == "fid-1"
+    assert "gen_ai.task.name" not in s.attributes
+
+
+def test_executor_start_attrs_are_exported_if_exporter_runs_first():
+    tp, tracer, exporter, _ = _setup_exporter_before_processor()
+    with tracer.start_as_current_span(
+        "executor.process fid-1",
+        attributes={
+            "executor.id": "fid-1",
+            "executor.type": "FunctionExecutor",
+        },
+    ):
+        pass
+    s = _flush(exporter)[0]
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.WORKFLOW
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.WORKFLOW
+    assert s.attributes.get("executor.id") == "fid-1"
+    assert "gen_ai.task.name" not in s.attributes
 
 
 def test_executor_process_agent_executor_becomes_agent():
@@ -160,14 +209,14 @@ def test_executor_process_agent_executor_becomes_agent():
     )
 
 
-def test_executor_process_unknown_executor_stays_chain():
+def test_executor_process_unknown_executor_stays_workflow():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("executor.process xid") as span:
         span.set_attribute("executor.id", "xid")
         span.set_attribute("executor.type", "SomeOtherExecutor")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CHAIN
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.WORKFLOW
     assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.WORKFLOW
 
 
@@ -178,9 +227,9 @@ def test_message_send_span():
         span.set_attribute("message.target_id", "tgt")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CHAIN
-    assert s.attributes.get("gen_ai.message.source_id") == "src"
-    assert s.attributes.get("gen_ai.message.target_id") == "tgt"
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.WORKFLOW
+    assert s.attributes.get("message.source_id") == "src"
+    assert "gen_ai.message.source_id" not in s.attributes
 
 
 def test_provider_normalization_azure_openai_to_openai():
@@ -342,34 +391,24 @@ def test_non_maf_span_is_left_untouched():
     assert not processor._counters.calls_count
 
 
-def test_maf_dict_attribute_is_serialized_via_gen_ai_json_dumps():
-    """Dict/list attribute values written into ``_attributes`` by MAF under
-    private prefixes must be JSON-serialized via
-    ``opentelemetry.util.genai.utils.gen_ai_json_dumps`` when renamed to
-    ``gen_ai.*`` keys, because OTel SDKs reject arbitrary dict attribute
-    values. Hard constraint #2.
-
-    We exercise this directly through ``_set_attr`` because the SDK drops
-    dict values at ``set_attribute`` time (logged as a warning), which is
-    exactly the scenario our coercion defends against when MAF mutates
-    ``_attributes`` directly itself (it does so in several internal paths).
-    """
+def test_dict_attribute_is_serialized_via_gen_ai_json_dumps():
+    """Dict/list GenAI values are JSON-serialized before SDK export."""
     from opentelemetry.instrumentation.microsoft_agent_framework import (
         span_processor as sp,
     )
 
     tp, tracer, exporter, _ = _setup()
-    workflow_def = {"nodes": ["a", "b"], "edges": [{"from": "a", "to": "b"}]}
+    message = {"role": "user", "content": "hello"}
 
     # Drive the rename path through _set_attr (the same path on_end uses after
     # the SDK has stopped accepting set_attribute calls).
     with tracer.start_as_current_span("workflow.run xyz") as span:
-        sp._set_attr(span, "gen_ai.workflow.definition", workflow_def)
+        sp._set_attr(span, "gen_ai.input.messages", message)
     spans = _flush(exporter)
     s = spans[0]
-    val = s.attributes.get("gen_ai.workflow.definition")
+    val = s.attributes.get("gen_ai.input.messages")
     assert isinstance(val, str)
-    assert "nodes" in val and "edges" in val
+    assert "user" in val and "hello" in val
 
 
 def test_safe_dumps_uses_gen_ai_json_dumps():
@@ -396,11 +435,11 @@ def test_safe_dumps_truncates_at_4kb():
     assert len(out) <= 4096
 
 
-def test_mcp_span_classified_as_client():
+def test_mcp_span_classified_as_mcp_execute_tool():
     """MCP spans emitted by MAF's ``create_mcp_client_span`` carry no
     ``gen_ai.operation.name``; their name is ``{mcp.method.name} {target}``
     (unbounded), so they must be detected via the ``mcp.method.name``
-    attribute and classified as ``(CLIENT, mcp)``. Regression for [M1].
+    attribute and classified as ``(MCP, execute_tool)``. Regression for [M1].
     """
     from opentelemetry.trace import SpanKind
 
@@ -413,8 +452,9 @@ def test_mcp_span_classified_as_client():
         span.set_attribute("mcp.session.id", "sess-1")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CLIENT
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
     assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+    assert s.attributes.get("gen_ai.tool.name") == "get_weather"
 
 
 def test_mcp_span_via_client_kind_and_mcp_attr_fallback():
@@ -429,8 +469,9 @@ def test_mcp_span_via_client_kind_and_mcp_attr_fallback():
         span.set_attribute("mcp.protocol.version", "2024-11-05")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CLIENT
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
     assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+    assert s.attributes.get("gen_ai.tool.name") == "initialize"
 
 
 def test_non_mcp_client_span_is_not_misclassified_as_mcp():
@@ -449,16 +490,16 @@ def test_non_mcp_client_span_is_not_misclassified_as_mcp():
     assert GEN_AI_OPERATION_NAME not in s.attributes
 
 
-def test_mcp_span_op_name_overridden_to_mcp_when_maf_writes_execute_tool():
+def test_mcp_span_kind_set_when_maf_writes_execute_tool():
     """[P1] regression: MAF emits ``gen_ai.operation.name=execute_tool`` on the
     MCP ``tools/call`` inner span (its ``create_mcp_client_span`` reuses the
     tool-call op name even though it sets ``mcp.method.name``). The processor
-    must override the op name to ``mcp`` so the span is not mislabeled as a
-    TOOL call in the ARMS pipeline.
+    must set the logical span kind to ``MCP`` so the span is not mislabeled as a
+    plain TOOL call in the ARMS pipeline.
 
-    Before the fix, ``on_end``'s op-name override only fired when
-    ``span_kind in {TASK, AGENT}`` — CLIENT (MCP) was missing, so the inner
-    span kept MAF's ``execute_tool`` value.
+    Before the fix, MCP spans were identified with a non-registry operation
+    value. The current LoongSuite profile uses ``MCP`` as span kind and
+    ``execute_tool`` as operation name.
     """
     from opentelemetry.trace import SpanKind
 
@@ -471,8 +512,9 @@ def test_mcp_span_op_name_overridden_to_mcp_when_maf_writes_execute_tool():
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.EXECUTE_TOOL)
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.CLIENT
+    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
     assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+    assert s.attributes.get("gen_ai.tool.name") == "slow_summary"
 
 
 def test_provider_normalization_keeps_framework_provider_separate():
