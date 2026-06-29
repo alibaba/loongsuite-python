@@ -24,25 +24,43 @@ seen by exporters instead of relying on post-end SpanProcessor mutation.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import logging
 import timeit
-from typing import Any, Callable, Generator, Mapping, Optional
+from typing import Any, AsyncGenerator, Callable, Generator, Mapping, Optional
 
+from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Span as OtelSpan
 from opentelemetry.trace import SpanKind
-from opentelemetry.util.genai.extended_span_utils import (
-    _apply_embedding_finish_attributes,
-    _apply_execute_tool_finish_attributes,
-    _apply_invoke_agent_finish_attributes,
-)
-from opentelemetry.util.genai.extended_types import (
-    EmbeddingInvocation,
-    ExecuteToolInvocation,
-    InvokeAgentInvocation,
-)
-from opentelemetry.util.genai.span_utils import _apply_llm_finish_attributes
-from opentelemetry.util.genai.types import LLMInvocation
+
+try:
+    from opentelemetry.util.genai.extended_span_utils import (
+        _apply_embedding_finish_attributes,
+        _apply_execute_tool_finish_attributes,
+        _apply_invoke_agent_finish_attributes,
+    )
+    from opentelemetry.util.genai.extended_types import (
+        EmbeddingInvocation,
+        ExecuteToolInvocation,
+        InvokeAgentInvocation,
+    )
+    from opentelemetry.util.genai.span_utils import (
+        _apply_llm_finish_attributes,
+    )
+    from opentelemetry.util.genai.types import LLMInvocation
+except ImportError as exc:
+    _UTIL_GENAI_IMPORT_ERROR: Optional[ImportError] = exc
+    _apply_embedding_finish_attributes = None
+    _apply_execute_tool_finish_attributes = None
+    _apply_invoke_agent_finish_attributes = None
+    _apply_llm_finish_attributes = None
+    EmbeddingInvocation = None
+    ExecuteToolInvocation = None
+    InvokeAgentInvocation = None
+    LLMInvocation = None
+else:
+    _UTIL_GENAI_IMPORT_ERROR = None
 
 from .semantic_conventions import (
     GEN_AI_OPERATION_NAME,
@@ -60,9 +78,9 @@ from .semantic_conventions import (
 from .span_processor import (
     _attr_value,
     _classify_span,
+    _is_exception_event,
     _is_maf_span,
     _normalize_provider,
-    _set_span_kind,
     _ttft_from_events,
 )
 
@@ -95,6 +113,13 @@ def apply_util_genai_bridge() -> None:
     global _original_tools_get_function_span
 
     if _applied:
+        return
+    if _UTIL_GENAI_IMPORT_ERROR is not None:
+        logger.warning(
+            "MAF util-genai bridge skipped: opentelemetry-util-genai "
+            "finish helpers unavailable: %s",
+            _UTIL_GENAI_IMPORT_ERROR,
+        )
         return
 
     try:
@@ -194,13 +219,17 @@ def revert_util_genai_bridge() -> None:
         if _original_get_span is not None:
             observability._get_span = _original_get_span  # type: ignore[attr-defined]
         if _original_start_streaming_span is not None:
-            observability._start_streaming_span = _original_start_streaming_span  # type: ignore[attr-defined]
+            observability._start_streaming_span = (
+                _original_start_streaming_span  # type: ignore[attr-defined]
+            )
         if _original_activate_span is not None:
             observability._activate_span = _original_activate_span  # type: ignore[attr-defined]
         if _original_get_function_span is not None:
             observability.get_function_span = _original_get_function_span  # type: ignore[attr-defined]
         if _original_create_mcp_client_span is not None:
-            observability.create_mcp_client_span = _original_create_mcp_client_span  # type: ignore[attr-defined]
+            observability.create_mcp_client_span = (
+                _original_create_mcp_client_span  # type: ignore[attr-defined]
+            )
     except ImportError:
         pass
     try:
@@ -214,7 +243,9 @@ def revert_util_genai_bridge() -> None:
         import agent_framework._mcp as mcp_mod  # type: ignore
 
         if _original_mcp_create_mcp_client_span is not None:
-            mcp_mod.create_mcp_client_span = _original_mcp_create_mcp_client_span  # type: ignore[attr-defined]
+            mcp_mod.create_mcp_client_span = (
+                _original_mcp_create_mcp_client_span  # type: ignore[attr-defined]
+            )
     except ImportError:
         pass
 
@@ -234,8 +265,11 @@ def _wrap_get_span(original: Callable[..., Any]) -> Callable[..., Any]:
         attributes: dict[str, Any],
         span_name_attribute: str,
     ) -> Generator[OtelSpan, Any, Any]:
-        _prepare_start_attributes(attributes)
-        with original(attributes, span_name_attribute) as span:
+        bridge_attrs = _prepare_start_attributes(attributes)
+        span_cm = _current_span_context(
+            original, bridge_attrs, span_name_attribute
+        )
+        with span_cm as span:
             try:
                 yield span
             finally:
@@ -244,12 +278,16 @@ def _wrap_get_span(original: Callable[..., Any]) -> Callable[..., Any]:
     return _get_span
 
 
-def _wrap_start_streaming_span(original: Callable[..., Any]) -> Callable[..., Any]:
+def _wrap_start_streaming_span(
+    original: Callable[..., Any],
+) -> Callable[..., Any]:
     def _start_streaming_span(
         attributes: dict[str, Any], span_name_attribute: str
     ) -> OtelSpan:
-        _prepare_start_attributes(attributes)
-        span = original(attributes, span_name_attribute)
+        bridge_attrs = _prepare_start_attributes(attributes)
+        span = _start_streaming_span_with_kind(
+            original, bridge_attrs, span_name_attribute
+        )
         _mark_stream_start(span)
         _wrap_span_end(span)
         return span
@@ -258,26 +296,83 @@ def _wrap_start_streaming_span(original: Callable[..., Any]) -> Callable[..., An
 
 
 def _wrap_activate_span(original: Callable[..., Any]) -> Callable[..., Any]:
-    @contextlib.contextmanager
-    def _activate_span(span: OtelSpan) -> Generator[None, Any, Any]:
-        with original(span):
-            try:
-                yield
-            except Exception:
-                raise
-            else:
-                _record_first_stream_pull(span)
+    if inspect.isasyncgenfunction(original):
+
+        @contextlib.asynccontextmanager
+        async def _async_activate_span(
+            span: OtelSpan,
+        ) -> AsyncGenerator[None, Any]:
+            async with original(span):
+                try:
+                    yield
+                except Exception:
+                    raise
+                else:
+                    _record_first_stream_pull(span)
+
+        return _async_activate_span
+
+    if inspect.iscoroutinefunction(original):
+
+        @contextlib.asynccontextmanager
+        async def _awaited_activate_span(
+            span: OtelSpan,
+        ) -> AsyncGenerator[None, Any]:
+            cm = await original(span)
+            async with cm:
+                try:
+                    yield
+                except Exception:
+                    raise
+                else:
+                    _record_first_stream_pull(span)
+
+        return _awaited_activate_span
+
+    def _activate_span(span: OtelSpan) -> Any:
+        cm = original(span)
+        if hasattr(cm, "__aenter__"):
+            return _async_activate_context(span, cm)
+        return _sync_activate_context(span, cm)
 
     return _activate_span
 
 
-def _wrap_get_function_span(original: Callable[..., Any]) -> Callable[..., Any]:
+@contextlib.contextmanager
+def _sync_activate_context(
+    span: OtelSpan, cm: Any
+) -> Generator[None, Any, Any]:
+    with cm:
+        try:
+            yield
+        except Exception:
+            raise
+        else:
+            _record_first_stream_pull(span)
+
+
+@contextlib.asynccontextmanager
+async def _async_activate_context(
+    span: OtelSpan, cm: Any
+) -> AsyncGenerator[None, Any]:
+    async with cm:
+        try:
+            yield
+        except Exception:
+            raise
+        else:
+            _record_first_stream_pull(span)
+
+
+def _wrap_get_function_span(
+    original: Callable[..., Any],
+) -> Callable[..., Any]:
     @contextlib.contextmanager
     def _get_function_span(
         attributes: dict[str, Any],
     ) -> Generator[OtelSpan, Any, Any]:
-        _prepare_start_attributes(attributes)
-        with original(attributes) as span:
+        bridge_attrs = _prepare_start_attributes(attributes)
+        with original(bridge_attrs) as span:
             try:
                 yield span
             finally:
@@ -286,7 +381,9 @@ def _wrap_get_function_span(original: Callable[..., Any]) -> Callable[..., Any]:
     return _get_function_span
 
 
-def _wrap_create_mcp_client_span(original: Callable[..., Any]) -> Callable[..., Any]:
+def _wrap_create_mcp_client_span(
+    original: Callable[..., Any],
+) -> Callable[..., Any]:
     @contextlib.contextmanager
     def _create_mcp_client_span(
         method_name: str,
@@ -300,6 +397,71 @@ def _wrap_create_mcp_client_span(original: Callable[..., Any]) -> Callable[..., 
             yield span
 
     return _create_mcp_client_span
+
+
+def _current_span_context(
+    original: Callable[..., Any],
+    attributes: dict[str, Any],
+    span_name_attribute: str,
+) -> Any:
+    kind = _otel_start_kind(attributes)
+    if kind is None:
+        return original(attributes, span_name_attribute)
+    return _start_current_span_with_kind(attributes, span_name_attribute, kind)
+
+
+def _start_streaming_span_with_kind(
+    original: Callable[..., Any],
+    attributes: dict[str, Any],
+    span_name_attribute: str,
+) -> OtelSpan:
+    kind = _otel_start_kind(attributes)
+    if kind is None:
+        return original(attributes, span_name_attribute)
+    return _start_detached_span_with_kind(
+        attributes, span_name_attribute, kind
+    )
+
+
+def _otel_start_kind(attributes: Mapping[Any, Any]) -> SpanKind | None:
+    span_kind = _mapping_value(attributes, GEN_AI_SPAN_KIND)
+    if span_kind in {GenAISpanKind.LLM, GenAISpanKind.EMBEDDING}:
+        return SpanKind.CLIENT
+    return None
+
+
+def _start_current_span_with_kind(
+    attributes: dict[str, Any],
+    span_name_attribute: str,
+    kind: SpanKind,
+) -> Any:
+    span = _start_detached_span_with_kind(
+        attributes, span_name_attribute, kind
+    )
+    return otel_trace.use_span(
+        span=span,
+        end_on_exit=True,
+        record_exception=False,
+        set_status_on_exception=False,
+    )
+
+
+def _start_detached_span_with_kind(
+    attributes: dict[str, Any],
+    span_name_attribute: str,
+    kind: SpanKind,
+) -> OtelSpan:
+    import agent_framework.observability as observability  # type: ignore
+
+    operation = (
+        _mapping_value(attributes, GEN_AI_OPERATION_NAME) or "operation"
+    )
+    span_name = _mapping_value(attributes, span_name_attribute) or "unknown"
+    span = observability.get_tracer().start_span(
+        f"{operation} {span_name}", kind=kind
+    )
+    span.set_attributes(attributes)
+    return span
 
 
 def _wrap_span_end(span: OtelSpan) -> None:
@@ -333,42 +495,42 @@ def _record_first_stream_pull(span: OtelSpan) -> None:
     # MAF registers ``_activate_span(span)`` through
     # ``ResponseStream.with_pull_context_manager``. That factory is entered and
     # exited once per ``__anext__`` pull, so the first successful exit marks the
-    # first streamed update rather than final stream cleanup.
+    # first streamed update rather than final stream cleanup. The context
+    # manager API does not expose the update object, so keep this as an internal
+    # fallback marker and let finalization prefer any real TTFT event emitted by
+    # the framework/provider before writing the public GenAI attribute.
     if getattr(span, _STREAM_FIRST_TOKEN_ATTR, None) is not None:
         return
     try:
-        start_s = getattr(span, _STREAM_START_ATTR, None)
-        first_s = timeit.default_timer()
-        setattr(span, _STREAM_FIRST_TOKEN_ATTR, first_s)
-        if start_s is None:
-            return
-        delta_ns = int(max(first_s - float(start_s), 0.0) * 1_000_000_000)
-        if delta_ns > 0 and not _attr_value(span, GEN_AI_RESPONSE_TTFT):
-            span.set_attribute(GEN_AI_RESPONSE_TTFT, delta_ns)
+        setattr(span, _STREAM_FIRST_TOKEN_ATTR, timeit.default_timer())
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("could not record MAF streaming TTFT: %s", exc)
 
 
-def _prepare_start_attributes(attributes: dict[str, Any]) -> None:
+def _prepare_start_attributes(attributes: Mapping[Any, Any]) -> dict[str, Any]:
     """Seed attributes known before MAF creates the span."""
-    op_name = _mapping_value(attributes, GEN_AI_OPERATION_NAME)
-    span_name = _span_name_from_attributes(attributes)
+    bridge_attrs = dict(attributes)
+    op_name = _mapping_value(bridge_attrs, GEN_AI_OPERATION_NAME)
+    span_name = _span_name_from_attributes(bridge_attrs)
     span_kind, classified_op = _classify_span(
-        span_name, op_name if isinstance(op_name, str) else None, attributes
+        span_name, op_name if isinstance(op_name, str) else None, bridge_attrs
     )
     if not _is_maf_span(
-        span_name, op_name if isinstance(op_name, str) else None, attributes
+        span_name, op_name if isinstance(op_name, str) else None, bridge_attrs
     ):
-        return
-    if not _mapping_value(attributes, GEN_AI_OPERATION_NAME):
-        attributes[GEN_AI_OPERATION_NAME] = classified_op
+        return bridge_attrs
+    if not _mapping_value(bridge_attrs, GEN_AI_OPERATION_NAME):
+        bridge_attrs[GEN_AI_OPERATION_NAME] = classified_op
     elif classified_op == GenAIOperation.MCP:
-        attributes[GEN_AI_OPERATION_NAME] = classified_op
-    if not _mapping_value(attributes, GEN_AI_SPAN_KIND):
-        attributes[GEN_AI_SPAN_KIND] = span_kind
-    provider = _normalize_provider(_mapping_value(attributes, GEN_AI_PROVIDER_NAME))
+        bridge_attrs[GEN_AI_OPERATION_NAME] = classified_op
+    if not _mapping_value(bridge_attrs, GEN_AI_SPAN_KIND):
+        bridge_attrs[GEN_AI_SPAN_KIND] = span_kind
+    provider = _normalize_provider(
+        _mapping_value(bridge_attrs, GEN_AI_PROVIDER_NAME)
+    )
     if provider is not None:
-        attributes[GEN_AI_PROVIDER_NAME] = provider
+        bridge_attrs[GEN_AI_PROVIDER_NAME] = provider
+    return bridge_attrs
 
 
 def _finalize_with_util_genai(span: OtelSpan) -> None:
@@ -386,9 +548,10 @@ def _finalize_with_util_genai(span: OtelSpan) -> None:
 
         if span_kind == GenAISpanKind.LLM:
             _apply_llm_finish_attributes(span, _llm_invocation(span, op_name))
-            _set_span_kind(span, span, SpanKind.CLIENT)
             ttft = _ttft_from_live_span(span)
-            if ttft is not None and not _attr_value(span, GEN_AI_RESPONSE_TTFT):
+            if ttft is not None and not _attr_value(
+                span, GEN_AI_RESPONSE_TTFT
+            ):
                 span.set_attribute(GEN_AI_RESPONSE_TTFT, ttft)
         elif span_kind == GenAISpanKind.AGENT:
             _apply_invoke_agent_finish_attributes(
@@ -449,7 +612,9 @@ def _llm_invocation(span: OtelSpan, op_name: str) -> LLMInvocation:
         ),
         presence_penalty=_float_attr(span, "gen_ai.request.presence_penalty"),
         max_tokens=_int_attr(span, "gen_ai.request.max_tokens"),
-        stop_sequences=_string_list_attr(span, "gen_ai.request.stop_sequences"),
+        stop_sequences=_string_list_attr(
+            span, "gen_ai.request.stop_sequences"
+        ),
         seed=_int_attr(span, "gen_ai.request.seed"),
         conversation_id=_string_attr(span, "gen_ai.conversation.id"),
         choice_count=_int_attr(span, "gen_ai.request.choice.count"),
@@ -476,7 +641,9 @@ def _invoke_agent_invocation(span: OtelSpan) -> InvokeAgentInvocation:
         ),
         presence_penalty=_float_attr(span, "gen_ai.request.presence_penalty"),
         max_tokens=_int_attr(span, "gen_ai.request.max_tokens"),
-        stop_sequences=_string_list_attr(span, "gen_ai.request.stop_sequences"),
+        stop_sequences=_string_list_attr(
+            span, "gen_ai.request.stop_sequences"
+        ),
         seed=_int_attr(span, "gen_ai.request.seed"),
         choice_count=_int_attr(span, "gen_ai.request.choice.count"),
     )
@@ -611,11 +778,19 @@ def _ttft_from_live_span(span: OtelSpan) -> Optional[int]:
     ttft = _ttft_from_events(span)
     if ttft is not None:
         return ttft
+    status = getattr(span, "status", None)
+    if getattr(status, "status_code", None) == otel_trace.StatusCode.ERROR:
+        return None
+    events = getattr(span, "events", None) or getattr(span, "_events", None)
+    if events is not None and any(_is_exception_event(ev) for ev in events):
+        return None
     start_s = getattr(span, _STREAM_START_ATTR, None)
     first_s = getattr(span, _STREAM_FIRST_TOKEN_ATTR, None)
     if start_s is not None and first_s is not None:
         try:
-            return int(max(float(first_s) - float(start_s), 0.0) * 1_000_000_000)
+            return int(
+                max(float(first_s) - float(start_s), 0.0) * 1_000_000_000
+            )
         except (TypeError, ValueError):
             return None
     events = getattr(span, "_events", None)

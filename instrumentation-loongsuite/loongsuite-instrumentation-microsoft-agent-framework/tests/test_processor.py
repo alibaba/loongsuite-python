@@ -209,6 +209,16 @@ def test_ttft_backfill_from_first_event():
     assert ttft is not None and ttft > 0
 
 
+def test_ttft_backfill_skips_exception_event():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, "openai")
+        span.add_event("exception", {"exception.type": "RuntimeError"})
+    spans = _flush(exporter)
+    assert GEN_AI_RESPONSE_TTFT not in spans[0].attributes
+
+
 def test_finish_reasons_json_string_normalized_to_array():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("chat gpt-4o") as span:

@@ -403,8 +403,8 @@ def _ttft_from_events(readable: Any) -> Optional[int]:
     """Backfill ``gen_ai.response.time_to_first_token`` (ns) from the first
     streaming chunk event timestamp.
 
-    MAF emits streaming chunks as span events; the first event's timestamp
-    minus the span start time is the TTFT.
+    MAF emits streaming chunks as span events; the first non-exception event's
+    timestamp minus the span start time is the TTFT.
     """
     events = getattr(readable, "events", None) or ()
     if not events:
@@ -412,6 +412,8 @@ def _ttft_from_events(readable: Any) -> Optional[int]:
     start_time = getattr(readable, "start_time", None)
     first_ts = None
     for ev in events:
+        if _is_exception_event(ev):
+            continue
         ts = getattr(ev, "timestamp", None)
         if ts is None:
             ts = ev.get("timestamp") if isinstance(ev, dict) else None
@@ -424,6 +426,23 @@ def _ttft_from_events(readable: Any) -> Optional[int]:
         return int(first_ts - start_time)
     except (TypeError, ValueError):
         return None
+
+
+def _is_exception_event(event: Any) -> bool:
+    name = getattr(event, "name", None)
+    if name is None and isinstance(event, dict):
+        name = event.get("name")
+    if name == "exception":
+        return True
+    attributes = getattr(event, "attributes", None)
+    if attributes is None and isinstance(event, dict):
+        attributes = event.get("attributes")
+    return bool(
+        isinstance(attributes, dict)
+        and (
+            "exception.type" in attributes or "exception.message" in attributes
+        )
+    )
 
 
 # ---------- Metrics aggregation ----------

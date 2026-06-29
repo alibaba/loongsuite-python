@@ -21,6 +21,7 @@ attributes must be written before ``span.end()`` snapshots the span.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import sys
 import types
@@ -110,6 +111,7 @@ def _install_fake_observability(monkeypatch):
     obs_mod._activate_span = _activate_span
     obs_mod.get_function_span = get_function_span
     obs_mod.create_mcp_client_span = create_mcp_client_span
+    obs_mod.get_tracer = lambda: tracer
 
     af_mod = types.ModuleType("agent_framework")
     af_mod.observability = obs_mod
@@ -142,6 +144,8 @@ def test_llm_get_span_is_finalized_by_util_genai_before_export(monkeypatch):
     finally:
         util_genai_bridge.revert_util_genai_bridge()
 
+    assert GEN_AI_SPAN_KIND not in attributes
+    assert attributes[GEN_AI_PROVIDER_NAME] == "azure_openai"
     span = exporter.get_finished_spans()[0]
     assert span.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.LLM
     assert span.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.CHAT
@@ -172,6 +176,53 @@ def test_streaming_llm_end_wrapper_finalizes_before_export(monkeypatch):
     exported = exporter.get_finished_spans()[0]
     assert exported.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.LLM
     assert exported.attributes.get(GEN_AI_RESPONSE_TTFT) is not None
+    assert exported.kind == trace.SpanKind.CLIENT
+
+
+def test_streaming_error_does_not_emit_fallback_ttft(monkeypatch):
+    obs_mod, exporter = _install_fake_observability(monkeypatch)
+    util_genai_bridge.apply_util_genai_bridge()
+    try:
+        span = obs_mod._start_streaming_span(
+            {
+                GEN_AI_OPERATION_NAME: GenAIOperation.CHAT,
+                GEN_AI_REQUEST_MODEL: "qwen-not-a-real-model",
+            },
+            GEN_AI_REQUEST_MODEL,
+        )
+        with obs_mod._activate_span(span):
+            pass
+        span.set_status(trace.Status(trace.StatusCode.ERROR))
+        span.end()
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    exported = exporter.get_finished_spans()[0]
+    assert exported.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.LLM
+    assert GEN_AI_RESPONSE_TTFT not in exported.attributes
+
+
+def test_streaming_exception_event_does_not_emit_fallback_ttft(monkeypatch):
+    obs_mod, exporter = _install_fake_observability(monkeypatch)
+    util_genai_bridge.apply_util_genai_bridge()
+    try:
+        span = obs_mod._start_streaming_span(
+            {
+                GEN_AI_OPERATION_NAME: GenAIOperation.CHAT,
+                GEN_AI_REQUEST_MODEL: "qwen-not-a-real-model",
+            },
+            GEN_AI_REQUEST_MODEL,
+        )
+        with obs_mod._activate_span(span):
+            pass
+        span.add_event("exception", {"exception.type": "RuntimeError"})
+        span.end()
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    exported = exporter.get_finished_spans()[0]
+    assert exported.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.LLM
+    assert GEN_AI_RESPONSE_TTFT not in exported.attributes
 
 
 def test_embedding_span_is_finalized_by_util_genai_before_export(monkeypatch):
@@ -286,7 +337,9 @@ def test_apply_revert_apply_keeps_single_wrapper_layer(monkeypatch):
     util_genai_bridge.apply_util_genai_bridge()
     try:
         assert obs_mod._get_span is not original_get_span
-        assert obs_mod._start_streaming_span is not original_start_streaming_span
+        assert (
+            obs_mod._start_streaming_span is not original_start_streaming_span
+        )
         assert tools_mod.get_function_span is not original_tool_span
         assert obs_mod._get_span is not first_get_span
         assert obs_mod._start_streaming_span is not first_streaming
@@ -297,3 +350,46 @@ def test_apply_revert_apply_keeps_single_wrapper_layer(monkeypatch):
     assert obs_mod._get_span is original_get_span
     assert obs_mod._start_streaming_span is original_start_streaming_span
     assert tools_mod.get_function_span is original_tool_span
+
+
+def test_apply_skips_when_util_genai_private_helpers_are_unavailable(
+    monkeypatch,
+):
+    obs_mod, _ = _install_fake_observability(monkeypatch)
+    original_get_span = obs_mod._get_span
+
+    monkeypatch.setattr(
+        util_genai_bridge,
+        "_UTIL_GENAI_IMPORT_ERROR",
+        ImportError("missing private helper"),
+    )
+
+    util_genai_bridge.apply_util_genai_bridge()
+
+    assert obs_mod._get_span is original_get_span
+
+
+def test_activate_span_wrapper_supports_async_context_manager():
+    events = []
+
+    @contextlib.asynccontextmanager
+    async def _activate_span(span):
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    wrapped = util_genai_bridge._wrap_activate_span(_activate_span)
+    span = types.SimpleNamespace()
+
+    async def _run():
+        async with wrapped(span):
+            events.append("body")
+
+    asyncio.run(_run())
+
+    assert events == ["enter", "body", "exit"]
+    assert (
+        getattr(span, util_genai_bridge._STREAM_FIRST_TOKEN_ATTR) is not None
+    )
