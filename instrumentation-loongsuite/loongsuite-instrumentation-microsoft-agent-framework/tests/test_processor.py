@@ -165,7 +165,7 @@ def test_workflow_start_attrs_are_exported_if_exporter_runs_first():
     assert "gen_ai.workflow.id" not in s.attributes
 
 
-def test_executor_process_function_executor_stays_workflow():
+def test_executor_process_function_executor_stays_workflow_operation():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("executor.process fid-1") as span:
         # MAF does NOT set gen_ai.operation.name for executor.process spans.
@@ -209,7 +209,7 @@ def test_executor_process_agent_executor_becomes_agent():
     )
 
 
-def test_executor_process_unknown_executor_stays_workflow():
+def test_executor_process_unknown_executor_stays_workflow_operation():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("executor.process xid") as span:
         span.set_attribute("executor.id", "xid")
@@ -435,7 +435,7 @@ def test_safe_dumps_truncates_at_4kb():
     assert len(out) <= 4096
 
 
-def test_mcp_span_classified_as_mcp_execute_tool():
+def test_mcp_tool_call_span_classified_as_mcp_execute_tool():
     """MCP spans emitted by MAF's ``create_mcp_client_span`` carry no
     ``gen_ai.operation.name``; their name is ``{mcp.method.name} {target}``
     (unbounded), so they must be detected via the ``mcp.method.name``
@@ -453,25 +453,25 @@ def test_mcp_span_classified_as_mcp_execute_tool():
     spans = _flush(exporter)
     s = spans[0]
     assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
-    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.EXECUTE_TOOL
     assert s.attributes.get("gen_ai.tool.name") == "get_weather"
 
 
-def test_mcp_span_via_client_kind_and_mcp_attr_fallback():
-    """Fallback path: a CLIENT span with any ``mcp.*`` attribute (but missing
-    ``mcp.method.name``) is still classified as MCP."""
+def test_mcp_lifecycle_span_is_not_classified_as_genai():
+    """MCP protocol lifecycle spans are not GenAI tool executions."""
     from opentelemetry.trace import SpanKind
 
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span(
         "initialize", kind=SpanKind.CLIENT
     ) as span:
+        span.set_attribute("mcp.method.name", "initialize")
         span.set_attribute("mcp.protocol.version", "2024-11-05")
     spans = _flush(exporter)
     s = spans[0]
-    assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
-    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
-    assert s.attributes.get("gen_ai.tool.name") == "initialize"
+    assert GEN_AI_SPAN_KIND not in s.attributes
+    assert GEN_AI_OPERATION_NAME not in s.attributes
+    assert s.attributes.get("mcp.method.name") == "initialize"
 
 
 def test_non_mcp_client_span_is_not_misclassified_as_mcp():
@@ -490,16 +490,14 @@ def test_non_mcp_client_span_is_not_misclassified_as_mcp():
     assert GEN_AI_OPERATION_NAME not in s.attributes
 
 
-def test_mcp_span_kind_set_when_maf_writes_execute_tool():
+def test_mcp_tool_call_stays_mcp_when_maf_writes_execute_tool():
     """[P1] regression: MAF emits ``gen_ai.operation.name=execute_tool`` on the
     MCP ``tools/call`` inner span (its ``create_mcp_client_span`` reuses the
     tool-call op name even though it sets ``mcp.method.name``). The processor
-    must set the logical span kind to ``MCP`` so the span is not mislabeled as a
-    plain TOOL call in the ARMS pipeline.
+    must keep the logical span kind as ``MCP`` so it is consistent with the
+    LoongSuite GenAI registry while still using upstream ``execute_tool``.
 
-    Before the fix, MCP spans were identified with a non-registry operation
-    value. The current LoongSuite profile uses ``MCP`` as span kind and
-    ``execute_tool`` as operation name.
+    Non-tool MCP lifecycle spans are intentionally left as protocol spans.
     """
     from opentelemetry.trace import SpanKind
 
@@ -513,7 +511,7 @@ def test_mcp_span_kind_set_when_maf_writes_execute_tool():
     spans = _flush(exporter)
     s = spans[0]
     assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
-    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.EXECUTE_TOOL
     assert s.attributes.get("gen_ai.tool.name") == "slow_summary"
 
 

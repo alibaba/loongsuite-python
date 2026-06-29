@@ -299,6 +299,7 @@ def _set_span_kind(live_span: OtelSpan, readable: Any, kind: SpanKind) -> None:
 
 
 _MCP_METHOD_NAME_ATTR = "mcp.method.name"
+_MCP_TOOL_CALL_METHOD = "tools/call"
 
 
 def _is_mcp_span(readable: Any) -> bool:
@@ -325,6 +326,11 @@ def _is_mcp_span(readable: Any) -> bool:
 
 def _mcp_tool_name(name: str, readable: Any) -> Optional[str]:
     """Return a low-cardinality tool name for an MCP client span."""
+    tool_call_prefix = f"{_MCP_TOOL_CALL_METHOD} "
+    if name.startswith(tool_call_prefix):
+        target = name[len(tool_call_prefix) :].strip()
+        if target:
+            return target
     method = _attr_value(readable, _MCP_METHOD_NAME_ATTR)
     method = method if isinstance(method, str) else None
     if method and name.startswith(f"{method} "):
@@ -334,11 +340,26 @@ def _mcp_tool_name(name: str, readable: Any) -> Optional[str]:
     return method or (name.strip() if name else None)
 
 
+def _is_mcp_tool_call_span(name: str, readable: Any) -> bool:
+    """Return True only for MCP ``tools/call`` spans.
+
+    MCP lifecycle operations such as ``initialize`` and ``tools/list`` are MCP
+    protocol spans, but they are not GenAI tool executions. Upstream MCP
+    semantic conventions only align MCP tool calls with GenAI ``execute_tool``.
+    """
+    method = _attr_value(readable, _MCP_METHOD_NAME_ATTR)
+    if method == _MCP_TOOL_CALL_METHOD:
+        return True
+    return name.startswith(f"{_MCP_TOOL_CALL_METHOD} ")
+
+
 def _is_maf_span(name: str, operation: Optional[str], readable: Any) -> bool:
     """Return True when the span carries a Microsoft Agent Framework signal."""
+    if _is_mcp_span(readable) and not _is_mcp_tool_call_span(name, readable):
+        return False
     if operation:
         return True
-    if _is_mcp_span(readable):
+    if _is_mcp_tool_call_span(name, readable):
         return True
     if name == _REACT_STEP_NAME:
         return True
@@ -355,22 +376,19 @@ def _classify_span(
 
     Classification priority:
     1. Existing ``gen_ai.operation.name`` (set by MAF for chat/embeddings/tool/agent).
-    2. MCP attribute detection — MAF's ``create_mcp_client_span``
+    2. MCP tool-call detection — MAF's ``create_mcp_client_span``
        (``observability.py:2083``) emits spans named ``{mcp.method.name} {target}``
-       with no ``gen_ai.operation.name`` set; the ``mcp.method.name`` attribute
-       (always present) is the reliable signal. Falls back to
-       ``SpanKind.CLIENT`` + any ``mcp.*`` attribute. MCP is intentionally
-       *not* in ``MAF_SPAN_NAME_PREFIXES`` because its method names are
-       unbounded (``initialize``, ``tools/call`` …) and would collide with
-       other prefixes.
+       with no ``gen_ai.operation.name`` set. Only ``tools/call`` spans are
+       GenAI tool executions; lifecycle spans such as ``initialize`` keep only
+       their ``mcp.*`` protocol attributes.
     3. Span-name prefix matching (workflow spans have no operation.name from MAF).
     4. ``react step`` literal name (emitted by our react_step patch).
     """
-    # MCP detection — runs before operation-based matching because MAF does not
-    # write ``gen_ai.operation.name`` for MCP spans. We check the attribute
-    # directly (cheap; happens once per span on_end).
-    if _is_mcp_span(readable):
-        return GenAISpanKind.MCP, GenAIOperation.MCP
+    # MCP tool calls are GenAI tool executions. Other MCP protocol lifecycle
+    # spans are filtered out by ``_is_maf_span`` and keep only their ``mcp.*``
+    # attributes.
+    if _is_mcp_tool_call_span(name, readable):
+        return GenAISpanKind.MCP, GenAIOperation.EXECUTE_TOOL
 
     if operation:
         op = operation
@@ -417,8 +435,6 @@ def _classify_span(
                 if "agent" in et:
                     return GenAISpanKind.AGENT, GenAIOperation.INVOKE_AGENT
         return GenAISpanKind.WORKFLOW, op
-    if op == GenAIOperation.MCP:
-        return GenAISpanKind.MCP, op
     return GenAISpanKind.WORKFLOW, op
 
 
@@ -811,6 +827,7 @@ class MAFSemanticProcessor(SpanProcessor):
 
         span_kind, op_name = _classify_span(name, existing_op, readable)
         existing_kind = _attr_value(readable, GEN_AI_SPAN_KIND)
+
         if (
             isinstance(existing_kind, str)
             and existing_kind
@@ -819,10 +836,11 @@ class MAFSemanticProcessor(SpanProcessor):
         ):
             span_kind = existing_kind
 
-        # 1) gen_ai.span.kind (only set if not already present)
+        # 1) gen_ai.span.kind (only set if not already present, or when a
+        #    later-written MAF attribute lets us refine our own WORKFLOW
+        #    fallback into a more specific kind).
         if not existing_kind or (
-            existing_kind != span_kind
-            and existing_kind == GenAISpanKind.WORKFLOW
+            existing_kind == GenAISpanKind.WORKFLOW
             and span_kind != GenAISpanKind.WORKFLOW
         ):
             _set_attr(live, GEN_AI_SPAN_KIND, span_kind)
@@ -834,13 +852,10 @@ class MAFSemanticProcessor(SpanProcessor):
         #    ``observability.py:2101``) we also override when our
         #    classification disagrees, provided the span is one of the
         #    kinds whose operation.name we own (AGENT reclassification of
-        #    ``executor.process``, plus MCP logical spans).
+        #    ``executor.process``).
         if not existing_op:
             _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
-        elif existing_op != op_name and span_kind in {
-            GenAISpanKind.AGENT,
-            GenAISpanKind.MCP,
-        }:
+        elif existing_op != op_name and span_kind == GenAISpanKind.AGENT:
             _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
 
         if span_kind == GenAISpanKind.MCP and not _attr_value(

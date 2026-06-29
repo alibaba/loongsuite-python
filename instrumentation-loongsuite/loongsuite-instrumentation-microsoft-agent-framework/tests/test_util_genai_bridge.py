@@ -315,8 +315,25 @@ def test_mcp_span_is_seeded_before_export(monkeypatch):
 
     span = exporter.get_finished_spans()[0]
     assert span.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
-    assert span.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.MCP
+    assert span.attributes.get(GEN_AI_OPERATION_NAME) == (
+        GenAIOperation.EXECUTE_TOOL
+    )
     assert span.attributes.get("gen_ai.tool.name") == "city_score"
+
+
+def test_mcp_lifecycle_span_is_not_seeded_as_genai(monkeypatch):
+    _, exporter = _install_fake_observability(monkeypatch)
+    util_genai_bridge.apply_util_genai_bridge()
+    try:
+        mcp_mod = sys.modules["agent_framework._mcp"]
+        with mcp_mod.create_mcp_client_span("initialize"):
+            pass
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+    span = exporter.get_finished_spans()[-1]
+    assert span.attributes.get("mcp.method.name") == "initialize"
+    assert GEN_AI_SPAN_KIND not in span.attributes
+    assert GEN_AI_OPERATION_NAME not in span.attributes
 
 
 def test_apply_revert_apply_keeps_single_wrapper_layer(monkeypatch):

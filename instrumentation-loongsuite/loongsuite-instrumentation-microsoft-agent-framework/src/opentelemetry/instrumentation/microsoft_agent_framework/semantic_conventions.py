@@ -55,7 +55,6 @@ class GenAIOperation:
     RETRIEVAL = "retrieval"
     WORKFLOW = "invoke_workflow"
     REACT = "react"
-    MCP = EXECUTE_TOOL
 
 
 # MAF span-name prefixes (from observability.py OtelAttr) — used to classify a

@@ -392,9 +392,11 @@ def _wrap_create_mcp_client_span(
         attributes: dict[str, Any] | None = None,
     ) -> Generator[OtelSpan, Any, Any]:
         bridge_attrs = dict(attributes or {})
-        bridge_attrs[GEN_AI_OPERATION_NAME] = GenAIOperation.MCP
-        bridge_attrs[GEN_AI_SPAN_KIND] = GenAISpanKind.MCP
-        bridge_attrs.setdefault("gen_ai.tool.name", target or method_name)
+        if method_name == "tools/call":
+            bridge_attrs[GEN_AI_OPERATION_NAME] = GenAIOperation.EXECUTE_TOOL
+            bridge_attrs[GEN_AI_SPAN_KIND] = GenAISpanKind.MCP
+            if target:
+                bridge_attrs.setdefault("gen_ai.tool.name", target)
         with original(method_name, target, bridge_attrs) as span:
             yield span
 
@@ -514,16 +516,14 @@ def _prepare_start_attributes(attributes: Mapping[Any, Any]) -> dict[str, Any]:
     bridge_attrs = dict(attributes)
     op_name = _mapping_value(bridge_attrs, GEN_AI_OPERATION_NAME)
     span_name = _span_name_from_attributes(bridge_attrs)
-    span_kind, classified_op = _classify_span(
-        span_name, op_name if isinstance(op_name, str) else None, bridge_attrs
-    )
     if not _is_maf_span(
         span_name, op_name if isinstance(op_name, str) else None, bridge_attrs
     ):
         return bridge_attrs
+    span_kind, classified_op = _classify_span(
+        span_name, op_name if isinstance(op_name, str) else None, bridge_attrs
+    )
     if not _mapping_value(bridge_attrs, GEN_AI_OPERATION_NAME):
-        bridge_attrs[GEN_AI_OPERATION_NAME] = classified_op
-    elif span_kind == GenAISpanKind.MCP:
         bridge_attrs[GEN_AI_OPERATION_NAME] = classified_op
     if not _mapping_value(bridge_attrs, GEN_AI_SPAN_KIND):
         bridge_attrs[GEN_AI_SPAN_KIND] = span_kind
@@ -555,7 +555,10 @@ def _finalize_with_util_genai(span: OtelSpan) -> None:
                 span, GEN_AI_RESPONSE_TTFT
             ):
                 span.set_attribute(GEN_AI_RESPONSE_TTFT, ttft)
-        elif span_kind == GenAISpanKind.AGENT:
+        elif (
+            span_kind == GenAISpanKind.AGENT
+            and op_name == GenAIOperation.INVOKE_AGENT
+        ):
             _apply_invoke_agent_finish_attributes(
                 span, _invoke_agent_invocation(span)
             )
@@ -584,12 +587,12 @@ def _set_common_live_attributes(
     current_op = _attr_value(span, GEN_AI_OPERATION_NAME)
     if not current_op or (
         current_op != op_name
-        and span_kind
-        in {GenAISpanKind.AGENT, GenAISpanKind.MCP}
+        and span_kind == GenAISpanKind.AGENT
     ):
         span.set_attribute(GEN_AI_OPERATION_NAME, op_name)
-    if span_kind == GenAISpanKind.MCP and not _attr_value(
-        span, "gen_ai.tool.name"
+    if (
+        span_kind == GenAISpanKind.MCP
+        and not _attr_value(span, "gen_ai.tool.name")
     ):
         tool_name = _mcp_tool_name(getattr(span, "name", "") or "", span)
         if tool_name:
