@@ -6,16 +6,20 @@ This package provides LoongSuite instrumentation for
 `Microsoft Agent Framework <https://github.com/microsoft/agent-framework>`_
 (``agent-framework-core``).
 
-It implements the hybrid "SpanProcessor + optional ReAct step patch" plan
-described in ``llm-dev/microsoft-agent-framework/investigate/execute.md``:
+It keeps MAF's native OTel span lifetime, but routes GenAI span finalization
+through ``opentelemetry-util-genai`` before spans are ended:
 
-* ``MAFSemanticProcessor`` enriches the native OTel spans emitted by MAF's
-  ``ChatTelemetryLayer`` / ``EmbeddingTelemetryLayer`` /
-  ``AgentTelemetryLayer`` / workflow helpers with the ARMS GenAI semantic
-  conventions (``gen_ai.span.kind``, ``gen_ai.operation.name``, normalized
-  attribute names, ``gen_ai.response.time_to_first_token``, etc.) and
-  aggregates the 6 ARMS gauges. Successful spans keep the OpenTelemetry
-  default ``UNSET`` status; failed spans keep MAF's ``ERROR`` status.
+* ``util_genai_bridge`` patches MAF's native span helper functions and calls
+  the shared ``opentelemetry-util-genai`` invocation finish helpers for
+  ``AGENT`` / ``LLM`` / ``TOOL`` / ``EMBEDDING`` spans while the span is still
+  recording. This ensures exporter snapshots include
+  ``gen_ai.span.kind``, ``gen_ai.operation.name``, normalized provider names,
+  token usage, finish reasons, and streaming TTFT where MAF exposes enough
+  data.
+* ``MAFSemanticProcessor`` remains as a compatibility layer for MAF workflow,
+  MCP, private-prefix attribute normalization, and the in-process ARMS gauges.
+  Successful spans keep the OpenTelemetry default ``UNSET`` status; failed
+  spans keep MAF's ``ERROR`` status.
 * ``react_step_patch`` (opt-in via ``ARMS_MAF_REACT_STEP_ENABLED=true``)
   wraps ``FunctionInvocationLayer.get_response`` so that each LLM round-trip
   inside the ReAct loop emits one ``react step`` span via

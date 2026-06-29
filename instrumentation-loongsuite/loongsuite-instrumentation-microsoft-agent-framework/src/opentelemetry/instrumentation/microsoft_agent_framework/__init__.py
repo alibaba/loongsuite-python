@@ -15,9 +15,10 @@
 """OpenTelemetry instrumentation for Microsoft Agent Framework.
 
 This instrumentor enables MAF's built-in OTel telemetry (``enable_instrumentation``
-with ``force=True`` so a sticky user-disable does not block us) and registers a
-:class:`~.span_processor.MAFSemanticProcessor` that enriches MAF's native
-spans to align with the ARMS GenAI semantic conventions.
+with ``force=True`` so a sticky user-disable does not block us), bridges MAF's
+native span helpers through ``opentelemetry-util-genai`` finish helpers, and
+registers :class:`~.span_processor.MAFSemanticProcessor` for workflow/MCP
+normalization plus metrics aggregation.
 
 The optional ReAct step patch (``ARMS_MAF_REACT_STEP_ENABLED=true``) wraps the
 ``FunctionInvocationLayer.get_response`` ReAct loop with
@@ -50,6 +51,10 @@ from .config import (
 from .package import _instruments
 from .react_step_patch import apply_react_step_patch, revert_react_step_patch
 from .span_processor import MAFSemanticProcessor
+from .util_genai_bridge import (
+    apply_util_genai_bridge,
+    revert_util_genai_bridge,
+)
 from .version import __version__
 
 __all__ = ["MicrosoftAgentFrameworkInstrumentor", "__version__"]
@@ -107,7 +112,13 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
                 exc,
             )
 
-        # 2) Register the semantic SpanProcessor. MAF uses the standard OTel
+        # 2) Bridge MAF's native span helper functions through util-genai's
+        #    invocation finish helpers. This keeps MAF's span lifetime and
+        #    streaming cleanup behavior, but writes AGENT/LLM/TOOL semantic
+        #    attributes before span.end() creates the exporter snapshot.
+        apply_util_genai_bridge()
+
+        # 3) Register the semantic SpanProcessor. MAF uses the standard OTel
         #    TracerProvider (it does not have its own multi-processor), so
         #    ``add_span_processor`` is the right hook.
         processor = MAFSemanticProcessor(
@@ -163,7 +174,7 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         self._processor = processor
         self._tracer_provider = tracer_provider
 
-        # 3) Optional ReAct step patch (default OFF).
+        # 4) Optional ReAct step patch (default OFF).
         react_enabled = bool(
             kwargs.get(
                 "react_step_enabled", is_react_step_enabled(default=False)
@@ -180,6 +191,7 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         if self._react_applied:
             revert_react_step_patch()
             self._react_applied = False
+        revert_util_genai_bridge()
         if self._processor is not None:
             try:
                 if self._tracer_provider is not None:
