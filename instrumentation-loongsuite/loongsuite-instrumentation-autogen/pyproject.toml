@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loongsuite-instrumentation-autogen"
+dynamic = ["version"]
+description = "LoongSuite Microsoft AutoGen instrumentation"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+  { name = "LoongSuite Python Agent Authors" },
+  { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "opentelemetry-api ~= 1.37",
+  "opentelemetry-instrumentation >= 0.58b0",
+  "opentelemetry-semantic-conventions >= 0.58b0",
+  "opentelemetry-util-genai",
+  "wrapt >= 1.14, < 2.0.0",
+]
+
+[project.optional-dependencies]
+instruments = [
+  "autogen-agentchat >= 0.7.0, < 0.8.0",
+]
+test = [
+  "pytest ~= 8.0",
+  "pytest-cov ~= 4.1.0",
+]
+
+[project.entry-points.opentelemetry_instrumentor]
+autogen = "opentelemetry.instrumentation.autogen:AutoGenInstrumentor"
+
+[project.urls]
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-autogen"
+Repository = "https://github.com/alibaba/loongsuite-python"
+
+[tool.hatch.version]
+path = "src/opentelemetry/instrumentation/autogen/version.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/README.md",
+  "/test-requirements.txt",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opentelemetry"]
+
+[tool.loongsuite.readme]
+supported-packages = ["autogen-agentchat >= 0.7.0, < 0.8.0"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

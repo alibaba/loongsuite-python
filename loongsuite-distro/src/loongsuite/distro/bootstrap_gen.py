@@ -225,6 +225,10 @@ libraries = [
         "instrumentation": "loongsuite-instrumentation-agno==0.7.0.dev",
     },
     {
+        "library": "autogen-agentchat >= 0.7.0, < 0.8.0",
+        "instrumentation": "loongsuite-instrumentation-autogen==0.7.0.dev",
+    },
+    {
         "library": "bfcl-eval >= 4.0.0",
         "instrumentation": "loongsuite-instrumentation-bfclv4==0.7.0.dev",
     },
