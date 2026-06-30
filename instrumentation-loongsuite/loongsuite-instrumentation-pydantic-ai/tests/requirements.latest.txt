@@ -1,0 +1,3 @@
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-pydantic-ai
+pydantic-ai
