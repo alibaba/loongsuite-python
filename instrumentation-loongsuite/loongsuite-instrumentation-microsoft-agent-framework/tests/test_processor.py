@@ -453,7 +453,9 @@ def test_mcp_tool_call_span_classified_as_mcp_execute_tool():
     spans = _flush(exporter)
     s = spans[0]
     assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
-    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.EXECUTE_TOOL
+    assert (
+        s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.EXECUTE_TOOL
+    )
     assert s.attributes.get("gen_ai.tool.name") == "get_weather"
 
 
@@ -511,7 +513,9 @@ def test_mcp_tool_call_stays_mcp_when_maf_writes_execute_tool():
     spans = _flush(exporter)
     s = spans[0]
     assert s.attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.MCP
-    assert s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.EXECUTE_TOOL
+    assert (
+        s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.EXECUTE_TOOL
+    )
     assert s.attributes.get("gen_ai.tool.name") == "slow_summary"
 
 
