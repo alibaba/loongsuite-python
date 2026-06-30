@@ -586,13 +586,11 @@ def _set_common_live_attributes(
         span.set_attribute(GEN_AI_SPAN_KIND, span_kind)
     current_op = _attr_value(span, GEN_AI_OPERATION_NAME)
     if not current_op or (
-        current_op != op_name
-        and span_kind == GenAISpanKind.AGENT
+        current_op != op_name and span_kind == GenAISpanKind.AGENT
     ):
         span.set_attribute(GEN_AI_OPERATION_NAME, op_name)
-    if (
-        span_kind == GenAISpanKind.MCP
-        and not _attr_value(span, "gen_ai.tool.name")
+    if span_kind == GenAISpanKind.MCP and not _attr_value(
+        span, "gen_ai.tool.name"
     ):
         tool_name = _mcp_tool_name(getattr(span, "name", "") or "", span)
         if tool_name:
