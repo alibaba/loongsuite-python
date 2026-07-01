@@ -94,6 +94,7 @@ _EXECUTOR_PROCESS = "executor.process"
 _EDGE_GROUP_PROCESS = "edge_group.process"
 _LIVE_SPAN_MAX_AGE_NS = 60 * 1_000_000_000
 _GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+_FRAMEWORK_PROVIDER_NAME = "microsoft.agent_framework"
 
 
 def _attr_value(span: Any, key: str) -> Any:
@@ -876,6 +877,16 @@ class MAFSemanticProcessor(SpanProcessor):
         normalized = _normalize_provider(provider)
         if normalized is not None and normalized != provider:
             _set_attr(live, GEN_AI_PROVIDER_NAME, normalized)
+        elif (
+            normalized is None
+            and span_kind == GenAISpanKind.AGENT
+            and op_name
+            in {
+                GenAIOperation.CREATE_AGENT,
+                GenAIOperation.INVOKE_AGENT,
+            }
+        ):
+            _set_attr(live, GEN_AI_PROVIDER_NAME, _FRAMEWORK_PROVIDER_NAME)
 
         # 5) Normalize finish reasons written by MAF as a JSON string.
         _normalize_finish_reasons(live, readable)

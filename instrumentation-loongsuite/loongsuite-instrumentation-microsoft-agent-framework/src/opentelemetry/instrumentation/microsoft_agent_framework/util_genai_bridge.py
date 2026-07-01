@@ -76,6 +76,7 @@ from .semantic_conventions import (
     GenAISpanKind,
 )
 from .span_processor import (
+    _FRAMEWORK_PROVIDER_NAME,
     _attr_value,
     _classify_span,
     _is_exception_event,
@@ -598,6 +599,11 @@ def _set_common_live_attributes(
     provider = _normalize_provider(_attr_value(span, GEN_AI_PROVIDER_NAME))
     if provider is not None:
         span.set_attribute(GEN_AI_PROVIDER_NAME, provider)
+    elif span_kind == GenAISpanKind.AGENT and op_name in {
+        GenAIOperation.CREATE_AGENT,
+        GenAIOperation.INVOKE_AGENT,
+    }:
+        span.set_attribute(GEN_AI_PROVIDER_NAME, _FRAMEWORK_PROVIDER_NAME)
     finish_reasons = _finish_reasons(span)
     if finish_reasons:
         span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons)

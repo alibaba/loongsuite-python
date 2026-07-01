@@ -303,6 +303,28 @@ def test_agent_span_is_finalized_by_util_genai_before_export(monkeypatch):
     assert span.attributes.get("gen_ai.agent.id") == "agent-1"
 
 
+def test_agent_span_gets_framework_provider_when_missing(monkeypatch):
+    obs_mod, exporter = _install_fake_observability(monkeypatch)
+    util_genai_bridge.apply_util_genai_bridge()
+    try:
+        with obs_mod._get_span(
+            {
+                GEN_AI_OPERATION_NAME: GenAIOperation.INVOKE_AGENT,
+                "gen_ai.agent.name": "planner",
+            },
+            "gen_ai.agent.name",
+        ):
+            pass
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    span = exporter.get_finished_spans()[0]
+    assert (
+        span.attributes.get(GEN_AI_PROVIDER_NAME)
+        == "microsoft.agent_framework"
+    )
+
+
 def test_mcp_span_is_seeded_before_export(monkeypatch):
     obs_mod, exporter = _install_fake_observability(monkeypatch)
     util_genai_bridge.apply_util_genai_bridge()

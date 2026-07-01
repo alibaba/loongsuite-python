@@ -207,6 +207,9 @@ def test_executor_process_agent_executor_becomes_agent():
     assert (
         s.attributes.get(GEN_AI_OPERATION_NAME) == GenAIOperation.INVOKE_AGENT
     )
+    assert (
+        s.attributes.get(GEN_AI_PROVIDER_NAME) == "microsoft.agent_framework"
+    )
 
 
 def test_executor_process_unknown_executor_stays_workflow_operation():
