@@ -45,6 +45,9 @@ FULL_RUN_PREFIXES = (
 TOX_LOONGSUITE_INI_PATH = "tox-loongsuite.ini"
 UTIL_GENAI_PREFIX = "util/opentelemetry-util-genai/"
 LOONGSUITE_INSTRUMENTATION_PREFIX = "instrumentation-loongsuite/"
+BOOTSTRAP_REGISTRY_PREFIX = (
+    "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+)
 DOC_ONLY_SUFFIXES = (".md", ".rst")
 REPO_ROOT = Path.cwd()
 TOX_LOONGSUITE_INI = REPO_ROOT / TOX_LOONGSUITE_INI_PATH
@@ -144,6 +147,30 @@ def _loongsuite_package_from_path(path: str) -> str | None:
         return None
 
     package = package_path.parts[1]
+    if package.startswith("loongsuite-instrumentation-"):
+        return package
+
+    return None
+
+
+def _loongsuite_package_from_bootstrap_registry_path(path: str) -> str | None:
+    normalized = path.strip("/")
+    if not normalized.startswith(BOOTSTRAP_REGISTRY_PREFIX):
+        return None
+
+    relative_path = normalized.removeprefix(BOOTSTRAP_REGISTRY_PREFIX)
+    if "/" in relative_path:
+        return None
+
+    registry_path = PurePosixPath(relative_path)
+    if registry_path.suffix != ".py":
+        return None
+
+    module_name = registry_path.stem
+    if module_name == "__init__" or module_name.startswith("_"):
+        return None
+
+    package = module_name.replace("_", "-")
     if package.startswith("loongsuite-instrumentation-"):
         return package
 
@@ -337,6 +364,16 @@ def _detect_outputs() -> dict[str, str]:
 
         if normalized == TOX_LOONGSUITE_INI_PATH:
             tox_changed = True
+            continue
+
+        registry_package = _loongsuite_package_from_bootstrap_registry_path(
+            changed_file
+        )
+        if registry_package:
+            if registry_package not in known_packages:
+                unknown_packages.add(registry_package)
+            else:
+                packages.add(registry_package)
             continue
 
         if _requires_full_run(changed_file):

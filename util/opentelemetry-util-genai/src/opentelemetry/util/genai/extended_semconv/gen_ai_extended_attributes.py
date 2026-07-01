@@ -210,6 +210,12 @@ class GenAiSpanKindValues(Enum):
     TOOL = "TOOL"
     """Tool execution operation."""
 
+    WORKFLOW = "WORKFLOW"
+    """GenAI workflow invocation operation."""
+
+    MCP = "MCP"
+    """Tool execution via Model Context Protocol."""
+
     RETRIEVER = "RETRIEVER"
     """Document retrieval operation."""
 

@@ -1,7 +1,7 @@
 
 | Instrumentation | Supported Packages | Metrics support | Semconv status |
 | --------------- | ------------------ | --------------- | -------------- |
-| [loongsuite-instrumentation-agentscope](./loongsuite-instrumentation-agentscope) | agentscope >= 1.0.0 | No | development
+| [loongsuite-instrumentation-agentscope](./loongsuite-instrumentation-agentscope) | agentscope >= 1.0.0, < 3.0.0 | No | development
 | [loongsuite-instrumentation-agno](./loongsuite-instrumentation-agno) | agno >= 2.0.0, < 3 | No | development
 | [loongsuite-instrumentation-algotune](./loongsuite-instrumentation-algotune) | algotune | No | development
 | [loongsuite-instrumentation-bfclv4](./loongsuite-instrumentation-bfclv4) | bfcl-eval >= 4.0.0 | No | development

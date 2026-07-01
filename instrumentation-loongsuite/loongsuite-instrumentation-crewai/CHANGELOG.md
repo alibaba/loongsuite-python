@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Keep the authentication-failure test deterministic by using fake provider
+  keys instead of empty keys, avoiding fallback live OpenAI calls in CI.
+  ([#232](https://github.com/alibaba/loongsuite-python/pull/232))
+
 ## Version 0.6.0 (2026-06-03)
 
 ### Breaking

@@ -210,6 +210,66 @@ def test_generated_workflow_only_change_skips_jobs(monkeypatch, tmp_path):
     assert outputs["packages"] == "||"
 
 
+def test_bootstrap_registry_fragment_scopes_package_change(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [
+            "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+            "loongsuite_instrumentation_crewai.py"
+        ],
+        known_packages={"loongsuite-instrumentation-crewai"},
+    )
+
+    assert outputs["full"] == "false"
+    assert outputs["packages"] == "|loongsuite-instrumentation-crewai|"
+
+
+def test_bootstrap_registry_loader_change_runs_full_suite(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [
+            "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+            "__init__.py"
+        ],
+    )
+
+    assert outputs["full"] == "true"
+    assert outputs["reason"] == (
+        "shared LoongSuite file changed: "
+        "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+        "__init__.py"
+    )
+
+
+def test_upstream_bootstrap_registry_fragment_runs_full_suite(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [
+            "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+            "opentelemetry_instrumentation_aiohttp_client.py"
+        ],
+    )
+
+    assert outputs["full"] == "true"
+    assert outputs["reason"] == (
+        "shared LoongSuite file changed: "
+        "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+        "opentelemetry_instrumentation_aiohttp_client.py"
+    )
+
+
 def test_release_workflow_change_runs_full_suite(monkeypatch, tmp_path):
     outputs = _run_detector(
         monkeypatch,
