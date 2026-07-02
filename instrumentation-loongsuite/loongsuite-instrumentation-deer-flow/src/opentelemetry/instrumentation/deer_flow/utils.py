@@ -20,11 +20,11 @@ import logging
 import os
 from typing import Any
 
+from opentelemetry.util.genai.types import ContentCapturingMode
 from opentelemetry.util.genai.utils import (
     get_content_capturing_mode,
     is_experimental_mode,
 )
-from opentelemetry.util.genai.types import ContentCapturingMode
 
 logger = logging.getLogger(__name__)
 

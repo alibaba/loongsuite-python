@@ -68,6 +68,9 @@ def test_instrument_and_uninstrument_with_stubs(
         async def _aexecute(self, task: str) -> str:
             return f"done:{task}"
 
+        def execute_async(self, prompt: str, task_id: str | None = None) -> str:
+            return task_id or "tid"
+
     async def task_tool(*a: Any, **k: Any) -> str:
         return "task_done"
 

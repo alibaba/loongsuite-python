@@ -25,7 +25,6 @@ from wrapt import wrap_function_wrapper
 from opentelemetry.instrumentation.deer_flow.utils import (
     DEER_FLOW_COMPONENT,
     DEER_FLOW_OPERATION,
-    DEER_FLOW_PROVIDER,
     _call_arg,
     _extract_human_content,
     _non_empty_string,
@@ -35,7 +34,11 @@ from opentelemetry.instrumentation.deer_flow.utils import (
 from opentelemetry.trace import Status, StatusCode
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import EntryInvocation
-from opentelemetry.util.genai.types import Error, InputMessage, MessagePart, Text
+from opentelemetry.util.genai.types import (
+    Error,
+    InputMessage,
+    Text,
+)
 
 logger = logging.getLogger(__name__)
 

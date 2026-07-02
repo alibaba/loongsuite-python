@@ -33,6 +33,7 @@ from typing import Any
 
 from wrapt import wrap_function_wrapper
 
+from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.deer_flow.utils import (
     DEER_FLOW_COMPONENT,
     DEER_FLOW_OPERATION,
@@ -41,14 +42,19 @@ from opentelemetry.instrumentation.deer_flow.utils import (
     _should_capture_content,
     _should_capture_memory_content,
 )
-from opentelemetry import context as otel_context
-from opentelemetry.trace import SpanKind, Status, StatusCode, get_tracer, set_span_in_context
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
+from opentelemetry.trace import (
+    SpanKind,
+    Status,
+    StatusCode,
+    get_tracer,
+    set_span_in_context,
+)
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SPAN_KIND,
-)
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAI,
 )
 
 logger = logging.getLogger(__name__)

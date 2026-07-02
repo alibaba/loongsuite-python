@@ -18,10 +18,14 @@ Implements the hybrid plan documented in
 ``llm-dev/deer-flow/investigate/execute.md``: LLM / Tool / ReAct Step spans are
 delegated to ``loongsuite-instrumentation-langchain`` (DeerFlow is built on
 ``langchain.agents.create_agent``), while DeerFlow-specific Entry / Agent /
-Task / Sandbox / Memory spans are produced by this package via seven
-``wrapt`` monkey patches on DeerFlow public APIs:
+Task / Sandbox / Memory spans are produced by this package via ``wrapt``
+monkey patches on DeerFlow public APIs:
 
 * ``runtime.runs.worker.run_agent`` → ENTRY span
+* ``subagents.executor.SubagentExecutor.execute_async`` → captures caller OTel
+  Context onto the executor instance (no span); the snapshot is replayed by
+  the ``_aexecute`` wrapper so the subagent AGENT span parents to the TASK
+  span across the isolated subagent event loop (execute.md §3 R1 fix).
 * ``subagents.executor.SubagentExecutor._aexecute`` → AGENT span (subagent)
 * ``tools.builtins.task_tool.task_tool`` → TASK span (subagent dispatch)
 * ``sandbox.sandbox.Sandbox.execute_command`` (and the other abstract

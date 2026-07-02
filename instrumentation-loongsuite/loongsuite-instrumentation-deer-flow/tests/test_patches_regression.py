@@ -50,6 +50,11 @@ if _PLUGIN_SRC.is_dir() and str(_PLUGIN_SRC) not in sys.path:
 from opentelemetry.instrumentation.deer_flow.patches.sandbox import (  # noqa: E402
     _ProviderAcquireAsyncWrapper,
 )
+from opentelemetry.instrumentation.deer_flow.patches.subagent import (  # noqa: E402
+    _OTEL_PARENT_CTX_ATTR,
+    _ExecuteAsyncContextCaptureWrapper,
+    _SubagentAExecuteWrapper,
+)
 from opentelemetry.instrumentation.deer_flow.patches.task_tool import (  # noqa: E402
     _TaskToolWrapper,
 )
@@ -58,7 +63,10 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
-from opentelemetry.trace import StatusCode, get_tracer  # noqa: E402
+from opentelemetry.trace import SpanKind, StatusCode, get_tracer  # noqa: E402
+from opentelemetry.util.genai.extended_handler import (  # noqa: E402
+    ExtendedTelemetryHandler,
+)
 
 
 @pytest.fixture(scope="function", name="span_exporter")
@@ -219,3 +227,99 @@ def test_task_span_is_parent_of_langchain_tool_span(
     assert tool_span.parent.span_id == task_span.context.span_id, (
         "TOOL span parent is not the TASK span — context attach missing"
     )
+
+
+def test_subagent_agent_span_parents_to_task_span_across_isolated_loop(
+    tracer_provider: TracerProvider,
+    span_exporter: InMemorySpanExporter,
+) -> None:
+    """execute.md §3 R1 fix: subagent AGENT span must parent to the TASK span
+    even when ``_aexecute`` runs on the isolated subagent event loop thread.
+
+    Reproduction:
+    1. ``task_tool`` wrapper starts a TASK span and attaches it.
+    2. Inside ``task_tool``, ``SubagentExecutor.execute_async`` is called —
+       ``_ExecuteAsyncContextCaptureWrapper`` captures the current OTel
+       Context (with the TASK span) onto the executor instance.
+    3. The isolated loop thread runs ``_aexecute``. Without the R1 fix, the
+       current OTel Context on that thread has no parent span, so the AGENT
+       span emitted by ``_SubagentAExecuteWrapper`` would become a root span
+       rather than a child of TASK.
+    4. ``_SubagentAExecuteWrapper`` re-attaches the captured snapshot before
+       calling ``start_invoke_agent`` so the AGENT span parents to TASK.
+    """
+
+    inner_tracer = _make_tracer(tracer_provider)
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+
+    # Simulate a TASK span started by ``task_tool`` wrapper.
+    task_span = inner_tracer.start_span(
+        "run_task subagent.invoke:researcher", kind=SpanKind.INTERNAL
+    )
+    task_span.set_attribute("gen_ai.span.kind", "TASK")
+
+    from opentelemetry import context as otel_context
+    from opentelemetry.trace import set_span_in_context
+
+    class _Executor:
+        def __init__(self) -> None:
+            self.config = type("_Cfg", (), {"name": "researcher"})()
+            self.thread_id = "tid-123"
+
+        async def _aexecute(self, task: str) -> str:
+            # If the R1 fix is in place, the *current* OTel context here has
+            # the TASK span as parent — so a fresh span started now parents
+            # to it. We start a span to mirror what
+            # ``ExtendedTelemetryHandler.start_invoke_agent`` does internally.
+            with inner_tracer.start_as_current_span(
+                "invoke_agent researcher"
+            ) as agent_span:
+                agent_span.set_attribute("gen_ai.span.kind", "AGENT")
+                return f"done:{task}"
+
+        def execute_async(self, prompt: str, task_id: str | None = None) -> str:
+            return task_id or "tid"
+
+    executor = _Executor()
+    capture_wrapper = _ExecuteAsyncContextCaptureWrapper()
+    aexec_wrapper = _SubagentAExecuteWrapper(handler=handler)
+
+    async def _driver() -> None:
+        # Step 1–2: attach TASK span and run ``execute_async`` so the capture
+        # wrapper stores the parent context on the executor instance.
+        token = otel_context.attach(set_span_in_context(task_span))
+        try:
+            capture_wrapper.__call__(
+                executor.execute_async, executor, ("do thing",), {}
+            )
+            # Step 3: detach TASK from the *driver* context to simulate the
+            # isolated loop thread having an empty OTel context.
+            otel_context.detach(token)
+        finally:
+            # Detach is idempotent; ensure we don't leak if the try block
+            # raised before detach ran.
+            pass
+
+        # Now the driver context no longer has TASK active — mirroring the
+        # isolated loop thread state. The subagent AGENT span emitted below
+        # must STILL parent to TASK because ``_aexecute`` re-attaches the
+        # captured snapshot.
+        await aexec_wrapper.__call__(
+            executor._aexecute, executor, ("do thing",), {}
+        )
+
+    asyncio.run(_driver())
+
+    task_span.end()
+
+    spans = {s.name: s for s in span_exporter.get_finished_spans()}
+    assert "run_task subagent.invoke:researcher" in spans, list(spans)
+    assert "invoke_agent researcher" in spans, list(spans)
+    agent_span = spans["invoke_agent researcher"]
+    assert agent_span.parent is not None, (
+        "subagent AGENT span has no parent — R1 context replay missing"
+    )
+    assert agent_span.parent.span_id == task_span.context.span_id, (
+        "subagent AGENT span parent is not the TASK span — R1 fix regression"
+    )
+    assert getattr(executor, _OTEL_PARENT_CTX_ATTR, None) is not None
