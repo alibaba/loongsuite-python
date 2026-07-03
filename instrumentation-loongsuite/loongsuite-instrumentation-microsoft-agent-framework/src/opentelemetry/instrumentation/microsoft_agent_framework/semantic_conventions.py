@@ -1,0 +1,117 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Semantic convention constants and MAF→ARMS attribute mapping table.
+
+Centralizes:
+- ``gen_ai.span.kind`` enum values (per ARMS ``gen-ai.md``).
+- ``gen_ai.operation.name`` enum values.
+- MAF private-prefix attribute → ``gen_ai.*`` rename map (kept as a local constant,
+  aligned with the pattern in
+  ``opentelemetry-instrumentation-openai-agents-v2/.../span_processor.py``).
+"""
+
+from __future__ import annotations
+
+from typing import Final
+
+
+class GenAISpanKind:
+    """``gen_ai.span.kind`` enumeration (ARMS gen-ai.md)."""
+
+    AGENT = "AGENT"
+    LLM = "LLM"
+    TOOL = "TOOL"
+    EMBEDDING = "EMBEDDING"
+    WORKFLOW = "WORKFLOW"
+    STEP = "STEP"
+    ENTRY = "ENTRY"
+    RETRIEVER = "RETRIEVER"
+    RERANKER = "RERANKER"
+    MCP = "MCP"
+
+
+class GenAIOperation:
+    """``gen_ai.operation.name`` enumeration (ARMS gen-ai.md)."""
+
+    CHAT = "chat"
+    TEXT_COMPLETION = "text_completion"
+    GENERATE_CONTENT = "generate_content"
+    EMBEDDINGS = "embeddings"
+    EXECUTE_TOOL = "execute_tool"
+    CREATE_AGENT = "create_agent"
+    INVOKE_AGENT = "invoke_agent"
+    RETRIEVAL = "retrieval"
+    WORKFLOW = "invoke_workflow"
+    REACT = "react"
+
+
+# MAF span-name prefixes (from observability.py OtelAttr) — used to classify a
+# span when ``gen_ai.operation.name`` is not already set on it.
+#
+# Note: MCP spans are *not* listed here. Their names follow
+# ``{mcp.method.name} {target}`` (e.g. ``tools/call get_weather``,
+# ``initialize``) so the method name is unbounded and would collide with other
+# prefixes. MCP is detected via the ``mcp.method.name`` attribute (set
+# unconditionally by MAF's ``create_mcp_client_span`` at
+# ``observability.py:2101``) in :func:`span_processor._is_mcp_span`.
+MAF_SPAN_NAME_PREFIXES: Final[dict[str, str]] = {
+    "chat ": GenAIOperation.CHAT,
+    "embeddings ": GenAIOperation.EMBEDDINGS,
+    "execute_tool ": GenAIOperation.EXECUTE_TOOL,
+    "invoke_agent ": GenAIOperation.INVOKE_AGENT,
+    "create_agent ": GenAIOperation.CREATE_AGENT,
+    "workflow.run": GenAIOperation.WORKFLOW,
+    "workflow.build": GenAIOperation.WORKFLOW,
+    "message.send": GenAIOperation.WORKFLOW,
+    "executor.process": GenAIOperation.WORKFLOW,
+    "edge_group.process": GenAIOperation.WORKFLOW,
+    "react step": GenAIOperation.REACT,
+}
+
+# MAF writes some attributes with its own private prefix (no ``gen_ai.`` prefix).
+# We rename them to the ARMS-spec key in ``MAFSemanticProcessor.on_end`` so that
+# downstream platforms see a single canonical key. The mapping is idempotent —
+# if MAF later writes the canonical key directly, the rename becomes a no-op
+# because the source key won't be present.
+MAF_ATTR_RENAME_MAP: Final[dict[str, str]] = {
+    # Workflow attributes. The LoongSuite registry currently defines only
+    # ``gen_ai.workflow.name``; keep other MAF-private keys under their original
+    # names instead of extending the ``gen_ai`` namespace with unregistered keys.
+    "workflow.name": "gen_ai.workflow.name",
+}
+
+# Provider name normalization — collapse known aliases to the canonical OTel/ARMS
+# value to avoid dimension sprawl in metrics. Framework names such as
+# ``microsoft.agent_framework`` are intentionally not mapped to a concrete model
+# provider because MAF can route to different underlying providers.
+PROVIDER_NAME_NORMALIZE: Final[dict[str, str]] = {
+    "azure_openai": "openai",
+    "azure_ai_openai": "openai",
+    "azure.openai": "openai",
+}
+
+# Attribute keys we read off the span. Centralized so tests can import them.
+GEN_AI_SPAN_KIND = "gen_ai.span.kind"
+GEN_AI_OPERATION_NAME = "gen_ai.operation.name"
+GEN_AI_PROVIDER_NAME = "gen_ai.provider.name"
+GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
+GEN_AI_RESPONSE_MODEL = "gen_ai.response.model"
+GEN_AI_RESPONSE_FINISH_REASONS = "gen_ai.response.finish_reasons"
+GEN_AI_RESPONSE_TTFT = "gen_ai.response.time_to_first_token"
+GEN_AI_USAGE_INPUT_TOKENS = "gen_ai.usage.input_tokens"
+GEN_AI_USAGE_OUTPUT_TOKENS = "gen_ai.usage.output_tokens"
+GEN_AI_REACT_ROUND = "gen_ai.react.round"
+GEN_AI_REACT_FINISH_REASON = "gen_ai.react.finish_reason"
+ERROR_TYPE = "error.type"

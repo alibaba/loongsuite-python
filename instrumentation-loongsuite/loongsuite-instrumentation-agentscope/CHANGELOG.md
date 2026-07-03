@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add version-aware AgentScope v2 middleware instrumentation while preserving
+  AgentScope v1 compatibility.
+
 ## Version 0.6.0 (2026-06-03)
 
 There are no changelog entries for this release.
