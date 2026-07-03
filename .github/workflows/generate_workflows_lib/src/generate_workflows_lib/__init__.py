@@ -398,6 +398,7 @@ def generate_extension_test_workflow(
     workflow_directory_path: Path,
     additional_config_path: Path,
     *operating_systems,
+    control_runner="ubuntu-latest",
 ) -> None:
     loongsuite_envs = get_loongsuite_tox_envs(additional_config_path)
     if not loongsuite_envs:
@@ -415,6 +416,7 @@ def generate_extension_test_workflow(
         "loongsuite_test",
         "loongsuite_test",
         workflow_directory_path,
+        control_runner=control_runner,
     )
 
 
@@ -423,6 +425,7 @@ def generate_extension_lint_workflow(
     workflow_directory_path: Path,
     additional_config_path: Path,
     runner="ubuntu-latest",
+    control_runner="ubuntu-latest",
 ) -> None:
     loongsuite_envs = get_loongsuite_tox_envs(additional_config_path)
     if not loongsuite_envs:
@@ -434,6 +437,7 @@ def generate_extension_lint_workflow(
         "loongsuite_lint",
         workflow_directory_path,
         runner=runner,
+        control_runner=control_runner,
     )
 
 
@@ -461,6 +465,7 @@ def _generate_workflow_with_template(
     workflow_directory_path: Path,
     max_jobs=250,
     runner="ubuntu-latest",
+    control_runner="ubuntu-latest",
 ):
     if (
         name in {"loongsuite_lint", "loongsuite_test"}
@@ -493,6 +498,7 @@ def _generate_workflow_with_template(
                     job_datas=job_datas,
                     file_number=file_number,
                     runner=runner,
+                    control_runner=control_runner,
                 )
             )
             test_yml_file.write("\n")

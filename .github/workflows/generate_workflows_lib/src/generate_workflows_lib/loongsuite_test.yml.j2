@@ -34,7 +34,7 @@ env:
 jobs:
   loongsuite_changes:
     name: LoongSuite changed packages
-    runs-on: ubuntu-latest
+    runs-on: {{ control_runner }}
     outputs:
       full: ${% raw %}{{ steps.detect.outputs.full }}{% endraw %}
       packages: ${% raw %}{{ steps.detect.outputs.packages }}{% endraw %}
@@ -137,7 +137,7 @@ jobs:
       - loongsuite_changes
       - loongsuite_test
     if: ${% raw %}{{ always() }}{% endraw %}
-    runs-on: ubuntu-latest
+    runs-on: {{ control_runner }}
     steps:
       - name: Check LoongSuite test result
         shell: bash

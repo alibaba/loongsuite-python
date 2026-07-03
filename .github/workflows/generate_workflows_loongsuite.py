@@ -19,12 +19,14 @@ generate_extension_test_workflow(
     workflows_directory_path,
     tox_loongsuite_ini_path,
     arc_runner_label,
+    control_runner=arc_runner_label,
 )
 generate_extension_lint_workflow(
     tox_ini_path,
     workflows_directory_path,
     tox_loongsuite_ini_path,
     arc_runner_label,
+    control_runner=arc_runner_label,
 )
 generate_extension_misc_workflow(
     tox_ini_path, workflows_directory_path, tox_loongsuite_ini_path
