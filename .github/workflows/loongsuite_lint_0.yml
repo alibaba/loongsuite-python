@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -34,7 +34,7 @@ env:
 jobs:
   loongsuite_changes:
     name: LoongSuite changed packages
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     outputs:
       full: ${{ steps.detect.outputs.full }}
       packages: ${{ steps.detect.outputs.packages }}
@@ -105,7 +105,7 @@ jobs:
     name: LoongSuite ${{ matrix.ui_name }}
     needs: loongsuite_changes
     if: ${{ needs.loongsuite_changes.outputs.has_jobs == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -131,7 +131,7 @@ jobs:
       - loongsuite_changes
       - loongsuite_lint
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     steps:
       - name: Check LoongSuite lint result
         shell: bash

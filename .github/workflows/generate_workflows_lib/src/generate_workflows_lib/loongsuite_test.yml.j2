@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${% raw %}{{ github.workflow }}-${{ github.head_ref || github.run_id }}{% endraw %}
+  group: ${% raw %}{{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref || github.run_id }}{% endraw %}
   cancel-in-progress: true
 
 env:
@@ -34,7 +34,7 @@ env:
 jobs:
   loongsuite_changes:
     name: LoongSuite changed packages
-    runs-on: ubuntu-latest
+    runs-on: {{ control_runner }}
     outputs:
       full: ${% raw %}{{ steps.detect.outputs.full }}{% endraw %}
       packages: ${% raw %}{{ steps.detect.outputs.packages }}{% endraw %}
@@ -137,7 +137,7 @@ jobs:
       - loongsuite_changes
       - loongsuite_test
     if: ${% raw %}{{ always() }}{% endraw %}
-    runs-on: ubuntu-latest
+    runs-on: {{ control_runner }}
     steps:
       - name: Check LoongSuite test result
         shell: bash
