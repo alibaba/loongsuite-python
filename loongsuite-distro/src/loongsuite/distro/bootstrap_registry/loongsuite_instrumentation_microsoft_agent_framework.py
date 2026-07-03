@@ -21,10 +21,10 @@
 
 REGISTRY = {
     "source": "loongsuite",
-    "package": "loongsuite-instrumentation-agentscope",
-    "instrumentation": "loongsuite-instrumentation-agentscope==0.7.0.dev",
+    "package": "loongsuite-instrumentation-microsoft-agent-framework",
+    "instrumentation": "loongsuite-instrumentation-microsoft-agent-framework==0.7.0.dev",
     "libraries": [
-        "agentscope >= 1.0.0, < 3.0.0",
+        "agent-framework-core >= 1.0.0",
     ],
     "default": False,
 }
