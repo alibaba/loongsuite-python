@@ -16,13 +16,13 @@
 # RUN `python scripts/loongsuite/generate_loongsuite_bootstrap.py` TO REGENERATE.
 #
 # Generated with options:
-#   --upstream-version: (from source)
-#   --loongsuite-version: (from source)
+#   --upstream-version: 0.60b1
+#   --loongsuite-version: 0.7.0
 
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-qwen-agent",
-    "instrumentation": "loongsuite-instrumentation-qwen-agent==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-qwen-agent==0.7.0",
     "libraries": [
         "qwen-agent >= 0.0.20",
     ],

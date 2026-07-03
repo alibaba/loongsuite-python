@@ -16,13 +16,13 @@
 # RUN `python scripts/loongsuite/generate_loongsuite_bootstrap.py` TO REGENERATE.
 #
 # Generated with options:
-#   --upstream-version: (from source)
-#   --loongsuite-version: (from source)
+#   --upstream-version: 0.60b1
+#   --loongsuite-version: 0.7.0
 
 REGISTRY = {
     "source": "upstream",
     "package": "opentelemetry-instrumentation-falcon",
-    "instrumentation": "opentelemetry-instrumentation-falcon==0.62b0.dev",
+    "instrumentation": "opentelemetry-instrumentation-falcon==0.60b1",
     "libraries": [
         "falcon >= 1.4.1, < 5.0.0",
     ],

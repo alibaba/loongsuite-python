@@ -16,13 +16,13 @@
 # RUN `python scripts/loongsuite/generate_loongsuite_bootstrap.py` TO REGENERATE.
 #
 # Generated with options:
-#   --upstream-version: (from source)
-#   --loongsuite-version: (from source)
+#   --upstream-version: 0.60b1
+#   --loongsuite-version: 0.7.0
 
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-google-adk",
-    "instrumentation": "loongsuite-instrumentation-google-adk==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-google-adk==0.7.0",
     "libraries": [
         "google-adk >= 0.1.0",
     ],

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.7.0 (2026-07-03)
+
 ### Fixed
 
 - Create Hermes `ENTRY` spans for platform-less `AIAgent` calls by mirroring

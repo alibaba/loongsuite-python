@@ -16,13 +16,13 @@
 # RUN `python scripts/loongsuite/generate_loongsuite_bootstrap.py` TO REGENERATE.
 #
 # Generated with options:
-#   --upstream-version: (from source)
-#   --loongsuite-version: (from source)
+#   --upstream-version: 0.60b1
+#   --loongsuite-version: 0.7.0
 
 REGISTRY = {
     "source": "upstream",
     "package": "opentelemetry-instrumentation-pymemcache",
-    "instrumentation": "opentelemetry-instrumentation-pymemcache==0.62b0.dev",
+    "instrumentation": "opentelemetry-instrumentation-pymemcache==0.60b1",
     "libraries": [
         "pymemcache >= 1.3.5, < 5",
     ],
