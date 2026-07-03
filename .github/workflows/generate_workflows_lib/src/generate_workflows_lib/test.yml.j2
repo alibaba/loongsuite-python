@@ -5,16 +5,15 @@ name: Test {{ file_number }}
 
 on:
   push:
-    branches-ignore:
-    - 'release/*'
-    - 'otelbot/*'
+    branches:
+    - main
   pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${% raw %}{{ github.workflow }}-${{ github.head_ref || github.run_id }}{% endraw %}
+  group: ${% raw %}{{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref || github.run_id }}{% endraw %}
   cancel-in-progress: true
 
 env:
@@ -56,5 +55,9 @@ jobs:
       {%- endif %}
 
       - name: Run tests
-        run: tox -e {{ job_data.tox_env }} -- -ra
+        {%- if job_data.env_count == 1 %}
+        run: tox -e {{ job_data.tox_envs[0] }} -- -ra
+        {%- else %}
+        run: tox run-parallel -p {{ job_data.parallelism }} -e {{ job_data.tox_envs | join(',') }} -- -ra
+        {%- endif %}
   {%- endfor %}

@@ -16,6 +16,17 @@ _tox_lint_env_regex = re_compile(r"lint-(?P<name>[-\w]+)")
 _tox_contrib_env_regex = re_compile(
     r"py39-test-(?P<name>[-\w]+\w)-?(?P<contrib_requirements>\d+)?"
 )
+_OS_ALIASES = {
+    "ubuntu-latest": "Ubuntu",
+    "windows-latest": "Windows",
+    "loongsuite-python-arc": "ARC",
+}
+
+
+def _slug(value: str) -> str:
+    return (
+        str(value).lower().replace(".", "").replace("-", "_").replace(" ", "_")
+    )
 
 
 def _get_job_package_name(name: str, package_names=None) -> str:
@@ -59,8 +70,6 @@ def get_test_job_datas(
     operating_systems: list,
     package_names=None,
 ) -> list:
-    os_alias = {"ubuntu-latest": "Ubuntu", "windows-latest": "Windows"}
-
     python_version_alias = {
         "pypy3": "pypy-3.9",
         "pypy310": "pypy-3.10",
@@ -103,7 +112,7 @@ def get_test_job_datas(
                         f"{groups['name']}"
                         f"{test_requirements}"
                         f"{aliased_python_version} "
-                        f"{os_alias[operating_system]}"
+                        f"{_OS_ALIASES[operating_system]}"
                     ),
                     "package": _get_job_package_name(
                         groups["name"],
@@ -193,9 +202,80 @@ def get_misc_job_datas(tox_envs: list) -> list:
     return misc_job_datas
 
 
+def _batch_job_datas(
+    job_datas: list,
+    batch_size: int,
+    parallelism: int,
+    group_keys=(),
+) -> list:
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+
+    if parallelism < 1:
+        raise ValueError("parallelism must be >= 1")
+
+    grouped_job_datas = {}
+    for job_data in job_datas:
+        key = tuple(job_data.get(group_key) for group_key in group_keys)
+        grouped_job_datas.setdefault(key, []).append(job_data)
+
+    batched_job_datas = []
+    batch_index = 0
+
+    for group in grouped_job_datas.values():
+        for chunk_start in range(0, len(group), batch_size):
+            chunk = group[chunk_start : chunk_start + batch_size]
+            first_job_data = chunk[0]
+            tox_envs = [job_data["tox_env"] for job_data in chunk]
+
+            if len(chunk) == 1:
+                batched_job_data = dict(first_job_data)
+                batched_job_data["tox_envs"] = tox_envs
+                batched_job_data["parallelism"] = 1
+                batched_job_data["env_count"] = 1
+                batched_job_datas.append(batched_job_data)
+                continue
+
+            batch_index += 1
+            name_parts = [
+                _slug(first_job_data[group_key])
+                for group_key in group_keys
+                if group_key in first_job_data
+            ]
+            name_suffix = "_".join(name_parts) if name_parts else "tox"
+
+            if "python_version" in first_job_data and "os" in first_job_data:
+                ui_prefix = (
+                    f"{first_job_data['python_version']} "
+                    f"{_OS_ALIASES.get(first_job_data['os'], first_job_data['os'])}"
+                )
+            else:
+                ui_prefix = "tox"
+
+            batched_job_data = dict(first_job_data)
+            batched_job_data["name"] = f"batch_{batch_index:03d}_{name_suffix}"
+            batched_job_data["ui_name"] = (
+                f"{ui_prefix} batch {batch_index:03d} ({len(chunk)} envs)"
+            )
+            batched_job_data["tox_env"] = tox_envs[0]
+            batched_job_data["tox_envs"] = tox_envs
+            batched_job_data["parallelism"] = min(parallelism, len(chunk))
+            batched_job_data["env_count"] = len(chunk)
+            batched_job_datas.append(batched_job_data)
+
+    return batched_job_datas
+
+
 def _generate_workflow(
-    job_datas: list, name: str, workflow_directory_path: Path, max_jobs=250
+    job_datas: list,
+    name: str,
+    workflow_directory_path: Path,
+    max_jobs=250,
+    runner="ubuntu-latest",
 ):
+    for stale_workflow_path in workflow_directory_path.glob(f"{name}_*.yml"):
+        stale_workflow_path.unlink()
+
     # Github seems to limit the amount of jobs in a workflow file, that is why
     # they are split in groups of 250 per workflow file.
     for file_number, job_datas in enumerate(
@@ -210,16 +290,32 @@ def _generate_workflow(
             test_yml_file.write(
                 Environment(loader=FileSystemLoader(Path(__file__).parent))
                 .get_template(f"{name}.yml.j2")
-                .render(job_datas=job_datas, file_number=file_number)
+                .render(
+                    job_datas=job_datas,
+                    file_number=file_number,
+                    runner=runner,
+                )
             )
             test_yml_file.write("\n")
 
 
 def generate_test_workflow(
-    tox_ini_path: Path, workflow_directory_path: Path, *operating_systems
+    tox_ini_path: Path,
+    workflow_directory_path: Path,
+    *operating_systems,
+    batch_size=1,
+    parallelism=1,
 ) -> None:
+    job_datas = get_test_job_datas(
+        get_tox_envs(tox_ini_path), operating_systems
+    )
     _generate_workflow(
-        get_test_job_datas(get_tox_envs(tox_ini_path), operating_systems),
+        _batch_job_datas(
+            job_datas,
+            batch_size=batch_size,
+            parallelism=parallelism,
+            group_keys=("os", "python_version"),
+        ),
         "test",
         workflow_directory_path,
     )
@@ -228,11 +324,20 @@ def generate_test_workflow(
 def generate_lint_workflow(
     tox_ini_path: Path,
     workflow_directory_path: Path,
+    runner="ubuntu-latest",
+    batch_size=1,
+    parallelism=1,
 ) -> None:
+    job_datas = get_lint_job_datas(get_tox_envs(tox_ini_path))
     _generate_workflow(
-        get_lint_job_datas(get_tox_envs(tox_ini_path)),
+        _batch_job_datas(
+            job_datas,
+            batch_size=batch_size,
+            parallelism=parallelism,
+        ),
         "lint",
         workflow_directory_path,
+        runner=runner,
     )
 
 
@@ -317,6 +422,7 @@ def generate_extension_lint_workflow(
     tox_ini_path: Path,
     workflow_directory_path: Path,
     additional_config_path: Path,
+    runner="ubuntu-latest",
 ) -> None:
     loongsuite_envs = get_loongsuite_tox_envs(additional_config_path)
     if not loongsuite_envs:
@@ -327,6 +433,7 @@ def generate_extension_lint_workflow(
         "loongsuite_lint",
         "loongsuite_lint",
         workflow_directory_path,
+        runner=runner,
     )
 
 
@@ -353,6 +460,7 @@ def _generate_workflow_with_template(
     template_name: str,
     workflow_directory_path: Path,
     max_jobs=250,
+    runner="ubuntu-latest",
 ):
     if (
         name in {"loongsuite_lint", "loongsuite_test"}
@@ -363,6 +471,9 @@ def _generate_workflow_with_template(
             f"the {max_jobs}-job single-workflow limit. Add an explicit "
             "cross-workflow aggregate before allowing generated chunks."
         )
+
+    for stale_workflow_path in workflow_directory_path.glob(f"{name}_*.yml"):
+        stale_workflow_path.unlink()
 
     # Github seems to limit the amount of jobs in a workflow file, that is why
     # they are split in groups of 250 per workflow file.
@@ -378,6 +489,10 @@ def _generate_workflow_with_template(
             test_yml_file.write(
                 Environment(loader=FileSystemLoader(Path(__file__).parent))
                 .get_template(f"{template_name}.yml.j2")
-                .render(job_datas=job_datas, file_number=file_number)
+                .render(
+                    job_datas=job_datas,
+                    file_number=file_number,
+                    runner=runner,
+                )
             )
             test_yml_file.write("\n")

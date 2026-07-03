@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${% raw %}{{ github.workflow }}-${{ github.head_ref || github.run_id }}{% endraw %}
+  group: ${% raw %}{{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref || github.run_id }}{% endraw %}
   cancel-in-progress: true
 
 env:
@@ -105,7 +105,7 @@ jobs:
     name: LoongSuite ${% raw %}{{ matrix.ui_name }}{% endraw %}
     needs: loongsuite_changes
     if: ${% raw %}{{ needs.loongsuite_changes.outputs.has_jobs == 'true' }}{% endraw %}
-    runs-on: ubuntu-latest
+    runs-on: {{ runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
