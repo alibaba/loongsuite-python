@@ -150,6 +150,22 @@ async def _run_stream(tracer_provider, messages, session_id=None):
         pass
 
 
+async def _read_until_result_without_exhausting(
+    handler, messages, session_id=None
+):
+    stream = _process_agent_invocation_stream(
+        wrapped_stream=_stream(messages),
+        handler=handler,
+        model="claude-sonnet",
+        prompt="inspect the project",
+        session_id=session_id,
+    )
+    while True:
+        message = await stream.__anext__()
+        if isinstance(message, ResultMessage):
+            return stream
+
+
 @pytest.mark.asyncio
 async def test_entry_baggage_session_overrides_claude_session(
     tracer_provider, span_exporter
@@ -461,6 +477,83 @@ async def test_wrap_query_preserves_active_parent_context(
     assert agent_span.parent.span_id == parent_span.context.span_id
     assert agent_span.context.trace_id == parent_span.context.trace_id
     assert agent_span.attributes[GEN_AI_SESSION_ID] == "parent-session"
+
+
+@pytest.mark.asyncio
+async def test_result_message_closes_agent_before_iterator_is_exhausted(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    stream = await _read_until_result_without_exhausting(
+        handler,
+        [
+            SystemMessage("sess-terminal"),
+            AssistantMessage([TextBlock("terminal answer")]),
+            ResultMessage("sess-terminal"),
+        ],
+    )
+    try:
+        agent_spans = _spans_by_operation(
+            span_exporter.get_finished_spans(), "invoke_agent"
+        )
+        assert len(agent_spans) == 1
+        assert agent_spans[0].attributes[GEN_AI_SESSION_ID] == (
+            "sess-terminal"
+        )
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_consecutive_result_breaks_keep_outer_parent_context(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = tracer_provider.get_tracer(__name__)
+    streams = []
+
+    try:
+        with tracer.start_as_current_span("caller-operation") as parent_span:
+            streams.append(
+                await _read_until_result_without_exhausting(
+                    handler,
+                    [
+                        SystemMessage("sess-first"),
+                        AssistantMessage([TextBlock("first answer")]),
+                        ResultMessage("sess-first"),
+                    ],
+                )
+            )
+            streams.append(
+                await _read_until_result_without_exhausting(
+                    handler,
+                    [
+                        SystemMessage("sess-second"),
+                        AssistantMessage([TextBlock("second answer")]),
+                        ResultMessage("sess-second"),
+                    ],
+                )
+            )
+    finally:
+        for stream in streams:
+            await stream.aclose()
+
+    agent_spans = {
+        span.attributes[GEN_AI_SESSION_ID]: span
+        for span in _spans_by_operation(
+            span_exporter.get_finished_spans(), "invoke_agent"
+        )
+    }
+
+    first_span = agent_spans["sess-first"]
+    second_span = agent_spans["sess-second"]
+
+    for span in (first_span, second_span):
+        assert span.parent is not None
+        assert span.parent.span_id == parent_span.context.span_id
+        assert span.context.trace_id == parent_span.context.trace_id
+
+    assert second_span.parent.span_id != first_span.context.span_id
 
 
 @pytest.mark.asyncio

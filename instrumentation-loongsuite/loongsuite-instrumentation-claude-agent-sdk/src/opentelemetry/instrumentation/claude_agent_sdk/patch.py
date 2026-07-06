@@ -848,6 +848,12 @@ async def _process_agent_invocation_stream(
     session_cwd: Optional[str] = None
     agent_closed = False
 
+    def close_agent_successfully() -> None:
+        nonlocal agent_closed
+        if not agent_closed:
+            handler.stop_invoke_agent(agent_invocation)
+            agent_closed = True
+
     try:
         async for msg in wrapped_stream:
             msg_type = type(msg).__name__
@@ -882,11 +888,11 @@ async def _process_agent_invocation_stream(
                 )
             elif msg_type == "ResultMessage":
                 _process_result_message(msg, agent_invocation, turn_tracker)
+                close_agent_successfully()
 
             yield msg
 
-        handler.stop_invoke_agent(agent_invocation)
-        agent_closed = True
+        close_agent_successfully()
 
     except BaseException as e:
         error_msg = str(e)
