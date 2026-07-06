@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import SpanProcessor
@@ -26,6 +26,7 @@ from opentelemetry.trace import Span as OtelSpan
 from opentelemetry.trace import SpanKind
 
 from .semantic_conventions import (
+    AUTOGEN_LIVE_SPAN_MARKER,
     AUTOGEN_PROVIDER_NAME,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
@@ -42,9 +43,27 @@ _AUTOGEN_NAME_PREFIXES = (
     f"{GenAIOperation.EXECUTE_TOOL} ",
     f"{GenAIOperation.INVOKE_AGENT} ",
 )
+_AUTOGEN_PRIVATE_ATTRS = frozenset(
+    {
+        "autogen.code.block_count",
+        "autogen.code.exit_code",
+        "autogen.code.retry_attempt",
+        "autogen.handoff.context_count",
+        "autogen.handoff.source",
+        "autogen.handoff.target",
+        "autogen.memory.result_count",
+        "autogen.team.message_count",
+        "autogen.team.participants",
+        "autogen.team.stop_reason",
+        "autogen.team.type",
+        "autogen.user_input.request_id",
+    }
+)
 
 
 def _attr_value(span: Any, key: str) -> Any:
+    if isinstance(span, Mapping):
+        return span.get(key)
     attrs = getattr(span, "_attributes", None)
     if attrs is not None:
         try:
@@ -55,6 +74,46 @@ def _attr_value(span: Any, key: str) -> Any:
         return span.attributes.get(key)  # type: ignore[union-attr]
     except Exception:
         return None
+
+
+def _attr_values(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        values = value
+    else:
+        values = (value,)
+    return tuple(str(item).lower() for item in values if item is not None)
+
+
+def _span_attrs(span: Any) -> Mapping[Any, Any]:
+    if isinstance(span, Mapping):
+        return span
+    attrs = getattr(span, "_attributes", None)
+    if attrs is not None:
+        return attrs
+    attrs = getattr(span, "attributes", None)
+    if attrs is not None:
+        return attrs
+    return {}
+
+
+def _has_live_autogen_marker(live: Any | None) -> bool:
+    if live is None:
+        return False
+    return (
+        getattr(live, AUTOGEN_LIVE_SPAN_MARKER, None) == AUTOGEN_PROVIDER_NAME
+    )
+
+
+def _has_autogen_marker(readable: Any, live: Any | None = None) -> bool:
+    if _has_live_autogen_marker(live):
+        return True
+    for key in (GEN_AI_SYSTEM, GEN_AI_PROVIDER_NAME):
+        if AUTOGEN_PROVIDER_NAME in _attr_values(_attr_value(readable, key)):
+            return True
+    attrs = _span_attrs(readable)
+    return any(str(key) in _AUTOGEN_PRIVATE_ATTRS for key in attrs)
 
 
 def _set_attr(live_span: OtelSpan, key: str, value: Any) -> None:
@@ -138,19 +197,9 @@ def _set_otel_span_kind(
 
 
 def _is_autogen_span(
-    name: str, operation: Optional[str], readable: Any
+    _name: str, _operation: Optional[str], readable: Any, live: Any | None
 ) -> bool:
-    if _attr_value(readable, GEN_AI_SYSTEM) == AUTOGEN_PROVIDER_NAME:
-        return True
-    if _attr_value(readable, GEN_AI_PROVIDER_NAME) == AUTOGEN_PROVIDER_NAME:
-        return True
-    if operation in {
-        GenAIOperation.CREATE_AGENT,
-        GenAIOperation.EXECUTE_TOOL,
-        GenAIOperation.INVOKE_AGENT,
-    }:
-        return True
-    return name.startswith(_AUTOGEN_NAME_PREFIXES)
+    return _has_autogen_marker(readable, live)
 
 
 def _classify_span(
@@ -208,7 +257,7 @@ class AutoGenSemanticProcessor(SpanProcessor):
             name = span.name or ""
             existing_op = _attr_value(span, GEN_AI_OPERATION_NAME)
             operation = existing_op if isinstance(existing_op, str) else None
-            if not _is_autogen_span(name, operation, span):
+            if not _is_autogen_span(name, operation, span, live):
                 return
 
             span_kind, op_name = _classify_span(name, operation)

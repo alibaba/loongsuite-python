@@ -72,6 +72,7 @@ from .semantic_conventions import (
     GEN_AI_SPAN_KIND,
     GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS,
+    MAF_LIVE_SPAN_MARKER,
     GenAIOperation,
     GenAISpanKind,
 )
@@ -101,6 +102,16 @@ _FINALIZED_ATTR = "_loongsuite_util_genai_finalized"
 _END_WRAPPED_ATTR = "_loongsuite_util_genai_end_wrapped"
 _STREAM_START_ATTR = "_loongsuite_util_genai_stream_start_s"
 _STREAM_FIRST_TOKEN_ATTR = "_loongsuite_util_genai_stream_first_token_s"
+_MAF_BRIDGE_MARKER = {MAF_LIVE_SPAN_MARKER: _FRAMEWORK_PROVIDER_NAME}
+
+
+def _mark_maf_live_span(span: OtelSpan | None) -> None:
+    if span is None:
+        return
+    try:
+        setattr(span, MAF_LIVE_SPAN_MARKER, _FRAMEWORK_PROVIDER_NAME)
+    except Exception:
+        pass
 
 
 def apply_util_genai_bridge() -> None:
@@ -272,6 +283,7 @@ def _wrap_get_span(original: Callable[..., Any]) -> Callable[..., Any]:
             original, bridge_attrs, span_name_attribute
         )
         with span_cm as span:
+            _mark_maf_live_span(span)
             try:
                 yield span
             finally:
@@ -290,6 +302,7 @@ def _wrap_start_streaming_span(
         span = _start_streaming_span_with_kind(
             original, bridge_attrs, span_name_attribute
         )
+        _mark_maf_live_span(span)
         _mark_stream_start(span)
         _wrap_span_end(span)
         return span
@@ -375,6 +388,7 @@ def _wrap_get_function_span(
     ) -> Generator[OtelSpan, Any, Any]:
         bridge_attrs = _prepare_start_attributes(attributes)
         with original(bridge_attrs) as span:
+            _mark_maf_live_span(span)
             try:
                 yield span
             finally:
@@ -399,6 +413,7 @@ def _wrap_create_mcp_client_span(
             if target:
                 bridge_attrs.setdefault("gen_ai.tool.name", target)
         with original(method_name, target, bridge_attrs) as span:
+            _mark_maf_live_span(span)
             yield span
 
     return _create_mcp_client_span
@@ -465,6 +480,7 @@ def _start_detached_span_with_kind(
     span = observability.get_tracer().start_span(
         f"{operation} {span_name}", kind=kind
     )
+    _mark_maf_live_span(span)
     span.set_attributes(attributes)
     return span
 
@@ -518,7 +534,10 @@ def _prepare_start_attributes(attributes: Mapping[Any, Any]) -> dict[str, Any]:
     op_name = _mapping_value(bridge_attrs, GEN_AI_OPERATION_NAME)
     span_name = _span_name_from_attributes(bridge_attrs)
     if not _is_maf_span(
-        span_name, op_name if isinstance(op_name, str) else None, bridge_attrs
+        span_name,
+        op_name if isinstance(op_name, str) else None,
+        bridge_attrs,
+        _MAF_BRIDGE_MARKER,
     ):
         return bridge_attrs
     span_kind, classified_op = _classify_span(

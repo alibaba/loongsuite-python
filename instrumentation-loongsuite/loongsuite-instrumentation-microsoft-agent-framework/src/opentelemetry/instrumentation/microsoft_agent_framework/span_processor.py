@@ -47,7 +47,7 @@ import logging
 import threading
 import time
 from collections import defaultdict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from opentelemetry.context import Context
 from opentelemetry.metrics import ObservableGauge, get_meter
@@ -72,6 +72,8 @@ from .semantic_conventions import (
     GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS,
     MAF_ATTR_RENAME_MAP,
+    MAF_LIVE_SPAN_MARKER,
+    MAF_PROVIDER_NAME,
     MAF_SPAN_NAME_PREFIXES,
     PROVIDER_NAME_NORMALIZE,
     GenAIOperation,
@@ -94,11 +96,22 @@ _EXECUTOR_PROCESS = "executor.process"
 _EDGE_GROUP_PROCESS = "edge_group.process"
 _LIVE_SPAN_MAX_AGE_NS = 60 * 1_000_000_000
 _GEN_AI_TOOL_NAME = "gen_ai.tool.name"
-_FRAMEWORK_PROVIDER_NAME = "microsoft.agent_framework"
+_FRAMEWORK_PROVIDER_NAME = MAF_PROVIDER_NAME
+_GEN_AI_SYSTEM = "gen_ai.system"
+_MAF_LIVE_SPAN_MARKER = MAF_LIVE_SPAN_MARKER
+_MAF_INTERNAL_NAME_PREFIXES = (
+    _WORKFLOW_RUN,
+    _WORKFLOW_BUILD,
+    _MESSAGE_SEND,
+    _EXECUTOR_PROCESS,
+    _EDGE_GROUP_PROCESS,
+)
 
 
 def _attr_value(span: Any, key: str) -> Any:
     """Read an attribute from a live Span or ReadableSpan, tolerating both."""
+    if isinstance(span, Mapping):
+        return span.get(key)
     attrs = getattr(span, "_attributes", None)
     if attrs is not None:
         try:
@@ -109,6 +122,70 @@ def _attr_value(span: Any, key: str) -> Any:
         return span.attributes.get(key)  # type: ignore[union-attr]
     except Exception:
         return None
+
+
+def _attr_values(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        values = value
+    else:
+        values = (value,)
+    return tuple(str(item).lower() for item in values if item is not None)
+
+
+def _span_attrs(readable: Any) -> Mapping[Any, Any]:
+    if isinstance(readable, Mapping):
+        return readable
+    attrs = getattr(readable, "_attributes", None)
+    if attrs is not None:
+        return attrs
+    attrs = getattr(readable, "attributes", None)
+    if attrs is not None:
+        return attrs
+    return {}
+
+
+def _has_live_maf_marker(live: Any | None) -> bool:
+    if live is None:
+        return False
+    if isinstance(live, Mapping):
+        return live.get(_MAF_LIVE_SPAN_MARKER) == _FRAMEWORK_PROVIDER_NAME
+    return (
+        getattr(live, _MAF_LIVE_SPAN_MARKER, None) == _FRAMEWORK_PROVIDER_NAME
+    )
+
+
+def _scope_name(span: Any) -> str:
+    for attr in ("instrumentation_scope", "instrumentation_library"):
+        scope = getattr(span, attr, None)
+        name = getattr(scope, "name", None)
+        if name:
+            return str(name).lower()
+    return ""
+
+
+def _has_maf_scope(readable: Any, live: Any | None = None) -> bool:
+    return any(
+        "agent_framework" in _scope_name(span)
+        or "microsoft_agent_framework" in _scope_name(span)
+        for span in (readable, live)
+        if span is not None
+    )
+
+
+def _has_maf_provider_marker(readable: Any) -> bool:
+    for key in (_GEN_AI_SYSTEM, GEN_AI_PROVIDER_NAME):
+        if _FRAMEWORK_PROVIDER_NAME in _attr_values(
+            _attr_value(readable, key)
+        ):
+            return True
+    return False
+
+
+def _has_maf_private_marker(readable: Any) -> bool:
+    attrs = _span_attrs(readable)
+    return any(key in attrs for key in MAF_ATTR_RENAME_MAP)
 
 
 def _safe_dumps(obj: Any) -> Optional[str]:
@@ -182,11 +259,44 @@ def _set_attr(live_span: OtelSpan, key: str, value: Any) -> None:
     try:
         if lock is not None:
             with lock:
-                attrs[key] = coerced
+                _set_attr_value(attrs, key, coerced)
         else:
-            attrs[key] = coerced
+            _set_attr_value(attrs, key, coerced)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("set_attribute(%s) failed: %s", key, exc)
+
+
+def _set_attr_value(attrs: Any, key: str, value: Any) -> None:
+    try:
+        attrs[key] = value
+        return
+    except TypeError:
+        pass
+    backing_dict = getattr(attrs, "_dict", None)
+    if backing_dict is not None:
+        backing_dict[key] = value
+
+
+def _set_attr_on_both(
+    live_span: OtelSpan, readable: Any, key: str, value: Any
+) -> None:
+    _set_attr(live_span, key, value)
+    _set_attr(readable, key, value)
+
+
+def _delete_attr(span: Any, key: str) -> None:
+    attrs = getattr(span, "_attributes", None)
+    if attrs is None:
+        return
+    lock = getattr(span, "_lock", None)
+    try:
+        if lock is not None:
+            with lock:
+                attrs.pop(key, None)
+        else:
+            attrs.pop(key, None)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("delete_attribute(%s) failed: %s", key, exc)
 
 
 def _rename_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
@@ -214,7 +324,7 @@ def _rename_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
                 continue
             if not present:
                 continue
-            _set_attr(live_span, new_key, value)
+            _set_attr_on_both(live_span, readable, new_key, value)
             renamed.append(new_key)
             # best-effort removal of the old (private) key
             try:
@@ -225,11 +335,14 @@ def _rename_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
                     attrs.pop(old_key, None)
             except Exception:
                 pass
+            _delete_attr(readable, old_key)
         else:
             # No live attrs; fall back to readable.attributes (read-only)
             readable_attrs = getattr(readable, "attributes", None) or {}
             if old_key in readable_attrs:
-                _set_attr(live_span, new_key, readable_attrs[old_key])
+                _set_attr_on_both(
+                    live_span, readable, new_key, readable_attrs[old_key]
+                )
                 renamed.append(new_key)
     return renamed
 
@@ -241,7 +354,7 @@ def _copy_maf_attrs(live_span: OtelSpan, readable: Any) -> list[str]:
         value = _attr_value(readable, old_key)
         if value is None:
             continue
-        _set_attr(live_span, new_key, value)
+        _set_attr_on_both(live_span, readable, new_key, value)
         copied.append(new_key)
     return copied
 
@@ -287,7 +400,9 @@ def _normalize_finish_reasons(live_span: OtelSpan, readable: Any) -> None:
     if isinstance(parsed, list) and all(
         isinstance(item, str) for item in parsed
     ):
-        _set_attr(live_span, GEN_AI_RESPONSE_FINISH_REASONS, parsed)
+        _set_attr_on_both(
+            live_span, readable, GEN_AI_RESPONSE_FINISH_REASONS, parsed
+        )
 
 
 def _set_span_kind(live_span: OtelSpan, readable: Any, kind: SpanKind) -> None:
@@ -354,20 +469,30 @@ def _is_mcp_tool_call_span(name: str, readable: Any) -> bool:
     return name.startswith(f"{_MCP_TOOL_CALL_METHOD} ")
 
 
-def _is_maf_span(name: str, operation: Optional[str], readable: Any) -> bool:
+def _is_maf_span(
+    name: str,
+    _operation: Optional[str],
+    readable: Any,
+    live: Any | None = None,
+    *,
+    allow_name_prefix: bool = True,
+) -> bool:
     """Return True when the span carries a Microsoft Agent Framework signal."""
     if _is_mcp_span(readable) and not _is_mcp_tool_call_span(name, readable):
         return False
-    if operation:
+    if (
+        _has_live_maf_marker(live)
+        or _has_live_maf_marker(readable)
+        or _has_maf_scope(readable, live)
+    ):
         return True
-    if _is_mcp_tool_call_span(name, readable):
+    if _has_maf_provider_marker(readable):
         return True
-    if name == _REACT_STEP_NAME:
+    if allow_name_prefix and any(
+        name.startswith(prefix) for prefix in _MAF_INTERNAL_NAME_PREFIXES
+    ):
         return True
-    if any(name.startswith(prefix) for prefix in MAF_SPAN_NAME_PREFIXES):
-        return True
-    attrs = getattr(readable, "attributes", None) or {}
-    return any(key in attrs for key in MAF_ATTR_RENAME_MAP)
+    return _has_maf_private_marker(readable)
 
 
 def _classify_span(
@@ -741,7 +866,12 @@ class MAFSemanticProcessor(SpanProcessor):
         with self._live_span_lock:
             self._live_spans[key] = span
             self._span_parents[key] = parent_id
-        self._apply_semantic_attributes(span, span, remove_private_attrs=True)
+        self._apply_semantic_attributes(
+            span,
+            span,
+            remove_private_attrs=True,
+            allow_name_prefix=False,
+        )
 
     def on_end(self, span: Any) -> None:
         """Enrich a just-ended MAF span with ARMS GenAI semantic conventions."""
@@ -774,7 +904,7 @@ class MAFSemanticProcessor(SpanProcessor):
                 if ttft is not None and not _attr_value(
                     span, GEN_AI_RESPONSE_TTFT
                 ):
-                    _set_attr(live, GEN_AI_RESPONSE_TTFT, ttft)
+                    _set_attr_on_both(live, span, GEN_AI_RESPONSE_TTFT, ttft)
 
             # 7) ENTRY detection: a root invoke_agent span with no parent becomes
             #    the trace entry point.
@@ -813,6 +943,7 @@ class MAFSemanticProcessor(SpanProcessor):
         readable: Any,
         *,
         remove_private_attrs: bool,
+        allow_name_prefix: bool = True,
     ) -> Optional[Tuple[str, str]]:
         """Write GenAI semantic attributes while the span is still exportable.
 
@@ -823,7 +954,13 @@ class MAFSemanticProcessor(SpanProcessor):
         name = getattr(readable, "name", "") or getattr(live, "name", "") or ""
         existing_op = _attr_value(readable, GEN_AI_OPERATION_NAME)
         existing_op = existing_op if isinstance(existing_op, str) else None
-        if not _is_maf_span(name, existing_op, readable):
+        if not _is_maf_span(
+            name,
+            existing_op,
+            readable,
+            live,
+            allow_name_prefix=allow_name_prefix,
+        ):
             return None
 
         span_kind, op_name = _classify_span(name, existing_op, readable)
@@ -844,7 +981,7 @@ class MAFSemanticProcessor(SpanProcessor):
             existing_kind == GenAISpanKind.WORKFLOW
             and span_kind != GenAISpanKind.WORKFLOW
         ):
-            _set_attr(live, GEN_AI_SPAN_KIND, span_kind)
+            _set_attr_on_both(live, readable, GEN_AI_SPAN_KIND, span_kind)
 
         # 2) gen_ai.operation.name (set if missing or freshly derived for
         #    workflow spans where MAF does not write it). For spans MAF
@@ -855,16 +992,16 @@ class MAFSemanticProcessor(SpanProcessor):
         #    kinds whose operation.name we own (AGENT reclassification of
         #    ``executor.process``).
         if not existing_op:
-            _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
+            _set_attr_on_both(live, readable, GEN_AI_OPERATION_NAME, op_name)
         elif existing_op != op_name and span_kind == GenAISpanKind.AGENT:
-            _set_attr(live, GEN_AI_OPERATION_NAME, op_name)
+            _set_attr_on_both(live, readable, GEN_AI_OPERATION_NAME, op_name)
 
         if span_kind == GenAISpanKind.MCP and not _attr_value(
             readable, _GEN_AI_TOOL_NAME
         ):
             tool_name = _mcp_tool_name(name, readable)
             if tool_name:
-                _set_attr(live, _GEN_AI_TOOL_NAME, tool_name)
+                _set_attr_on_both(live, readable, _GEN_AI_TOOL_NAME, tool_name)
 
         # 3) Rename MAF private-prefix attributes
         if remove_private_attrs:
@@ -876,7 +1013,7 @@ class MAFSemanticProcessor(SpanProcessor):
         provider = _attr_value(readable, GEN_AI_PROVIDER_NAME)
         normalized = _normalize_provider(provider)
         if normalized is not None and normalized != provider:
-            _set_attr(live, GEN_AI_PROVIDER_NAME, normalized)
+            _set_attr_on_both(live, readable, GEN_AI_PROVIDER_NAME, normalized)
         elif (
             normalized is None
             and span_kind == GenAISpanKind.AGENT
@@ -886,7 +1023,9 @@ class MAFSemanticProcessor(SpanProcessor):
                 GenAIOperation.INVOKE_AGENT,
             }
         ):
-            _set_attr(live, GEN_AI_PROVIDER_NAME, _FRAMEWORK_PROVIDER_NAME)
+            _set_attr_on_both(
+                live, readable, GEN_AI_PROVIDER_NAME, _FRAMEWORK_PROVIDER_NAME
+            )
 
         # 5) Normalize finish reasons written by MAF as a JSON string.
         _normalize_finish_reasons(live, readable)

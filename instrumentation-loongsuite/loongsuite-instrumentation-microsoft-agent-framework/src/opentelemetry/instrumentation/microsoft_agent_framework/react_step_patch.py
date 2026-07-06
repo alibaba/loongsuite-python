@@ -61,6 +61,21 @@ _original_chat_get_response: Any = None
 _handler: Any = None
 
 
+def _mark_maf_live_span(invocation: Any) -> None:
+    span = getattr(invocation, "span", None)
+    if span is None:
+        return
+    try:
+        from opentelemetry.instrumentation.microsoft_agent_framework.semantic_conventions import (
+            MAF_LIVE_SPAN_MARKER,
+            MAF_PROVIDER_NAME,
+        )
+
+        setattr(span, MAF_LIVE_SPAN_MARKER, MAF_PROVIDER_NAME)
+    except Exception:
+        pass
+
+
 def _get_extended_handler(tracer_provider: Any = None) -> Any:
     """Return the singleton ExtendedTelemetryHandler, creating it on first use."""
     global _handler
@@ -159,6 +174,7 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
             token_counter = _maf_react_step_counter.set(round_num)
             try:
                 with local_handler.react_step(step_inv) as step:
+                    _mark_maf_live_span(step)
                     try:
                         response = await result
                         # Best-effort finish_reason extraction from the response.

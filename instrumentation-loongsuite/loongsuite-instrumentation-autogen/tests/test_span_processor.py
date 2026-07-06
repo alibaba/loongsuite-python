@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+from opentelemetry.instrumentation.autogen.patch import _mark_autogen_live_span
 from opentelemetry.instrumentation.autogen.semantic_conventions import (
+    AUTOGEN_LIVE_SPAN_MARKER,
     AUTOGEN_PROVIDER_NAME,
     GEN_AI_AGENT_NAME,
     GEN_AI_OPERATION_NAME,
@@ -115,3 +117,171 @@ def test_processor_classifies_llm_span_from_provider_attributes():
 
     assert attributes[GEN_AI_SPAN_KIND] == GenAISpanKind.LLM
     assert span.kind == SpanKind.CLIENT
+
+
+def test_processor_classifies_llm_span_from_autogen_private_marker():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span(
+        "chat gpt-4o-mini",
+        attributes={
+            GEN_AI_PROVIDER_NAME: "openai",
+            GEN_AI_OPERATION_NAME: GenAIOperation.CHAT,
+        },
+    ) as span:
+        setattr(span, AUTOGEN_LIVE_SPAN_MARKER, AUTOGEN_PROVIDER_NAME)
+        pass
+
+    [span] = exporter.get_finished_spans()
+    attributes = _span_attributes(span)
+
+    assert attributes[GEN_AI_PROVIDER_NAME] == "openai"
+    assert attributes[GEN_AI_SPAN_KIND] == GenAISpanKind.LLM
+    assert AUTOGEN_LIVE_SPAN_MARKER not in attributes
+    assert span.kind == SpanKind.CLIENT
+
+
+def test_patch_marks_live_llm_span_without_exported_attribute():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span(
+        "chat gpt-4o-mini",
+        attributes={
+            GEN_AI_PROVIDER_NAME: "openai",
+            GEN_AI_OPERATION_NAME: GenAIOperation.CHAT,
+        },
+    ) as live_span:
+        invocation = type("Invocation", (), {"span": live_span})()
+        _mark_autogen_live_span(invocation)
+
+    [span] = exporter.get_finished_spans()
+    attributes = _span_attributes(span)
+
+    assert attributes[GEN_AI_PROVIDER_NAME] == "openai"
+    assert attributes[GEN_AI_SPAN_KIND] == GenAISpanKind.LLM
+    assert AUTOGEN_LIVE_SPAN_MARKER not in attributes
+    assert span.kind == SpanKind.CLIENT
+
+
+def test_processor_classifies_agent_span_from_known_private_attribute():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span(
+        "invoke_agent assistant",
+        attributes={
+            GEN_AI_OPERATION_NAME: GenAIOperation.INVOKE_AGENT,
+            GEN_AI_AGENT_NAME: "assistant",
+            "autogen.team.type": "RoundRobinGroupChat",
+        },
+    ):
+        pass
+
+    [span] = exporter.get_finished_spans()
+    attributes = _span_attributes(span)
+
+    assert attributes[GEN_AI_PROVIDER_NAME] == AUTOGEN_PROVIDER_NAME
+    assert attributes[GEN_AI_SPAN_KIND] == GenAISpanKind.AGENT
+
+
+def test_processor_ignores_maf_span_with_overlapping_agent_operation():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span(
+        "invoke_agent my-agent",
+        attributes={
+            GEN_AI_PROVIDER_NAME: "microsoft.agent_framework",
+            GEN_AI_OPERATION_NAME: GenAIOperation.INVOKE_AGENT,
+        },
+    ):
+        pass
+
+    [span] = exporter.get_finished_spans()
+    attributes = _span_attributes(span)
+
+    assert attributes[GEN_AI_PROVIDER_NAME] == "microsoft.agent_framework"
+    assert GEN_AI_SPAN_KIND not in attributes
+
+
+def test_processor_ignores_unmarked_overlapping_agent_operation():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span(
+        "invoke_agent assistant",
+        attributes={GEN_AI_OPERATION_NAME: GenAIOperation.INVOKE_AGENT},
+    ):
+        pass
+
+    [span] = exporter.get_finished_spans()
+    attributes = _span_attributes(span)
+
+    assert GEN_AI_PROVIDER_NAME not in attributes
+    assert GEN_AI_SPAN_KIND not in attributes
+
+
+def test_processor_ignores_foreign_provider_agent_spans():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    for provider_name in ("langchain", "agentscope"):
+        with tracer.start_as_current_span(
+            f"invoke_agent {provider_name}-agent",
+            attributes={
+                GEN_AI_PROVIDER_NAME: provider_name,
+                GEN_AI_OPERATION_NAME: GenAIOperation.INVOKE_AGENT,
+            },
+        ):
+            pass
+
+    spans = exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span in spans:
+        attributes = _span_attributes(span)
+        assert attributes[GEN_AI_PROVIDER_NAME] in {"langchain", "agentscope"}
+        assert GEN_AI_SPAN_KIND not in attributes
+
+
+def test_processor_ignores_unknown_autogen_prefixed_foreign_attribute():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span(
+        "invoke_agent langchain-agent",
+        attributes={
+            GEN_AI_PROVIDER_NAME: "langchain",
+            GEN_AI_OPERATION_NAME: GenAIOperation.INVOKE_AGENT,
+            "autogen.unrelated": "foreign-custom-attribute",
+        },
+    ):
+        pass
+
+    [span] = exporter.get_finished_spans()
+    attributes = _span_attributes(span)
+
+    assert attributes[GEN_AI_PROVIDER_NAME] == "langchain"
+    assert GEN_AI_SPAN_KIND not in attributes

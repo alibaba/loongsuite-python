@@ -33,6 +33,7 @@ from opentelemetry.util.genai.types import Error, InputMessage, Text
 
 from .config import is_agent_span_enabled, is_llm_span_enabled
 from .semantic_conventions import (
+    AUTOGEN_LIVE_SPAN_MARKER,
     AUTOGEN_PROVIDER_NAME,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
@@ -239,6 +240,16 @@ def _apply_invoke_agent_attrs(
         logger.debug("AutoGen invoke_agent span enrichment failed: %s", exc)
 
 
+def _mark_autogen_live_span(invocation: Any) -> None:
+    span = getattr(invocation, "span", None)
+    if span is None:
+        return
+    try:
+        setattr(span, AUTOGEN_LIVE_SPAN_MARKER, AUTOGEN_PROVIDER_NAME)
+    except Exception:
+        pass
+
+
 def _model_client_arg(
     args: tuple[Any, ...], kwargs: dict[str, Any], name: str
 ) -> Any:
@@ -433,6 +444,7 @@ async def _direct_model_create_wrapper(wrapped, instance, args, kwargs):  # type
     handler = _get_handler()
     invocation = _make_direct_model_invocation(instance, args, kwargs)
     handler.start_llm(invocation)
+    _mark_autogen_live_span(invocation)
     try:
         result = await wrapped(*args, **kwargs)
         apply_create_result(invocation, result)
@@ -453,6 +465,7 @@ def _direct_model_create_stream_wrapper(wrapped, instance, args, kwargs):  # typ
         handler = _get_handler()
         invocation = _make_direct_model_invocation(instance, args, kwargs)
         handler.start_llm(invocation)
+        _mark_autogen_live_span(invocation)
         try:
             async for item in wrapped(*args, **kwargs):
                 if (
@@ -511,6 +524,7 @@ def _call_llm_wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyp
             output_type=output_type,
         )
         handler.start_llm(invocation)
+        _mark_autogen_live_span(invocation)
         try:
             async for item in _contextual_async_iter(
                 wrapped(*args, **kwargs),

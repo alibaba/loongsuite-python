@@ -26,6 +26,9 @@ from __future__ import annotations
 
 from typing import Final
 
+MAF_PROVIDER_NAME: Final = "microsoft.agent_framework"
+MAF_LIVE_SPAN_MARKER: Final = "_loongsuite_maf_framework"
+
 
 class GenAISpanKind:
     """``gen_ai.span.kind`` enumeration (ARMS gen-ai.md)."""
