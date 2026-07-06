@@ -613,7 +613,6 @@ def _create_agent_invocation(
     invocation = InvokeAgentInvocation(
         provider=provider_name,
         agent_name=agent_name,
-        agent_id=agent_name,
         agent_description=agent_description,
         request_model=request_model,
         input_messages=input_messages,

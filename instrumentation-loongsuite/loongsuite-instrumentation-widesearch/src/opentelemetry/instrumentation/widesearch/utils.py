@@ -88,7 +88,6 @@ def _create_agent_invocation(
     invocation = InvokeAgentInvocation(
         provider="widesearch",
         agent_name=agent_name,
-        agent_id=agent_name,
         agent_description=instructions[:200] if instructions else "",
         request_model=request_model,
         input_messages=[

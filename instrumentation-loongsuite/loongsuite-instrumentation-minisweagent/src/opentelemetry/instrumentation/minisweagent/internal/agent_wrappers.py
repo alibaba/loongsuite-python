@@ -115,7 +115,6 @@ class DefaultAgentRunWrapper:
         inv = InvokeAgentInvocation(
             provider="minisweagent",
             agent_name=agent_name,
-            agent_id=agent_name,
         )
         inv.request_model = _request_model_from_agent(instance)
         inv.attributes.setdefault("gen_ai.framework", "minisweagent")

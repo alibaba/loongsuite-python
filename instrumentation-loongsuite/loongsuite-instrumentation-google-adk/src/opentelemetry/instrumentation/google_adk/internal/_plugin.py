@@ -60,6 +60,12 @@ _ACTIVE_LLM_REQUEST_KEY: ContextVar[Optional[str]] = ContextVar(
 )
 
 
+def _non_empty_string(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
 class GoogleAdkObservabilityPlugin(BasePlugin):
     """
     OpenTelemetry ADK Observability Plugin.
@@ -119,7 +125,6 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             invocation = InvokeAgentInvocation(
                 provider="google_adk",
                 agent_name=invocation_context.app_name,
-                agent_id=invocation_context.app_name,
             )
 
             # Set conversation_id if available
@@ -276,12 +281,12 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             invocation = InvokeAgentInvocation(
                 provider="google_adk",
                 agent_name=agent.name,
-                agent_id=agent.name,
             )
 
             # Set agent attributes
-            if hasattr(agent, "id") and agent.id:
-                invocation.agent_id = agent.id
+            agent_id = _non_empty_string(getattr(agent, "id", None))
+            if agent_id:
+                invocation.agent_id = agent_id
 
             if hasattr(agent, "description") and agent.description:
                 invocation.agent_description = agent.description

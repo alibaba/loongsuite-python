@@ -44,8 +44,9 @@ class TestLoongSuiteResourceDetector(unittest.TestCase):
     def test_host_ip_is_raw_ip(self):
         """host.ip should contain a raw IP address without PID suffix."""
         attributes = LoongSuiteResourceDetector().detect().attributes
-        # Raw IP should not contain a dash-PID suffix
-        self.assertNotIn("-", attributes[HOST_IP].rsplit(".", 1)[-1])
+        self.assertIsInstance(attributes[HOST_IP], tuple)
+        # Raw IP should not contain a dash-PID suffix.
+        self.assertNotIn("-", attributes[HOST_IP][0].rsplit(".", 1)[-1])
 
     def test_gen_ai_instrumentation_sdk_name_value(self):
         attributes = LoongSuiteResourceDetector().detect().attributes
@@ -63,7 +64,7 @@ class TestLoongSuiteResourceDetector(unittest.TestCase):
     ):
         attributes = LoongSuiteResourceDetector().detect().attributes
         self.assertEqual(attributes[SERVICE_INSTANCE_ID], "127.0.0.1-1")
-        self.assertEqual(attributes[HOST_IP], "127.0.0.1")
+        self.assertEqual(attributes[HOST_IP], ("127.0.0.1",))
 
     @mock.patch("loongsuite.distro.resource.os.getpid", return_value=42)
     @mock.patch(

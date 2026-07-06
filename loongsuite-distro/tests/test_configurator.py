@@ -43,14 +43,14 @@ class TestLoongSuiteConfigurator(unittest.TestCase):
         LoongSuiteConfigurator().configure(
             resource_attributes={
                 "service.name": "my-service",
-                HOST_IP: "custom-ip",
+                HOST_IP: ("custom-ip",),
             }
         )
 
         resource_attributes = mock_init.call_args.kwargs["resource_attributes"]
         self.assertEqual(resource_attributes["service.name"], "my-service")
         # User-provided host.ip should NOT be overwritten by detector
-        self.assertEqual(resource_attributes[HOST_IP], "custom-ip")
+        self.assertEqual(resource_attributes[HOST_IP], ("custom-ip",))
         self.assertIn(SERVICE_INSTANCE_ID, resource_attributes)
         self.assertIn(GEN_AI_INSTRUMENTATION_SDK_NAME, resource_attributes)
 

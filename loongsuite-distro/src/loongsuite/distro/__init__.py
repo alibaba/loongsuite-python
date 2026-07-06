@@ -31,9 +31,9 @@ class LoongSuiteConfigurator(_OTelSDKConfigurator):
     """
     LoongSuite configurator, inherits from OpenTelemetry SDK configurator.
 
-    Augments the resource with LoongSuite specific attributes (``host.ip`` and
-    ``gen_ai.instrumentation.sdk.name``) before delegating to the OpenTelemetry
-    SDK configurator.
+    Augments the resource with LoongSuite specific attributes (``host.ip`` as a
+    string array and ``gen_ai.instrumentation.sdk.name``) before delegating to
+    the OpenTelemetry SDK configurator.
     """
 
     def _configure(self, **kwargs: Any) -> None:

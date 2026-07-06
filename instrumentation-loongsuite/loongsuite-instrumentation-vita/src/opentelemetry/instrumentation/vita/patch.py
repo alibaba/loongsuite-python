@@ -300,7 +300,6 @@ def wrap_generate_next_message(
         invocation = InvokeAgentInvocation(
             provider="vitabench",
             agent_name=agent_name,
-            agent_id=agent_name,
             request_model=model,
         )
 

@@ -451,7 +451,6 @@ class LoongsuiteTracer(BaseTracer):
         invocation = InvokeAgentInvocation(
             provider="langchain",
             agent_name=agent_name,
-            agent_id=agent_name or None,
             input_messages=input_messages,
         )
         self._handler.start_invoke_agent(invocation, context=parent_ctx)

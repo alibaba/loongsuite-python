@@ -580,7 +580,6 @@ def create_agent_invocation(
     invocation = InvokeAgentInvocation(
         provider=_HERMES_AGENT_SYSTEM,
         agent_name="Hermes",
-        agent_id="Hermes",
         conversation_id=getattr(instance, "session_id", None),
         request_model=getattr(instance, "model", None),
         input_messages=[
