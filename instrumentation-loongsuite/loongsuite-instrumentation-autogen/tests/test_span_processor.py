@@ -18,6 +18,8 @@ from opentelemetry.instrumentation.autogen.patch import _mark_autogen_live_span
 from opentelemetry.instrumentation.autogen.semantic_conventions import (
     AUTOGEN_LIVE_SPAN_MARKER,
     AUTOGEN_PROVIDER_NAME,
+    GEN_AI_AGENT_DESCRIPTION,
+    GEN_AI_AGENT_ID,
     GEN_AI_AGENT_NAME,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
@@ -68,7 +70,7 @@ def test_processor_normalizes_native_autogen_invoke_span():
     assert span.kind == SpanKind.INTERNAL
 
 
-def test_processor_marks_create_agent_as_agent_lifecycle_span():
+def test_processor_keeps_create_agent_as_lifecycle_span_without_agent_kind():
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(AutoGenSemanticProcessor())
@@ -89,10 +91,52 @@ def test_processor_marks_create_agent_as_agent_lifecycle_span():
     [span] = exporter.get_finished_spans()
     attributes = _span_attributes(span)
 
-    assert attributes[GEN_AI_PROVIDER_NAME] == AUTOGEN_PROVIDER_NAME
-    assert attributes[GEN_AI_OPERATION_NAME] == GenAIOperation.CREATE_AGENT
-    assert attributes[GEN_AI_SPAN_KIND] == GenAISpanKind.AGENT
+    assert GEN_AI_AGENT_NAME not in attributes
+    assert GEN_AI_OPERATION_NAME not in attributes
+    assert GEN_AI_PROVIDER_NAME not in attributes
+    assert GEN_AI_SPAN_KIND not in attributes
     assert GEN_AI_SYSTEM not in attributes
+    assert span.kind == SpanKind.CLIENT
+
+
+def test_processor_removes_native_agent_kind_from_create_agent_span():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(AutoGenSemanticProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+
+    tracer = provider.get_tracer(__name__)
+    with tracer.start_as_current_span(
+        "create_agent assistant",
+        kind=SpanKind.CLIENT,
+        attributes={
+            GEN_AI_SYSTEM: AUTOGEN_PROVIDER_NAME,
+            GEN_AI_AGENT_DESCRIPTION: "test agent",
+            GEN_AI_AGENT_ID: "agent-1",
+            GEN_AI_OPERATION_NAME: GenAIOperation.CREATE_AGENT,
+            GEN_AI_AGENT_NAME: "assistant",
+            GEN_AI_PROVIDER_NAME: AUTOGEN_PROVIDER_NAME,
+            GEN_AI_SPAN_KIND: GenAISpanKind.AGENT,
+            "gen_ai.agent.version": "1.0.0",
+            "gen_ai.system_instructions": "be helpful",
+            "gen_ai.tool.definitions": ["search"],
+        },
+    ):
+        pass
+
+    [span] = exporter.get_finished_spans()
+    attributes = _span_attributes(span)
+
+    assert GEN_AI_AGENT_DESCRIPTION not in attributes
+    assert GEN_AI_AGENT_ID not in attributes
+    assert GEN_AI_AGENT_NAME not in attributes
+    assert GEN_AI_OPERATION_NAME not in attributes
+    assert GEN_AI_PROVIDER_NAME not in attributes
+    assert GEN_AI_SPAN_KIND not in attributes
+    assert GEN_AI_SYSTEM not in attributes
+    assert "gen_ai.agent.version" not in attributes
+    assert "gen_ai.system_instructions" not in attributes
+    assert "gen_ai.tool.definitions" not in attributes
     assert span.kind == SpanKind.CLIENT
 
 

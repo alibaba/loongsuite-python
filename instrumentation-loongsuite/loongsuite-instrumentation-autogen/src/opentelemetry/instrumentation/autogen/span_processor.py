@@ -28,6 +28,9 @@ from opentelemetry.trace import SpanKind
 from .semantic_conventions import (
     AUTOGEN_LIVE_SPAN_MARKER,
     AUTOGEN_PROVIDER_NAME,
+    GEN_AI_AGENT_DESCRIPTION,
+    GEN_AI_AGENT_ID,
+    GEN_AI_AGENT_NAME,
     GEN_AI_OPERATION_NAME,
     GEN_AI_PROVIDER_NAME,
     GEN_AI_SPAN_KIND,
@@ -58,6 +61,18 @@ _AUTOGEN_PRIVATE_ATTRS = frozenset(
         "autogen.team.type",
         "autogen.user_input.request_id",
     }
+)
+_CREATE_AGENT_LIFECYCLE_ATTRS = (
+    GEN_AI_AGENT_DESCRIPTION,
+    GEN_AI_AGENT_ID,
+    GEN_AI_AGENT_NAME,
+    GEN_AI_OPERATION_NAME,
+    GEN_AI_PROVIDER_NAME,
+    GEN_AI_SPAN_KIND,
+    GEN_AI_SYSTEM,
+    "gen_ai.agent.version",
+    "gen_ai.system_instructions",
+    "gen_ai.tool.definitions",
 )
 
 
@@ -220,7 +235,7 @@ def _classify_span(
     if op == GenAIOperation.EXECUTE_TOOL:
         return GenAISpanKind.TOOL, op
     if op == GenAIOperation.CREATE_AGENT:
-        return GenAISpanKind.AGENT, op
+        return None, op
     if op == GenAIOperation.INVOKE_AGENT:
         return GenAISpanKind.AGENT, op
     return GenAISpanKind.CHAIN, op or GenAIOperation.INVOKE_AGENT
@@ -261,6 +276,11 @@ class AutoGenSemanticProcessor(SpanProcessor):
                 return
 
             span_kind, op_name = _classify_span(name, operation)
+            if op_name == GenAIOperation.CREATE_AGENT:
+                for attr_name in _CREATE_AGENT_LIFECYCLE_ATTRS:
+                    _delete_attr_on_both(live, span, attr_name)
+                return
+
             if span_kind and not _attr_value(span, GEN_AI_SPAN_KIND):
                 _set_attr_on_both(live, span, GEN_AI_SPAN_KIND, span_kind)
             if not operation:
