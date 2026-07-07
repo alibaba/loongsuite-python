@@ -241,7 +241,7 @@ def provider_name(model_client: Any) -> str:
 
 def _finish_reason(value: Any) -> str:
     reason = _text(value or "unknown")
-    if reason == "function_calls":
+    if reason in {"tool_call", "function_call", "function_calls"}:
         return "tool_calls"
     return reason
 

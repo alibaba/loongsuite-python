@@ -83,7 +83,9 @@ from .span_processor import (
     _is_exception_event,
     _is_maf_span,
     _mcp_tool_name,
+    _normalize_finish_reason_value,
     _normalize_provider,
+    _normalized_output_messages_value,
     _ttft_from_events,
 )
 
@@ -626,6 +628,11 @@ def _set_common_live_attributes(
     finish_reasons = _finish_reasons(span)
     if finish_reasons:
         span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons)
+    output_messages = _normalized_output_messages_value(
+        _attr_value(span, "gen_ai.output.messages")
+    )
+    if output_messages is not None:
+        span.set_attribute("gen_ai.output.messages", output_messages)
 
 
 def _llm_invocation(span: OtelSpan, op_name: str) -> LLMInvocation:
@@ -791,12 +798,12 @@ def _finish_reasons(span: Any) -> Optional[list[str]]:
         if isinstance(parsed, list) and all(
             isinstance(item, str) for item in parsed
         ):
-            return parsed
-        return [value]
+            return [_normalize_finish_reason_value(item) for item in parsed]
+        return [_normalize_finish_reason_value(value)]
     if isinstance(value, (list, tuple)) and all(
         isinstance(item, str) for item in value
     ):
-        return list(value)
+        return [_normalize_finish_reason_value(item) for item in value]
     return None
 
 

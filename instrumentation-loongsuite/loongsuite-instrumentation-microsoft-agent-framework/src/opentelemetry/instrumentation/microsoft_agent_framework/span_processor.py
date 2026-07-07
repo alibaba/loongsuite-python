@@ -96,6 +96,7 @@ _EXECUTOR_PROCESS = "executor.process"
 _EDGE_GROUP_PROCESS = "edge_group.process"
 _LIVE_SPAN_MAX_AGE_NS = 60 * 1_000_000_000
 _GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+_GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 _FRAMEWORK_PROVIDER_NAME = MAF_PROVIDER_NAME
 _GEN_AI_SYSTEM = "gen_ai.system"
 _MAF_LIVE_SPAN_MARKER = MAF_LIVE_SPAN_MARKER
@@ -105,6 +106,9 @@ _MAF_INTERNAL_NAME_PREFIXES = (
     _MESSAGE_SEND,
     _EXECUTOR_PROCESS,
     _EDGE_GROUP_PROCESS,
+)
+_TOOL_CALL_FINISH_REASONS = frozenset(
+    {"tool_call", "tool_calls", "function_call", "function_calls"}
 )
 
 
@@ -391,6 +395,18 @@ def _normalize_provider(value: Any) -> Optional[str]:
 def _normalize_finish_reasons(live_span: OtelSpan, readable: Any) -> None:
     """Normalize JSON-encoded finish reasons to an OTel string array."""
     value = _attr_value(readable, GEN_AI_RESPONSE_FINISH_REASONS)
+    if isinstance(value, (list, tuple)) and all(
+        isinstance(item, str) for item in value
+    ):
+        normalized = [_normalize_finish_reason_value(item) for item in value]
+        if list(value) != normalized:
+            _set_attr_on_both(
+                live_span,
+                readable,
+                GEN_AI_RESPONSE_FINISH_REASONS,
+                normalized,
+            )
+        return
     if not isinstance(value, str):
         return
     try:
@@ -400,9 +416,75 @@ def _normalize_finish_reasons(live_span: OtelSpan, readable: Any) -> None:
     if isinstance(parsed, list) and all(
         isinstance(item, str) for item in parsed
     ):
+        parsed = [_normalize_finish_reason_value(item) for item in parsed]
         _set_attr_on_both(
             live_span, readable, GEN_AI_RESPONSE_FINISH_REASONS, parsed
         )
+
+
+def _normalize_output_messages(live_span: OtelSpan, readable: Any) -> None:
+    normalized = _normalized_output_messages_value(
+        _attr_value(readable, _GEN_AI_OUTPUT_MESSAGES)
+    )
+    if normalized is not None:
+        _set_attr_on_both(
+            live_span, readable, _GEN_AI_OUTPUT_MESSAGES, normalized
+        )
+
+
+def _normalized_output_messages_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        messages = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(messages, list):
+        return None
+    changed = False
+    normalized_messages = []
+    for message in messages:
+        if not isinstance(message, dict):
+            normalized_messages.append(message)
+            continue
+        normalized = dict(message)
+        current = normalized.get("finish_reason")
+        default = _default_finish_reason_for_message(normalized)
+        finish_reason = _normalize_finish_reason_value(
+            current, default=default
+        )
+        if current != finish_reason:
+            normalized["finish_reason"] = finish_reason
+            changed = True
+        normalized_messages.append(normalized)
+    if not changed and isinstance(value, str):
+        return None
+    try:
+        return json.dumps(
+            normalized_messages, ensure_ascii=False, separators=(",", ":")
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def _default_finish_reason_for_message(message: Mapping[Any, Any]) -> str:
+    parts = message.get("parts")
+    if isinstance(parts, list):
+        for part in parts:
+            if isinstance(part, Mapping) and part.get("type") == "tool_call":
+                return "tool_calls"
+    return "stop"
+
+
+def _normalize_finish_reason_value(
+    value: Any, *, default: str = "stop"
+) -> str:
+    if value is None or value == "":
+        return default
+    reason = str(value)
+    if reason in _TOOL_CALL_FINISH_REASONS:
+        return "tool_calls"
+    return reason
 
 
 def _set_span_kind(live_span: OtelSpan, readable: Any, kind: SpanKind) -> None:
@@ -1029,6 +1111,7 @@ class MAFSemanticProcessor(SpanProcessor):
 
         # 5) Normalize finish reasons written by MAF as a JSON string.
         _normalize_finish_reasons(live, readable)
+        _normalize_output_messages(live, readable)
 
         # 6) LLM/embedding spans should use CLIENT OTel span kind.
         if span_kind == GenAISpanKind.LLM:

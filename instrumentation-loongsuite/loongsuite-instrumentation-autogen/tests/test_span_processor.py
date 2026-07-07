@@ -68,7 +68,7 @@ def test_processor_normalizes_native_autogen_invoke_span():
     assert span.kind == SpanKind.INTERNAL
 
 
-def test_processor_keeps_create_agent_as_lifecycle_span():
+def test_processor_marks_create_agent_as_agent_lifecycle_span():
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(AutoGenSemanticProcessor())
@@ -91,7 +91,7 @@ def test_processor_keeps_create_agent_as_lifecycle_span():
 
     assert attributes[GEN_AI_PROVIDER_NAME] == AUTOGEN_PROVIDER_NAME
     assert attributes[GEN_AI_OPERATION_NAME] == GenAIOperation.CREATE_AGENT
-    assert GEN_AI_SPAN_KIND not in attributes
+    assert attributes[GEN_AI_SPAN_KIND] == GenAISpanKind.AGENT
     assert GEN_AI_SYSTEM not in attributes
     assert span.kind == SpanKind.CLIENT
 

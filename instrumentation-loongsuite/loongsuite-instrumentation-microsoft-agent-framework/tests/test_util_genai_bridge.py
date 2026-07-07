@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import sys
 import types
 
@@ -322,6 +323,74 @@ def test_agent_span_gets_framework_provider_when_missing(monkeypatch):
     assert (
         span.attributes.get(GEN_AI_PROVIDER_NAME)
         == "microsoft.agent_framework"
+    )
+
+
+def test_agent_output_messages_get_finish_reason_before_export(monkeypatch):
+    obs_mod, exporter = _install_fake_observability(monkeypatch)
+    util_genai_bridge.apply_util_genai_bridge()
+    try:
+        with obs_mod._get_span(
+            {
+                GEN_AI_OPERATION_NAME: GenAIOperation.INVOKE_AGENT,
+                "gen_ai.agent.name": "planner",
+                "gen_ai.output.messages": json.dumps(
+                    [
+                        {
+                            "role": "assistant",
+                            "parts": [{"type": "text", "content": "done"}],
+                        }
+                    ]
+                ),
+            },
+            "gen_ai.agent.name",
+        ):
+            pass
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    span = exporter.get_finished_spans()[0]
+    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    assert messages[0]["finish_reason"] == "stop"
+
+
+def test_tool_call_finish_reason_is_normalized_before_export(monkeypatch):
+    obs_mod, exporter = _install_fake_observability(monkeypatch)
+    util_genai_bridge.apply_util_genai_bridge()
+    try:
+        with obs_mod._get_span(
+            {
+                GEN_AI_OPERATION_NAME: GenAIOperation.CHAT,
+                GEN_AI_REQUEST_MODEL: "qwen-plus",
+                GEN_AI_RESPONSE_FINISH_REASONS: '["tool_call"]',
+                "gen_ai.output.messages": json.dumps(
+                    [
+                        {
+                            "role": "assistant",
+                            "finish_reason": "tool_call",
+                            "parts": [
+                                {
+                                    "type": "tool_call",
+                                    "id": "call-1",
+                                    "name": "lookup",
+                                    "arguments": {"q": "x"},
+                                }
+                            ],
+                        }
+                    ]
+                ),
+            },
+            GEN_AI_REQUEST_MODEL,
+        ):
+            pass
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    span = exporter.get_finished_spans()[0]
+    messages = json.loads(span.attributes["gen_ai.output.messages"])
+    assert messages[0]["finish_reason"] == "tool_calls"
+    assert span.attributes.get(GEN_AI_RESPONSE_FINISH_REASONS) == (
+        "tool_calls",
     )
 
 

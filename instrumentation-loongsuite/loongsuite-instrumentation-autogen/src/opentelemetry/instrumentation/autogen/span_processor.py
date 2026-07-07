@@ -220,7 +220,7 @@ def _classify_span(
     if op == GenAIOperation.EXECUTE_TOOL:
         return GenAISpanKind.TOOL, op
     if op == GenAIOperation.CREATE_AGENT:
-        return None, op
+        return GenAISpanKind.AGENT, op
     if op == GenAIOperation.INVOKE_AGENT:
         return GenAISpanKind.AGENT, op
     return GenAISpanKind.CHAIN, op or GenAIOperation.INVOKE_AGENT
@@ -284,7 +284,11 @@ class AutoGenSemanticProcessor(SpanProcessor):
 
             if span_kind == GenAISpanKind.LLM:
                 _set_otel_span_kind(live, span, SpanKind.CLIENT)
-            elif span_kind in {GenAISpanKind.AGENT, GenAISpanKind.TOOL}:
+            elif span_kind == GenAISpanKind.AGENT and op_name == (
+                GenAIOperation.INVOKE_AGENT
+            ):
+                _set_otel_span_kind(live, span, SpanKind.INTERNAL)
+            elif span_kind == GenAISpanKind.TOOL:
                 _set_otel_span_kind(live, span, SpanKind.INTERNAL)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("AutoGenSemanticProcessor.on_end failed: %s", exc)

@@ -41,6 +41,8 @@ from __future__ import annotations
 import contextvars
 import inspect
 import logging
+from dataclasses import dataclass
+from types import TracebackType
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -54,11 +56,20 @@ _maf_react_loop_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
 _maf_react_step_counter: contextvars.ContextVar[int] = contextvars.ContextVar(
     "_maf_react_step_counter", default=0
 )
+_maf_current_react_step: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "_maf_current_react_step", default=None
+)
 
 _applied = False
 _original_fil_get_response: Any = None
 _original_chat_get_response: Any = None
 _handler: Any = None
+
+
+@dataclass
+class _OpenReactStep:
+    cm: Any
+    invocation: Any
 
 
 def _mark_maf_live_span(invocation: Any) -> None:
@@ -139,11 +150,17 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
         async def _scoped():  # type: ignore[no-untyped-def]
             token_active = _maf_react_loop_active.set(True)
             token_counter = _maf_react_step_counter.set(0)
+            token_step = _maf_current_react_step.set(None)
             try:
                 return await result
+            except Exception as exc:
+                _close_current_react_step(type(exc), exc, exc.__traceback__)
+                raise
             finally:
+                _close_current_react_step()
                 _maf_react_loop_active.reset(token_active)
                 _maf_react_step_counter.reset(token_counter)
+                _maf_current_react_step.reset(token_step)
 
         return _scoped()
 
@@ -166,27 +183,24 @@ def apply_react_step_patch(tracer_provider: Any = None) -> None:
         local_handler = handler
 
         async def _step_scoped():  # type: ignore[no-untyped-def]
-            from opentelemetry.util.genai.extended_types import (
-                ReactStepInvocation,
-            )
-
-            step_inv = ReactStepInvocation(round=round_num)
-            token_counter = _maf_react_step_counter.set(round_num)
+            previous_step = _close_current_react_step()
+            if previous_step is not None and inspect.isawaitable(
+                previous_step
+            ):
+                await previous_step
+            step_inv = _open_current_react_step(local_handler, round_num)
+            _maf_react_step_counter.set(round_num)
             try:
-                with local_handler.react_step(step_inv) as step:
-                    _mark_maf_live_span(step)
-                    try:
-                        response = await result
-                        # Best-effort finish_reason extraction from the response.
-                        finish = _extract_finish_reason(response)
-                        if finish is not None:
-                            step.finish_reason = finish
-                        return response
-                    except Exception:
-                        step.finish_reason = "error"
-                        raise
-            finally:
-                _maf_react_step_counter.reset(token_counter)
+                response = await result
+                # Best-effort finish_reason extraction from the response.
+                finish = _extract_finish_reason(response)
+                if finish is not None:
+                    step_inv.finish_reason = finish
+                return response
+            except Exception as exc:
+                step_inv.finish_reason = "error"
+                _close_current_react_step(type(exc), exc, exc.__traceback__)
+                raise
 
         return _step_scoped()
 
@@ -228,6 +242,31 @@ def _unwrap_to_function(func: Any) -> Any:
     return cur
 
 
+def _open_current_react_step(handler: Any, round_num: int) -> Any:
+    from opentelemetry.util.genai.extended_types import ReactStepInvocation
+
+    step_inv = ReactStepInvocation(round=round_num)
+    cm = handler.react_step(step_inv)
+    step = cm.__enter__()
+    _mark_maf_live_span(step)
+    _maf_current_react_step.set(_OpenReactStep(cm=cm, invocation=step))
+    return step
+
+
+def _close_current_react_step(
+    exc_type: type[BaseException] | None = None,
+    exc: BaseException | None = None,
+    tb: TracebackType | None = None,
+) -> Any:
+    current = _maf_current_react_step.get()
+    if current is None:
+        return None
+    _maf_current_react_step.set(None)
+    if exc_type is not None and current.invocation.finish_reason is None:
+        current.invocation.finish_reason = "error"
+    return current.cm.__exit__(exc_type, exc, tb)
+
+
 def _is_response_stream(result: Any) -> bool:
     """Return True for MAF ResponseStream-like values.
 
@@ -244,21 +283,36 @@ def _is_response_stream(result: Any) -> bool:
 def _extract_finish_reason(result: Any) -> Any:
     """Best-effort extraction of a finish_reason string from a ChatResponse."""
     try:
+        fr = getattr(result, "finish_reason", None)
+        if fr:
+            return _normalize_finish_reason(fr)
+        raw = getattr(result, "raw_representation", None)
+        if raw is not None:
+            fr = getattr(raw, "finish_reason", None)
+            if fr:
+                return _normalize_finish_reason(fr)
         # MAF ChatResponse.messages[-1].finish_reason or choices[0].finish_reason
         messages = getattr(result, "messages", None)
         if messages:
             last = messages[-1]
             fr = getattr(last, "finish_reason", None)
             if fr:
-                return fr
+                return _normalize_finish_reason(fr)
         choices = getattr(result, "choices", None)
         if choices:
             fr = getattr(choices[0], "finish_reason", None)
             if fr:
-                return fr
+                return _normalize_finish_reason(fr)
     except Exception:
         return None
     return None
+
+
+def _normalize_finish_reason(value: Any) -> str:
+    reason = str(value)
+    if reason in {"tool_call", "function_call", "function_calls"}:
+        return "tool_calls"
+    return reason
 
 
 def revert_react_step_patch() -> None:

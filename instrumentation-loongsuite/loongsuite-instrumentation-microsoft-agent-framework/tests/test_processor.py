@@ -26,6 +26,7 @@ Tests verify that the processor correctly:
 
 from __future__ import annotations
 
+import json
 import time
 
 from opentelemetry.instrumentation.microsoft_agent_framework.semantic_conventions import (
@@ -306,9 +307,61 @@ def test_finish_reasons_json_string_normalized_to_array():
     with tracer.start_as_current_span("chat gpt-4o") as span:
         _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
-        span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, '["stop"]')
+        span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, '["tool_call"]')
     spans = _flush(exporter)
-    assert spans[0].attributes.get(GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
+    assert spans[0].attributes.get(GEN_AI_RESPONSE_FINISH_REASONS) == (
+        "tool_calls",
+    )
+
+
+def test_output_messages_finish_reason_added_for_agent_span():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("invoke_agent planner") as span:
+        _mark_maf_span(span)
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "parts": [{"type": "text", "content": "done"}],
+                    }
+                ]
+            ),
+        )
+    [exported] = _flush(exporter)
+    messages = json.loads(exported.attributes["gen_ai.output.messages"])
+    assert messages[0]["finish_reason"] == "stop"
+
+
+def test_output_messages_finish_reason_tool_call_is_normalized():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
+        span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "finish_reason": "tool_call",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "id": "call-1",
+                                "name": "lookup",
+                                "arguments": {"q": "x"},
+                            }
+                        ],
+                    }
+                ]
+            ),
+        )
+    [exported] = _flush(exporter)
+    messages = json.loads(exported.attributes["gen_ai.output.messages"])
+    assert messages[0]["finish_reason"] == "tool_calls"
 
 
 def _setup_with_metrics():
