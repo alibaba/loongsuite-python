@@ -106,6 +106,46 @@ def _set_llm_session_id(
     _apply_session_identity(llm_invocation, session_id)
 
 
+def _normalize_model(model: Any) -> Optional[str]:
+    if model is None:
+        return None
+    model_text = str(model).strip()
+    return model_text or None
+
+
+def _is_unknown_model(model: Any) -> bool:
+    model_text = _normalize_model(model)
+    return model_text is None or model_text == "unknown"
+
+
+def _resolve_assistant_model(msg: Any, fallback_model: str) -> str:
+    """Use AssistantMessage.model when options/env did not provide a model."""
+    normalized_fallback = _normalize_model(fallback_model) or "unknown"
+    message_model = _normalize_model(getattr(msg, "model", None))
+    if _is_unknown_model(normalized_fallback) and message_model:
+        return message_model
+    return normalized_fallback
+
+
+def _apply_assistant_model(
+    agent_invocation: InvokeAgentInvocation, model: str
+) -> None:
+    """Late-fill the agent request model once the SDK reveals its default."""
+    if _is_unknown_model(
+        agent_invocation.request_model
+    ) and not _is_unknown_model(model):
+        agent_invocation.request_model = model
+
+
+def _extract_model_from_result_message(msg: Any) -> Optional[str]:
+    model_usage = getattr(msg, "model_usage", None)
+    if not isinstance(model_usage, dict) or not model_usage:
+        return None
+    if len(model_usage) == 1:
+        return _normalize_model(next(iter(model_usage)))
+    return None
+
+
 def _clear_client_managed_runs(
     handler: ExtendedTelemetryHandler,
     client_managed_runs: Dict[str, ExecuteToolInvocation],
@@ -482,6 +522,9 @@ def _process_assistant_message(
     cwd: Optional[str] = None,
 ) -> None:
     """Process AssistantMessage: create LLM turn, extract parts, create tool spans."""
+    message_model = _resolve_assistant_model(msg, model)
+    _apply_assistant_model(agent_invocation, message_model)
+
     parts = _extract_message_parts(msg)
     has_text_content = any(isinstance(p, Text) for p in parts)
     has_tool_calls = any(isinstance(p, ToolCall) for p in parts)
@@ -494,10 +537,11 @@ def _process_assistant_message(
             turn_tracker.close_llm_turn()
 
         message_arrival_time = time.time()
+        finish_reason = "tool_calls" if has_tool_calls else "stop"
 
         turn_tracker.start_llm_turn(
             msg,
-            model,
+            message_model,
             prompt,
             collected_messages,
             provider=infer_provider_from_base_url(),
@@ -506,9 +550,11 @@ def _process_assistant_message(
         )
 
         if parts:
-            turn_tracker.add_assistant_output(parts)
+            turn_tracker.add_assistant_output(parts, finish_reason)
             output_msg = OutputMessage(
-                role="assistant", parts=list(parts), finish_reason="stop"
+                role="assistant",
+                parts=list(parts),
+                finish_reason=finish_reason,
             )
             agent_invocation.output_messages.append(output_msg)
 
@@ -527,14 +573,8 @@ def _process_assistant_message(
                 last_output_msg.parts.extend(parts)
                 last_output_msg.finish_reason = "tool_calls"
             else:
-                turn_tracker.add_assistant_output(parts)
-                output_msg = OutputMessage(
-                    role="assistant",
-                    parts=list(parts),
-                    finish_reason="tool_calls",
-                )
-                turn_tracker.current_llm_invocation.output_messages.append(
-                    output_msg
+                turn_tracker.add_assistant_output(
+                    parts, finish_reason="tool_calls"
                 )
 
         # Only add to collected_messages if not inside a Task
@@ -557,7 +597,8 @@ def _process_assistant_message(
                     {"role": "assistant", "parts": list(parts)}
                 )
 
-    # Close LLM turn before creating tool spans to ensure correct timeline
+    # Close an existing LLM turn before creating tool spans to keep tool spans
+    # under the agent context and avoid leaking the LLM context into tools.
     if has_tool_calls and turn_tracker.current_llm_invocation:
         turn_tracker.close_llm_turn()
 
@@ -749,7 +790,7 @@ def _process_user_message(
 def _process_system_message(
     msg: Any,
     agent_invocation: InvokeAgentInvocation,
-) -> Optional[str]:
+) -> tuple[Optional[str], Optional[str]]:
     """Process SystemMessage: extract session_id and cwd early in the stream.
 
     SystemMessage appears at the beginning of the message stream and contains
@@ -757,7 +798,7 @@ def _process_system_message(
     available for all subsequent spans (cwd is needed to locate project-level
     SKILL.md files for Skill tool telemetry).
 
-    Returns the cwd if present, otherwise ``None``.
+    Returns ``(cwd, model)`` when present.
     """
     if hasattr(msg, "subtype") and msg.subtype == "init":
         if hasattr(msg, "data") and isinstance(msg.data, dict):
@@ -765,9 +806,11 @@ def _process_system_message(
             if session_id:
                 _set_session_id(agent_invocation, session_id)
             cwd = msg.data.get("cwd")
-            if cwd:
-                return str(cwd)
-    return None
+            model = _normalize_model(msg.data.get("model"))
+            if model:
+                _apply_assistant_model(agent_invocation, model)
+            return str(cwd) if cwd else None, model
+    return None, None
 
 
 def _process_stream_event_message(
@@ -794,6 +837,11 @@ def _process_result_message(
     turn_tracker: "AssistantTurnTracker",
 ) -> None:
     """Process ResultMessage: update session_id (fallback), token usage, and close any open LLM turn."""
+
+    result_model = _extract_model_from_result_message(msg)
+    if result_model:
+        _apply_assistant_model(agent_invocation, result_model)
+        turn_tracker.apply_model(result_model)
 
     _set_session_id(agent_invocation, getattr(msg, "session_id", None))
     turn_tracker.set_session_id(agent_invocation.conversation_id)
@@ -846,6 +894,7 @@ async def _process_agent_invocation_stream(
     # cwd captured from SystemMessage.data.cwd, used to locate project-level
     # SKILL.md files for Skill tool telemetry.
     session_cwd: Optional[str] = None
+    current_model = model
     agent_closed = False
 
     def close_agent_successfully() -> None:
@@ -854,20 +903,30 @@ async def _process_agent_invocation_stream(
             handler.stop_invoke_agent(agent_invocation)
             agent_closed = True
 
+    def fail_agent(error: Error) -> None:
+        nonlocal agent_closed
+        if not agent_closed:
+            handler.fail_invoke_agent(agent_invocation, error=error)
+            agent_closed = True
+
     try:
         async for msg in wrapped_stream:
             msg_type = type(msg).__name__
 
             if msg_type == "SystemMessage":
-                cwd = _process_system_message(msg, agent_invocation)
+                cwd, system_model = _process_system_message(
+                    msg, agent_invocation
+                )
                 if cwd:
                     session_cwd = cwd
+                if system_model and _is_unknown_model(current_model):
+                    current_model = system_model
             elif msg_type == "StreamEvent":
                 _process_stream_event_message(msg, agent_invocation)
             elif msg_type == "AssistantMessage":
                 _process_assistant_message(
                     msg,
-                    model,
+                    current_model,
                     prompt,
                     agent_invocation,
                     turn_tracker,
@@ -896,17 +955,15 @@ async def _process_agent_invocation_stream(
 
     except BaseException as e:
         error_msg = str(e)
+        error = Error(message=error_msg, type=type(e))
         if not agent_closed:
+            turn_tracker.fail_llm_turn(error)
             if agent_invocation.span:
                 agent_invocation.span.set_attribute(
                     "error.type", type(e).__name__
                 )
                 agent_invocation.span.set_attribute("error.message", error_msg)
-            handler.fail_invoke_agent(
-                agent_invocation,
-                error=Error(message=error_msg, type=type(e)),
-            )
-            agent_closed = True
+            fail_agent(error)
 
         raise
     finally:
@@ -1018,13 +1075,15 @@ class AssistantTurnTracker:
         self.current_llm_invocation = llm_invocation
         return llm_invocation
 
-    def add_assistant_output(self, parts: List[Any]) -> None:
+    def add_assistant_output(
+        self, parts: List[Any], finish_reason: str = "stop"
+    ) -> None:
         """Add output message parts to current LLM invocation."""
         if not self.current_llm_invocation or not parts:
             return
 
         output_msg = OutputMessage(
-            role="assistant", parts=list(parts), finish_reason="stop"
+            role="assistant", parts=list(parts), finish_reason=finish_reason
         )
         self.current_llm_invocation.output_messages.append(output_msg)
 
@@ -1053,10 +1112,29 @@ class AssistantTurnTracker:
         if target_invocation:
             _set_llm_session_id(target_invocation, session_id)
 
+    def apply_model(self, model: str) -> None:
+        """Update an open or recently closed LLM invocation model if unknown."""
+        target_invocation = (
+            self.current_llm_invocation or self.last_closed_llm_invocation
+        )
+        if (
+            target_invocation
+            and _is_unknown_model(target_invocation.request_model)
+            and not _is_unknown_model(model)
+        ):
+            target_invocation.request_model = model
+
     def close_llm_turn(self) -> None:
         """Close the current LLM invocation span."""
         if self.current_llm_invocation:
             self.handler.stop_llm(self.current_llm_invocation)
+            self.last_closed_llm_invocation = self.current_llm_invocation
+            self.current_llm_invocation = None
+
+    def fail_llm_turn(self, error: Error) -> None:
+        """Fail the current LLM invocation span."""
+        if self.current_llm_invocation:
+            self.handler.fail_llm(self.current_llm_invocation, error)
             self.last_closed_llm_invocation = self.current_llm_invocation
             self.current_llm_invocation = None
 

@@ -42,9 +42,18 @@ from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import
 
 
 class SystemMessage:
-    def __init__(self, session_id: str):
+    def __init__(
+        self,
+        session_id: str,
+        model: str | None = None,
+        cwd: str | None = None,
+    ):
         self.subtype = "init"
         self.data = {"session_id": session_id}
+        if model is not None:
+            self.data["model"] = model
+        if cwd is not None:
+            self.data["cwd"] = cwd
 
 
 class StreamEvent:
@@ -83,7 +92,11 @@ class UserMessage:
 
 
 class ResultMessage:
-    def __init__(self, session_id: str | None = None):
+    def __init__(
+        self,
+        session_id: str | None = None,
+        model_usage: dict[str, Any] | None = None,
+    ):
         self.subtype = "success"
         self.duration_ms = 10
         self.duration_api_ms = 8
@@ -94,6 +107,7 @@ class ResultMessage:
         self.usage = {"input_tokens": 11, "output_tokens": 7}
         self.result = "done"
         self.structured_output = None
+        self.model_usage = model_usage
 
 
 class TextBlock:
@@ -120,6 +134,12 @@ class ToolResultBlock:
 async def _stream(messages):
     for message in messages:
         yield message
+
+
+async def _failing_stream(messages, exc):
+    for message in messages:
+        yield message
+    raise exc
 
 
 async def _cancelled_stream(session_id):
@@ -221,6 +241,200 @@ async def test_system_session_propagates_to_agent_llm_and_tool(
     assert agent_span.attributes[GEN_AI_SESSION_ID] == "sess-system"
     assert llm_span.attributes[GEN_AI_SESSION_ID] == "sess-system"
     assert tool_span.attributes[GEN_AI_SESSION_ID] == "sess-system"
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_model_fills_unknown_request_model(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+
+    async for _ in _process_agent_invocation_stream(
+        wrapped_stream=_stream(
+            [
+                SystemMessage("sess-model"),
+                AssistantMessage(
+                    [TextBlock("answer")],
+                    model="claude-actual-model",
+                ),
+                ResultMessage("sess-model"),
+            ]
+        ),
+        handler=handler,
+        model="unknown",
+        prompt="inspect the model",
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _spans_by_operation(spans, "invoke_agent")[0]
+    llm_span = _spans_by_operation(spans, "chat")[0]
+
+    assert (
+        agent_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "claude-actual-model"
+    )
+    assert (
+        llm_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "claude-actual-model"
+    )
+    assert llm_span.name == "chat claude-actual-model"
+
+
+@pytest.mark.asyncio
+async def test_system_message_model_fills_unknown_request_model(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+
+    async for _ in _process_agent_invocation_stream(
+        wrapped_stream=_stream(
+            [
+                SystemMessage(
+                    "sess-system-model", model="claude-system-model"
+                ),
+                AssistantMessage([TextBlock("answer")], model=""),
+                ResultMessage("sess-system-model"),
+            ]
+        ),
+        handler=handler,
+        model="unknown",
+        prompt="inspect the model",
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _spans_by_operation(spans, "invoke_agent")[0]
+    llm_span = _spans_by_operation(spans, "chat")[0]
+
+    assert (
+        agent_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "claude-system-model"
+    )
+    assert (
+        llm_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "claude-system-model"
+    )
+    assert llm_span.name == "chat claude-system-model"
+
+
+@pytest.mark.asyncio
+async def test_result_model_usage_fills_unknown_request_model_attribute(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+
+    async for _ in _process_agent_invocation_stream(
+        wrapped_stream=_stream(
+            [
+                AssistantMessage([TextBlock("answer")], model=""),
+                ResultMessage(
+                    "sess-result-model",
+                    model_usage={"claude-result-model": {}},
+                ),
+            ]
+        ),
+        handler=handler,
+        model="unknown",
+        prompt="inspect the model",
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _spans_by_operation(spans, "invoke_agent")[0]
+    llm_span = _spans_by_operation(spans, "chat")[0]
+
+    assert (
+        agent_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "claude-result-model"
+    )
+    assert (
+        llm_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "claude-result-model"
+    )
+
+
+@pytest.mark.asyncio
+async def test_result_model_usage_with_multiple_models_keeps_unknown_model(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+
+    async for _ in _process_agent_invocation_stream(
+        wrapped_stream=_stream(
+            [
+                AssistantMessage([TextBlock("answer")], model=""),
+                ResultMessage(
+                    "sess-multi-model",
+                    model_usage={"model-a": {}, "model-b": {}},
+                ),
+            ]
+        ),
+        handler=handler,
+        model="unknown",
+        prompt="ambiguous model usage should not be guessed",
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _spans_by_operation(spans, "invoke_agent")[0]
+    llm_span = _spans_by_operation(spans, "chat")[0]
+
+    assert (
+        agent_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL]
+        == "unknown"
+    )
+    assert (
+        llm_span.attributes[GenAIAttributes.GEN_AI_REQUEST_MODEL] == "unknown"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_use_without_text_does_not_create_synthetic_llm_span(
+    tracer_provider, span_exporter
+):
+    await _run_stream(
+        tracer_provider,
+        [
+            SystemMessage("sess-tool-only"),
+            AssistantMessage(
+                [ToolUseBlock("toolu_1", "Read", {"file_path": "README.md"})]
+            ),
+            AssistantMessage(
+                [ToolUseBlock("toolu_2", "Glob", {"pattern": "*.md"})]
+            ),
+            UserMessage(
+                [
+                    ToolResultBlock("toolu_1", "README content"),
+                    ToolResultBlock("toolu_2", "README.md"),
+                ]
+            ),
+            AssistantMessage([TextBlock("done")]),
+            ResultMessage("sess-tool-only"),
+        ],
+    )
+
+    spans = span_exporter.get_finished_spans()
+    agent_span = _spans_by_operation(spans, "invoke_agent")[0]
+    llm_spans = sorted(
+        _spans_by_operation(spans, "chat"), key=lambda span: span.start_time
+    )
+    tool_spans = sorted(
+        _spans_by_operation(spans, "execute_tool"),
+        key=lambda span: span.start_time,
+    )
+
+    assert len(llm_spans) == 1
+    assert len(tool_spans) == 2
+    assert all(
+        tool_span.parent.span_id == agent_span.context.span_id
+        for tool_span in tool_spans
+    )
+    assert llm_spans[0].parent.span_id == agent_span.context.span_id
+    assert tool_spans[-1].start_time < llm_spans[0].start_time
+    assert llm_spans[0].attributes[
+        GenAIAttributes.GEN_AI_RESPONSE_FINISH_REASONS
+    ] == ("stop",)
 
 
 @pytest.mark.asyncio
@@ -680,6 +894,104 @@ async def test_cancelled_stream_detaches_agent_context(
     assert cancelled_span.attributes["error.type"] == "CancelledError"
     assert after_span.parent is None
     assert after_span.context.trace_id != cancelled_span.context.trace_id
+
+
+@pytest.mark.asyncio
+async def test_stream_exception_after_llm_detaches_agent_context(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+
+    with pytest.raises(RuntimeError, match="stream exploded"):
+        async for _ in _process_agent_invocation_stream(
+            wrapped_stream=_failing_stream(
+                [
+                    SystemMessage("sess-error"),
+                    AssistantMessage([TextBlock("partial answer")]),
+                ],
+                RuntimeError("stream exploded"),
+            ),
+            handler=handler,
+            model="claude-sonnet",
+            prompt="this stream will fail after an LLM turn starts",
+        ):
+            pass
+
+    await _run_stream(
+        tracer_provider,
+        [
+            SystemMessage("sess-after-error"),
+            AssistantMessage([TextBlock("answer after error")]),
+            ResultMessage("sess-after-error"),
+        ],
+    )
+
+    agent_spans = _spans_by_operation(
+        span_exporter.get_finished_spans(), "invoke_agent"
+    )
+    failed_span = [
+        span
+        for span in agent_spans
+        if span.attributes.get(GEN_AI_SESSION_ID) == "sess-error"
+    ][0]
+    after_span = [
+        span
+        for span in agent_spans
+        if span.attributes.get(GEN_AI_SESSION_ID) == "sess-after-error"
+    ][0]
+
+    assert failed_span.attributes["error.type"] == "RuntimeError"
+    assert after_span.parent is None
+    assert after_span.context.trace_id != failed_span.context.trace_id
+
+
+@pytest.mark.asyncio
+async def test_stream_exception_restores_active_parent_context(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = tracer_provider.get_tracer(__name__)
+
+    with tracer.start_as_current_span("caller-operation") as parent_span:
+        with pytest.raises(RuntimeError, match="stream exploded"):
+            async for _ in _process_agent_invocation_stream(
+                wrapped_stream=_failing_stream(
+                    [
+                        SystemMessage("sess-parent-error"),
+                        AssistantMessage([TextBlock("partial answer")]),
+                    ],
+                    RuntimeError("stream exploded"),
+                ),
+                handler=handler,
+                model="claude-sonnet",
+                prompt="this parented stream will fail",
+            ):
+                pass
+
+        await _run_stream(
+            tracer_provider,
+            [
+                SystemMessage("sess-parent-after-error"),
+                AssistantMessage([TextBlock("answer after parented error")]),
+                ResultMessage("sess-parent-after-error"),
+            ],
+        )
+
+    agent_spans = {
+        span.attributes[GEN_AI_SESSION_ID]: span
+        for span in _spans_by_operation(
+            span_exporter.get_finished_spans(), "invoke_agent"
+        )
+    }
+    failed_span = agent_spans["sess-parent-error"]
+    after_span = agent_spans["sess-parent-after-error"]
+
+    for span in (failed_span, after_span):
+        assert span.parent is not None
+        assert span.parent.span_id == parent_span.context.span_id
+        assert span.context.trace_id == parent_span.context.trace_id
+
+    assert after_span.parent.span_id != failed_span.context.span_id
 
 
 @pytest.mark.asyncio
