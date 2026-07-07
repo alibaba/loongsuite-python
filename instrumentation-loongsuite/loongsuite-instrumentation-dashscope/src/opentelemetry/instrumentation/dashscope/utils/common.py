@@ -21,6 +21,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+DASHSCOPE_SERVER_ADDRESS = "dashscope.aliyuncs.com"
+DASHSCOPE_SERVER_PORT = 443
+
 
 def _get_parameter(
     kwargs: dict, param_name: str, parameters: Optional[dict] = None

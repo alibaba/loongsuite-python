@@ -21,7 +21,11 @@ import logging
 from opentelemetry.util.genai.extended_types import EmbeddingInvocation
 from opentelemetry.util.genai.types import Error
 
-from ..utils import _get_parameter
+from ..utils import (
+    DASHSCOPE_SERVER_ADDRESS,
+    DASHSCOPE_SERVER_PORT,
+    _get_parameter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +56,8 @@ def wrap_text_embedding_call(wrapped, instance, args, kwargs, handler=None):
         # Create embedding invocation object
         invocation = EmbeddingInvocation(request_model=model)
         invocation.provider = "dashscope"
-        invocation.server_address = "dashscope.aliyuncs.com"
-        invocation.server_port = 443
+        invocation.server_address = DASHSCOPE_SERVER_ADDRESS
+        invocation.server_port = DASHSCOPE_SERVER_PORT
 
         # Extract parameters from kwargs or kwargs["parameters"] dict
         parameters = kwargs.get("parameters", {})

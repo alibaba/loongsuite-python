@@ -631,7 +631,7 @@ def _extract_server_info(instance: Any) -> tuple[str | None, int | None]:
         if not address:
             return None, None
         port = parsed.port
-        if port is None:
+        if port is None and parsed.scheme in ("http", "https"):
             port = 443 if parsed.scheme == "https" else 80
         return address, port
     except Exception:

@@ -29,19 +29,21 @@ GEN_AI_INSTRUMENTATION_SDK_NAME = "gen_ai.instrumentation.sdk.name"
 _GEN_AI_INSTRUMENTATION_SDK_NAME_VALUE = "loongsuite-genai-utils"
 
 _FALLBACK_HOST_IP = "127.0.0.1"
+_ROUTE_DETECTION_ADDRESS = "192.0.2.1"
+_ROUTE_DETECTION_PORT = 80
 
 
 def _get_host_ip() -> str:
     """Best-effort detection of the local host IP address.
 
-    Opens a UDP socket towards a public address to discover which local
+    Opens a UDP socket towards an RFC 5737 TEST-NET address to discover which local
     interface would be used for outbound traffic. No packet is actually sent.
     Falls back to ``127.0.0.1`` when detection fails.
     """
     sock = None
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.connect(("8.8.8.8", 80))
+        sock.connect((_ROUTE_DETECTION_ADDRESS, _ROUTE_DETECTION_PORT))
         return sock.getsockname()[0]
     except OSError as exception:
         logger.debug(

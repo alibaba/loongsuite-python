@@ -83,7 +83,7 @@ class TestGetHostIp(unittest.TestCase):
             return_value=mock_sock,
         ):
             self.assertEqual(_get_host_ip(), "192.168.1.100")
-        mock_sock.connect.assert_called_once()
+        mock_sock.connect.assert_called_once_with(("192.0.2.1", 80))
         mock_sock.close.assert_called_once()
 
     def test_falls_back_to_loopback_on_error(self):

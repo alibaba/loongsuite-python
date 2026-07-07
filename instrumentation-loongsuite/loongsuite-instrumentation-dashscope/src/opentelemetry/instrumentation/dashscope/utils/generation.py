@@ -31,7 +31,12 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 
-from .common import _extract_usage, _get_parameter
+from .common import (
+    DASHSCOPE_SERVER_ADDRESS,
+    DASHSCOPE_SERVER_PORT,
+    _extract_usage,
+    _get_parameter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -471,8 +476,8 @@ def _create_invocation_from_generation(
     invocation.provider = "dashscope"
     # DashScope SDK always targets dashscope.aliyuncs.com; if custom endpoint
     # support is added in the future, extract from instance/env instead.
-    invocation.server_address = "dashscope.aliyuncs.com"
-    invocation.server_port = 443
+    invocation.server_address = DASHSCOPE_SERVER_ADDRESS
+    invocation.server_port = DASHSCOPE_SERVER_PORT
     invocation.input_messages = _extract_input_messages(kwargs)
 
     # Extract tool definitions and convert to FunctionToolDefinition objects
