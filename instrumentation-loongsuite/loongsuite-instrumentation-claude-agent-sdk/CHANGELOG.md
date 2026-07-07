@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Capture Claude Agent SDK default model names from stream metadata when the
+  client options and environment do not provide an explicit model.
+- Fail open LLM spans when Claude Agent SDK streams raise exceptions, preserving
+  parent context cleanup for subsequent calls.
+- Preserve tool-only assistant messages as tool spans without fabricating LLM
+  spans.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Added
