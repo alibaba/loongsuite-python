@@ -641,11 +641,15 @@ def _set_common_live_attributes(
         )
         if handled_input:
             _set_or_delete_attr(span, "gen_ai.input.messages", input_messages)
-        handled_output, output_messages = _agent_boundary_output_messages_value(
-            _attr_value(span, "gen_ai.output.messages")
+        handled_output, output_messages = (
+            _agent_boundary_output_messages_value(
+                _attr_value(span, "gen_ai.output.messages")
+            )
         )
         if handled_output:
-            _set_or_delete_attr(span, "gen_ai.output.messages", output_messages)
+            _set_or_delete_attr(
+                span, "gen_ai.output.messages", output_messages
+            )
     else:
         output_messages = _normalized_output_messages_value(
             _attr_value(span, "gen_ai.output.messages")
@@ -654,9 +658,7 @@ def _set_common_live_attributes(
             span.set_attribute("gen_ai.output.messages", output_messages)
 
 
-def _set_or_delete_attr(
-    span: OtelSpan, key: str, value: Any | None
-) -> None:
+def _set_or_delete_attr(span: OtelSpan, key: str, value: Any | None) -> None:
     if value is None:
         _delete_attr(span, key)
     else:

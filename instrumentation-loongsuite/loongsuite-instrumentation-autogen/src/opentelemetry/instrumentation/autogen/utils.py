@@ -160,7 +160,9 @@ def to_input_messages(messages: Sequence[Any] | None) -> list[InputMessage]:
     return result
 
 
-def system_instruction_parts(messages: Sequence[Any] | None) -> list[MessagePart]:
+def system_instruction_parts(
+    messages: Sequence[Any] | None,
+) -> list[MessagePart]:
     parts: list[MessagePart] = []
     for message in messages or []:
         if _type_name(message) != "SystemMessage":
@@ -458,7 +460,9 @@ def _is_agent_output_message_type(message_type: str) -> bool:
 
 
 def _agent_output_message_from_message(message: Any) -> OutputMessage | None:
-    parts = _user_visible_parts(_content_parts(field_value(message, "content")))
+    parts = _user_visible_parts(
+        _content_parts(field_value(message, "content"))
+    )
     if not parts:
         return None
     return OutputMessage(role="assistant", parts=parts, finish_reason="stop")
