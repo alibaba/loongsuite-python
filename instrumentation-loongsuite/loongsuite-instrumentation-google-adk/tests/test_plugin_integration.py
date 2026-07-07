@@ -440,7 +440,11 @@ class TestGoogleAdkPluginIntegration:
         mock_tool_args = {"operation": "add", "a": 5, "b": 3}
         mock_tool_context = Mock()
         mock_tool_context.session_id = "session_456"
-        mock_result = {"result": 8}
+        mock_result = {
+            "result": 8,
+            "skill_name": "should-not-be-captured",
+            "frontmatter": {"description": "Not a skill load tool."},
+        }
 
         # Execute Tool span lifecycle
         await plugin.before_tool_callback(
@@ -489,6 +493,9 @@ class TestGoogleAdkPluginIntegration:
             attributes.get("gen_ai.tool.description")
             == "Mathematical calculator"
         )
+        assert "gen_ai.skill.name" not in attributes
+        assert "gen_ai.skill.id" not in attributes
+        assert "gen_ai.skill.description" not in attributes
 
     @pytest.mark.asyncio
     async def test_skill_load_tool_span_captures_skill_attributes(self):

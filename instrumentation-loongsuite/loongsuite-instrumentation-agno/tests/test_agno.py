@@ -254,6 +254,36 @@ def test_agno_skill_tool_invocation_captures_skill_attributes():
     assert invocation.skill_version == "1.2.3"
 
 
+def test_agno_non_skill_tool_invocation_ignores_skill_like_payload():
+    fn = Function.from_callable(lambda skill_name: f"loaded {skill_name}")
+    fn.name = "get_weather"
+    function_call = FunctionCall(
+        function=fn,
+        arguments={"skill_name": "code-review"},
+        call_id="call_regular_1",
+    )
+
+    invocation = create_tool_invocation(function_call)
+    update_tool_invocation_from_response(
+        invocation,
+        SimpleNamespace(
+            result={
+                "skill_name": "code-review",
+                "frontmatter": {
+                    "description": "Review code for quality and security.",
+                    "metadata": {"version": "1.2.3"},
+                },
+            }
+        ),
+    )
+
+    assert invocation.tool_name == "get_weather"
+    assert invocation.skill_name is None
+    assert invocation.skill_id is None
+    assert invocation.skill_description is None
+    assert invocation.skill_version is None
+
+
 def test_streaming_agent_finishes_agent_and_model_spans(
     span_exporter: InMemorySpanExporter,
 ):

@@ -36,7 +36,7 @@ jobs:
 
   {{ job_data }}:
     name: LoongSuite {{ job_data }}
-    runs-on: ubuntu-latest
+    runs-on: {{ runner }}
     timeout-minutes: 30
     {%- if job_data == "generate-workflows" %}
     if: |

@@ -5,9 +5,8 @@ name: Misc 0
 
 on:
   push:
-    branches-ignore:
-    - 'release/*'
-    - 'otelbot/*'
+    branches:
+    - main
   pull_request:
 
 permissions:
@@ -35,7 +34,7 @@ jobs:
 
   spellcheck:
     name: spellcheck
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -73,7 +72,7 @@ jobs:
 
   docs:
     name: docs
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     if: |
       github.event.pull_request.user.login != 'otelbot[bot]' && github.event_name == 'pull_request'
@@ -94,7 +93,7 @@ jobs:
 
   generate:
     name: generate
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -116,7 +115,7 @@ jobs:
 
   generate-workflows:
     name: generate-workflows
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     if: |
       !contains(github.event.pull_request.labels.*.name, 'Skip generate-workflows')
@@ -141,7 +140,7 @@ jobs:
 
   shellcheck:
     name: shellcheck
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -160,7 +159,7 @@ jobs:
 
   precommit:
     name: precommit
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
@@ -179,7 +178,7 @@ jobs:
 
   typecheck:
     name: typecheck
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}

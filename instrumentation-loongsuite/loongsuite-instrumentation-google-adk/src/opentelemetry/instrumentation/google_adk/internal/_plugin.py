@@ -26,7 +26,7 @@ import logging
 import timeit
 from contextvars import ContextVar, Token
 from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
@@ -62,7 +62,7 @@ _ACTIVE_LLM_REQUEST_KEY: ContextVar[Optional[str]] = ContextVar(
 _SKILL_LOAD_TOOL_NAMES = {"load_skill", "load_skill_resource"}
 
 
-def _mapping_from_any(value: Any) -> dict[str, Any]:
+def _mapping_from_any(value: Any) -> Dict[str, Any]:
     if value is None:
         return {}
     if isinstance(value, Mapping):
@@ -88,7 +88,7 @@ def _mapping_from_any(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _first_text(*values: Any) -> str | None:
+def _first_text(*values: Any) -> Optional[str]:
     for value in values:
         if value is None:
             continue
@@ -98,7 +98,7 @@ def _first_text(*values: Any) -> str | None:
     return None
 
 
-def _extract_skill_metadata(value: Any) -> dict[str, Any]:
+def _extract_skill_metadata(value: Any) -> Dict[str, Any]:
     data = _mapping_from_any(value)
     if not data:
         return {}
@@ -602,7 +602,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         self,
         *,
         tool: BaseTool,
-        tool_args: dict[str, Any],
+        tool_args: Dict[str, Any],
         tool_context: ToolContext,
     ) -> None:
         """
@@ -646,9 +646,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         self,
         *,
         tool: BaseTool,
-        tool_args: dict[str, Any],
+        tool_args: Dict[str, Any],
         tool_context: ToolContext,
-        result: dict,
+        result: Dict[str, Any],
     ) -> None:
         """
         End Tool execution - finish execute_tool span.
@@ -674,7 +674,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         self,
         *,
         tool: BaseTool,
-        tool_args: dict[str, Any],
+        tool_args: Dict[str, Any],
         tool_context: ToolContext,
         error: Exception,
     ) -> Optional[dict]:
@@ -832,7 +832,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
     def _tool_key(
         self,
         tool: BaseTool,
-        tool_args: dict[str, Any],
+        tool_args: Dict[str, Any],
         tool_context: ToolContext,
     ) -> str:
         invocation_context = getattr(tool_context, "_invocation_context", None)
@@ -848,7 +848,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         self,
         callback_context: CallbackContext,
         llm_request: Optional[LlmRequest] = None,
-    ) -> tuple[Optional[str], Optional[LLMInvocation]]:
+    ) -> Tuple[Optional[str], Optional[LLMInvocation]]:
         context_request_key = _ACTIVE_LLM_REQUEST_KEY.get()
         if context_request_key:
             invocation = self._active_llm_invocations.get(context_request_key)
@@ -915,7 +915,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
 
     @staticmethod
     def _mock_has_explicit_attrs(
-        value: Any, attr_names: tuple[str, ...]
+        value: Any, attr_names: Tuple[str, ...]
     ) -> bool:
         value_dict = getattr(value, "__dict__", {})
         return any(attr_name in value_dict for attr_name in attr_names)

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SESSION_ID,
@@ -87,7 +87,7 @@ def _to_dict(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def _mapping_from_any(value: Any) -> dict[str, Any]:
+def _mapping_from_any(value: Any) -> Dict[str, Any]:
     data = _to_dict(value)
     if data is not None:
         return data
@@ -100,7 +100,7 @@ def _mapping_from_any(value: Any) -> dict[str, Any]:
     return {}
 
 
-def _first_text(*values: Any) -> str | None:
+def _first_text(*values: Any) -> Optional[str]:
     for value in values:
         if value is None:
             continue
@@ -110,7 +110,7 @@ def _first_text(*values: Any) -> str | None:
     return None
 
 
-def _extract_skill_metadata(value: Any) -> dict[str, Any]:
+def _extract_skill_metadata(value: Any) -> Dict[str, Any]:
     data = _mapping_from_any(value)
     if not data:
         return {}
