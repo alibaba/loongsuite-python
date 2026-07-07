@@ -25,7 +25,8 @@ for standard span and metrics management.
 import logging
 import timeit
 from contextvars import ContextVar, Token
-from typing import Any, Dict, List, Optional
+from dataclasses import asdict, is_dataclass
+from typing import Any, Dict, List, Mapping, Optional
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
@@ -58,6 +59,109 @@ _logger = logging.getLogger(__name__)
 _ACTIVE_LLM_REQUEST_KEY: ContextVar[Optional[str]] = ContextVar(
     "google_adk_active_llm_request_key", default=None
 )
+_SKILL_LOAD_TOOL_NAMES = {"load_skill", "load_skill_resource"}
+
+
+def _mapping_from_any(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            data = model_dump(mode="json")
+        except TypeError:
+            try:
+                data = model_dump()
+            except Exception:
+                return {}
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+    if is_dataclass(value):
+        try:
+            data = asdict(value)
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_skill_metadata(value: Any) -> dict[str, Any]:
+    data = _mapping_from_any(value)
+    if not data:
+        return {}
+    frontmatter = _mapping_from_any(data.get("frontmatter"))
+    metadata = _mapping_from_any(data.get("metadata")) or _mapping_from_any(
+        frontmatter.get("metadata")
+    )
+    return {
+        "name": _first_text(
+            data.get("skill_name"),
+            data.get("skill"),
+            data.get("name"),
+            frontmatter.get("name"),
+        ),
+        "id": _first_text(
+            data.get("skill_id"),
+            data.get("id"),
+            metadata.get("id"),
+        ),
+        "description": _first_text(
+            data.get("skill_description"),
+            data.get("description"),
+            frontmatter.get("description"),
+        ),
+        "version": _first_text(
+            data.get("skill_version"),
+            data.get("version"),
+            metadata.get("version"),
+        ),
+    }
+
+
+def _apply_skill_metadata(
+    invocation: ExecuteToolInvocation, metadata: Mapping[str, Any]
+) -> None:
+    name = _first_text(metadata.get("name"))
+    if name:
+        invocation.skill_name = invocation.skill_name or name
+        invocation.skill_id = (
+            invocation.skill_id or _first_text(metadata.get("id")) or name
+        )
+    elif metadata.get("id"):
+        invocation.skill_id = invocation.skill_id or _first_text(
+            metadata.get("id")
+        )
+
+    description = _first_text(metadata.get("description"))
+    if description:
+        invocation.skill_description = (
+            invocation.skill_description or description
+        )
+
+    version = _first_text(metadata.get("version"))
+    if version:
+        invocation.skill_version = invocation.skill_version or version
+
+
+def _apply_adk_skill_tool_metadata(
+    invocation: ExecuteToolInvocation, data: Any
+) -> None:
+    if invocation.tool_name not in _SKILL_LOAD_TOOL_NAMES:
+        return
+    _apply_skill_metadata(invocation, _extract_skill_metadata(data))
 
 
 class GoogleAdkObservabilityPlugin(BasePlugin):
@@ -524,6 +628,8 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             if tool_args:
                 invocation.tool_call_arguments = tool_args
 
+            _apply_adk_skill_tool_metadata(invocation, tool_args)
+
             # Start invocation (creates span)
             self._handler.start_execute_tool(invocation)
 
@@ -555,6 +661,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
                 # Set tool result (content capture is controlled by the util layer)
                 if result:
                     invocation.tool_call_result = result
+                    _apply_adk_skill_tool_metadata(invocation, result)
 
                 # Stop invocation (ends span and records metrics automatically)
                 self._handler.stop_execute_tool(invocation)

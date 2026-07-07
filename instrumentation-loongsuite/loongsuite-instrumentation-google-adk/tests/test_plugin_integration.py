@@ -491,6 +491,59 @@ class TestGoogleAdkPluginIntegration:
         )
 
     @pytest.mark.asyncio
+    async def test_skill_load_tool_span_captures_skill_attributes(self):
+        """ADK SkillToolset load_skill spans should include skill metadata."""
+        self.instrumentor.instrument(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+
+        plugin = self.instrumentor._plugin
+
+        mock_tool = Mock()
+        mock_tool.name = "load_skill"
+        mock_tool.description = "Load full instructions for a skill."
+        tool_args = {"name": "weather-skill"}
+        mock_tool_context = Mock()
+        mock_tool_context.call_id = "skill_call_1"
+        mock_tool_context.invocation_id = "skill_invocation"
+        mock_result = {
+            "skill_name": "weather-skill",
+            "frontmatter": {
+                "description": "Weather workflow instructions.",
+                "metadata": {"version": "1.2.3"},
+            },
+            "instructions": "Use the weather references.",
+        }
+
+        await plugin.before_tool_callback(
+            tool=mock_tool,
+            tool_args=tool_args,
+            tool_context=mock_tool_context,
+        )
+        await plugin.after_tool_callback(
+            tool=mock_tool,
+            tool_args=tool_args,
+            tool_context=mock_tool_context,
+            result=mock_result,
+        )
+
+        spans = self.span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        attrs = span.attributes
+
+        assert span.name == "execute_tool load_skill"
+        assert attrs.get("gen_ai.tool.name") == "load_skill"
+        assert attrs.get("gen_ai.skill.name") == "weather-skill"
+        assert attrs.get("gen_ai.skill.id") == "weather-skill"
+        assert (
+            attrs.get("gen_ai.skill.description")
+            == "Weather workflow instructions."
+        )
+        assert attrs.get("gen_ai.skill.version") == "1.2.3"
+
+    @pytest.mark.asyncio
     async def test_runner_span_attributes(self):
         """Test Runner span creation and attributes."""
         # Instrument

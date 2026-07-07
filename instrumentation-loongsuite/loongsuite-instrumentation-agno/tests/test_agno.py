@@ -37,8 +37,10 @@ from opentelemetry.instrumentation.agno.utils import (
     convert_agent_input,
     create_agent_invocation,
     create_llm_invocation,
+    create_tool_invocation,
     update_agent_invocation_from_response,
     update_llm_invocation_from_response,
+    update_tool_invocation_from_response,
 )
 from opentelemetry.sdk.trace import Resource, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -213,6 +215,43 @@ def test_agent_model_and_tool_spans_use_genai_util(
     assert tool_attrs["gen_ai.tool.call.id"] == "call_1"
     assert "Hangzhou" in tool_attrs["gen_ai.tool.call.arguments"]
     assert "sunny in Hangzhou" in tool_attrs["gen_ai.tool.call.result"]
+
+
+def test_agno_skill_tool_invocation_captures_skill_attributes():
+    fn = Function.from_callable(lambda skill_name: f"loaded {skill_name}")
+    fn.name = "get_skill_instructions"
+    fn.description = "Load full instructions for a skill."
+    function_call = FunctionCall(
+        function=fn,
+        arguments={"skill_name": "code-review"},
+        call_id="call_skill_1",
+    )
+
+    invocation = create_tool_invocation(function_call)
+
+    assert invocation.tool_name == "get_skill_instructions"
+    assert invocation.skill_name == "code-review"
+    assert invocation.skill_id == "code-review"
+
+    update_tool_invocation_from_response(
+        invocation,
+        SimpleNamespace(
+            result={
+                "skill_name": "code-review",
+                "frontmatter": {
+                    "description": "Review code for quality and security.",
+                    "metadata": {"version": "1.2.3"},
+                },
+            }
+        ),
+    )
+
+    assert invocation.skill_name == "code-review"
+    assert invocation.skill_id == "code-review"
+    assert (
+        invocation.skill_description == "Review code for quality and security."
+    )
+    assert invocation.skill_version == "1.2.3"
 
 
 def test_streaming_agent_finishes_agent_and_model_spans(
