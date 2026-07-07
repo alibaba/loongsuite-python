@@ -96,6 +96,7 @@ _EXECUTOR_PROCESS = "executor.process"
 _EDGE_GROUP_PROCESS = "edge_group.process"
 _LIVE_SPAN_MAX_AGE_NS = 60 * 1_000_000_000
 _GEN_AI_TOOL_NAME = "gen_ai.tool.name"
+_GEN_AI_INPUT_MESSAGES = "gen_ai.input.messages"
 _GEN_AI_OUTPUT_MESSAGES = "gen_ai.output.messages"
 _FRAMEWORK_PROVIDER_NAME = MAF_PROVIDER_NAME
 _GEN_AI_SYSTEM = "gen_ai.system"
@@ -109,6 +110,10 @@ _MAF_INTERNAL_NAME_PREFIXES = (
 )
 _TOOL_CALL_FINISH_REASONS = frozenset(
     {"tool_call", "tool_calls", "function_call", "function_calls"}
+)
+_AGENT_OUTPUT_ROLES = frozenset({"assistant", "ai", "model"})
+_AGENT_INTERMEDIATE_PART_TYPES = frozenset(
+    {"tool_call", "tool_call_response", "reasoning"}
 )
 
 
@@ -422,7 +427,46 @@ def _normalize_finish_reasons(live_span: OtelSpan, readable: Any) -> None:
         )
 
 
-def _normalize_output_messages(live_span: OtelSpan, readable: Any) -> None:
+def _normalize_input_messages(
+    live_span: OtelSpan, readable: Any, *, agent_boundary: bool = False
+) -> None:
+    if not agent_boundary:
+        return
+    handled, normalized = _agent_boundary_input_messages_value(
+        _attr_value(readable, _GEN_AI_INPUT_MESSAGES)
+    )
+    if not handled:
+        return
+    if normalized is None:
+        _delete_attr(live_span, _GEN_AI_INPUT_MESSAGES)
+        _delete_attr(readable, _GEN_AI_INPUT_MESSAGES)
+    else:
+        _set_attr_on_both(
+            live_span, readable, _GEN_AI_INPUT_MESSAGES, normalized
+        )
+
+
+def _normalize_output_messages(
+    live_span: OtelSpan,
+    readable: Any,
+    *,
+    agent_boundary: bool = False,
+) -> None:
+    if agent_boundary:
+        handled, normalized = _agent_boundary_output_messages_value(
+            _attr_value(readable, _GEN_AI_OUTPUT_MESSAGES)
+        )
+        if not handled:
+            return
+        if normalized is None:
+            _delete_attr(live_span, _GEN_AI_OUTPUT_MESSAGES)
+            _delete_attr(readable, _GEN_AI_OUTPUT_MESSAGES)
+        else:
+            _set_attr_on_both(
+                live_span, readable, _GEN_AI_OUTPUT_MESSAGES, normalized
+            )
+        return
+
     normalized = _normalized_output_messages_value(
         _attr_value(readable, _GEN_AI_OUTPUT_MESSAGES)
     )
@@ -463,6 +507,90 @@ def _normalized_output_messages_value(value: Any) -> Optional[str]:
         return json.dumps(
             normalized_messages, ensure_ascii=False, separators=(",", ":")
         )
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_message_list(value: Any) -> tuple[bool, list[Any]]:
+    if value is None:
+        return False, []
+    try:
+        messages = json.loads(value) if isinstance(value, str) else value
+    except (TypeError, ValueError):
+        return False, []
+    if not isinstance(messages, list):
+        return False, []
+    return True, messages
+
+
+def _agent_boundary_input_messages_value(
+    value: Any,
+) -> tuple[bool, Optional[str]]:
+    handled, messages = _parse_message_list(value)
+    if not handled:
+        return False, None
+    normalized_messages = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if str(message.get("role") or "").lower() != "user":
+            continue
+        normalized = _message_with_visible_parts(message)
+        if normalized is not None:
+            normalized_messages.append(normalized)
+    if not normalized_messages:
+        return True, None
+    return True, _dump_messages(normalized_messages)
+
+
+def _agent_boundary_output_messages_value(
+    value: Any,
+) -> tuple[bool, Optional[str]]:
+    handled, messages = _parse_message_list(value)
+    if not handled:
+        return False, None
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").lower()
+        if role not in _AGENT_OUTPUT_ROLES:
+            continue
+        normalized = _message_with_visible_parts(message)
+        if normalized is None:
+            continue
+        current = normalized.get("finish_reason")
+        normalized["finish_reason"] = _normalize_finish_reason_value(
+            current, default="stop"
+        )
+        return True, _dump_messages([normalized])
+    return True, None
+
+
+def _message_with_visible_parts(
+    message: Mapping[Any, Any],
+) -> Optional[dict[Any, Any]]:
+    parts = message.get("parts")
+    if not isinstance(parts, list):
+        return None
+    visible_parts = []
+    for part in parts:
+        if isinstance(part, Mapping):
+            part_type = part.get("type")
+            if part_type in _AGENT_INTERMEDIATE_PART_TYPES:
+                continue
+            visible_parts.append(dict(part))
+        else:
+            visible_parts.append(part)
+    if not visible_parts:
+        return None
+    normalized = dict(message)
+    normalized["parts"] = visible_parts
+    return normalized
+
+
+def _dump_messages(messages: list[Any]) -> Optional[str]:
+    try:
+        return json.dumps(messages, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError):
         return None
 
@@ -1109,9 +1237,20 @@ class MAFSemanticProcessor(SpanProcessor):
                 live, readable, GEN_AI_PROVIDER_NAME, _FRAMEWORK_PROVIDER_NAME
             )
 
-        # 5) Normalize finish reasons written by MAF as a JSON string.
+        # 5) Normalize finish reasons and content-capture messages. AGENT
+        # input/output is the user-visible boundary; intermediate ReAct/tool
+        # messages stay on child STEP/LLM/TOOL spans.
         _normalize_finish_reasons(live, readable)
-        _normalize_output_messages(live, readable)
+        agent_boundary = (
+            span_kind == GenAISpanKind.AGENT
+            and op_name == GenAIOperation.INVOKE_AGENT
+        )
+        _normalize_input_messages(
+            live, readable, agent_boundary=agent_boundary
+        )
+        _normalize_output_messages(
+            live, readable, agent_boundary=agent_boundary
+        )
 
         # 6) LLM/embedding spans should use CLIENT OTel span kind.
         if span_kind == GenAISpanKind.LLM:

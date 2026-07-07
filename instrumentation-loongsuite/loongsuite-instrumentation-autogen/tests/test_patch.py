@@ -16,6 +16,10 @@ from __future__ import annotations
 
 import pytest
 
+from opentelemetry.instrumentation._semconv import (
+    OTEL_SEMCONV_STABILITY_OPT_IN,
+    _OpenTelemetrySemanticConventionStability,
+)
 from opentelemetry.instrumentation.autogen import patch
 from opentelemetry.instrumentation.autogen.semantic_conventions import (
     AUTOGEN_PROVIDER_NAME,
@@ -29,6 +33,9 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
+)
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
 
 
@@ -169,6 +176,19 @@ def _set_handler(handler: Handler):
     patch._get_handler.handler = handler  # type: ignore[attr-defined]
 
 
+@pytest.fixture()
+def genai_span_content(monkeypatch):
+    monkeypatch.setenv(
+        OTEL_SEMCONV_STABILITY_OPT_IN, "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    _OpenTelemetrySemanticConventionStability._initialized = False
+    yield
+    _OpenTelemetrySemanticConventionStability._initialized = False
+
+
 def test_direct_model_patch_list_excludes_wrappers_and_replay_clients():
     targets = {target for _, target in patch._DIRECT_MODEL_CLIENT_PATCHES}
 
@@ -199,10 +219,9 @@ async def test_agent_wrapper_starts_and_stops_invocation():
 
 
 @pytest.mark.asyncio
-async def test_agent_wrapper_enriches_native_autogen_agent_span(monkeypatch):
-    monkeypatch.setenv(
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
-    )
+async def test_agent_wrapper_enriches_native_autogen_agent_span(
+    genai_span_content,
+):
     handler = Handler()
     _set_handler(handler)
     exporter = InMemorySpanExporter()
@@ -239,8 +258,10 @@ async def test_agent_wrapper_enriches_native_autogen_agent_span(monkeypatch):
     assert handler.calls == []
     assert attributes["gen_ai.request.model"] == "qwen-plus"
     assert "gen_ai.input.messages" in attributes
-    assert "system" in attributes["gen_ai.input.messages"]
+    assert "system" not in attributes["gen_ai.input.messages"]
     assert "hello" in attributes["gen_ai.input.messages"]
+    assert "gen_ai.system_instructions" in attributes
+    assert "system" in attributes["gen_ai.system_instructions"]
     assert "gen_ai.output.messages" in attributes
     assert "agent done" in attributes["gen_ai.output.messages"]
 

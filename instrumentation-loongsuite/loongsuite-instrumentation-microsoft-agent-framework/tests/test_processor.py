@@ -335,6 +335,104 @@ def test_output_messages_finish_reason_added_for_agent_span():
     assert messages[0]["finish_reason"] == "stop"
 
 
+def test_agent_input_output_boundary_filters_intermediate_messages():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("invoke_agent planner") as span:
+        _mark_maf_span(span)
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(
+            "gen_ai.input.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "system",
+                        "parts": [{"type": "text", "content": "system"}],
+                    },
+                    {
+                        "role": "user",
+                        "parts": [{"type": "text", "content": "weather?"}],
+                    },
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "id": "call-1",
+                                "name": "lookup",
+                                "arguments": {"city": "Hangzhou"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "parts": [
+                            {
+                                "type": "tool_call_response",
+                                "id": "call-1",
+                                "response": "sunny",
+                            }
+                        ],
+                    },
+                ]
+            ),
+        )
+        span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "finish_reason": "tool_call",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "id": "call-1",
+                                "name": "lookup",
+                                "arguments": {"city": "Hangzhou"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "parts": [
+                            {
+                                "type": "tool_call_response",
+                                "id": "call-1",
+                                "response": "sunny",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {
+                                "type": "reasoning",
+                                "content": "hidden scratchpad",
+                            },
+                            {
+                                "type": "text",
+                                "content": "Hangzhou is sunny.",
+                            },
+                        ],
+                    },
+                ]
+            ),
+        )
+    [exported] = _flush(exporter)
+
+    input_messages = json.loads(exported.attributes["gen_ai.input.messages"])
+    assert [message["role"] for message in input_messages] == ["user"]
+    assert input_messages[0]["parts"][0]["content"] == "weather?"
+
+    output_messages = json.loads(exported.attributes["gen_ai.output.messages"])
+    assert len(output_messages) == 1
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hangzhou is sunny."}
+    ]
+    assert output_messages[0]["finish_reason"] == "stop"
+
+
 def test_output_messages_finish_reason_tool_call_is_normalized():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("chat gpt-4o") as span:

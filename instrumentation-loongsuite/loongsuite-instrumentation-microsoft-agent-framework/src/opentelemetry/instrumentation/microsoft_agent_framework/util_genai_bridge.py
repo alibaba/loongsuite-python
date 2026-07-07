@@ -78,8 +78,11 @@ from .semantic_conventions import (
 )
 from .span_processor import (
     _FRAMEWORK_PROVIDER_NAME,
+    _agent_boundary_input_messages_value,
+    _agent_boundary_output_messages_value,
     _attr_value,
     _classify_span,
+    _delete_attr,
     _is_exception_event,
     _is_maf_span,
     _mcp_tool_name,
@@ -628,11 +631,36 @@ def _set_common_live_attributes(
     finish_reasons = _finish_reasons(span)
     if finish_reasons:
         span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons)
-    output_messages = _normalized_output_messages_value(
-        _attr_value(span, "gen_ai.output.messages")
+    agent_boundary = (
+        span_kind == GenAISpanKind.AGENT
+        and op_name == GenAIOperation.INVOKE_AGENT
     )
-    if output_messages is not None:
-        span.set_attribute("gen_ai.output.messages", output_messages)
+    if agent_boundary:
+        handled_input, input_messages = _agent_boundary_input_messages_value(
+            _attr_value(span, "gen_ai.input.messages")
+        )
+        if handled_input:
+            _set_or_delete_attr(span, "gen_ai.input.messages", input_messages)
+        handled_output, output_messages = _agent_boundary_output_messages_value(
+            _attr_value(span, "gen_ai.output.messages")
+        )
+        if handled_output:
+            _set_or_delete_attr(span, "gen_ai.output.messages", output_messages)
+    else:
+        output_messages = _normalized_output_messages_value(
+            _attr_value(span, "gen_ai.output.messages")
+        )
+        if output_messages is not None:
+            span.set_attribute("gen_ai.output.messages", output_messages)
+
+
+def _set_or_delete_attr(
+    span: OtelSpan, key: str, value: Any | None
+) -> None:
+    if value is None:
+        _delete_attr(span, key)
+    else:
+        span.set_attribute(key, value)
 
 
 def _llm_invocation(span: OtelSpan, op_name: str) -> LLMInvocation:

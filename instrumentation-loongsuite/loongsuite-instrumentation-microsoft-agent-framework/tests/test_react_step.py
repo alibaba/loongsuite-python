@@ -278,17 +278,18 @@ def test_fil_wrapper_returns_coroutine(monkeypatch):
     _reset_extended_handler_singletons()
 
     react_step_patch.apply_react_step_patch(tracer_provider=None)
-    assert react_step_patch._applied is True
+    try:
+        assert react_step_patch._applied is True
 
-    # Call the wrapped method directly (no instance — staticmethod-style).
-    coro = _FunctionInvocationLayer.get_response("self-arg", "a", kw="v")
-    assert asyncio.iscoroutine(coro), (
-        "FIL wrapper must return a coroutine so MAF can `await` it"
-    )
-    result = asyncio.get_event_loop().run_until_complete(coro)
-    assert result[0] == "fil-ok"
-
-    react_step_patch.revert_react_step_patch()
+        # Call the wrapped method directly (no instance — staticmethod-style).
+        coro = _FunctionInvocationLayer.get_response("self-arg", "a", kw="v")
+        assert asyncio.iscoroutine(coro), (
+            "FIL wrapper must return a coroutine so MAF can `await` it"
+        )
+        result = asyncio.run(coro)
+        assert result[0] == "fil-ok"
+    finally:
+        react_step_patch.revert_react_step_patch()
 
 
 def test_fil_wrapper_preserves_streaming_response_type(monkeypatch):
@@ -350,11 +351,12 @@ def test_fil_wrapper_preserves_streaming_response_type(monkeypatch):
     _reset_extended_handler_singletons()
 
     react_step_patch.apply_react_step_patch(tracer_provider=None)
-    result = _FunctionInvocationLayer.get_response("self-arg", stream=True)
-    assert result is stream
-    assert not asyncio.iscoroutine(result)
-
-    react_step_patch.revert_react_step_patch()
+    try:
+        result = _FunctionInvocationLayer.get_response("self-arg", stream=True)
+        assert result is stream
+        assert not asyncio.iscoroutine(result)
+    finally:
+        react_step_patch.revert_react_step_patch()
 
 
 def test_chat_wrapper_outside_loop_passes_through(monkeypatch):
@@ -518,7 +520,7 @@ def test_react_step_scope_keeps_tool_under_planning_step(monkeypatch):
             with tracer.start_as_current_span("invoke_agent planner"):
                 await _FunctionInvocationLayer.get_response("self-arg")
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
     finally:
         react_step_patch.revert_react_step_patch()
 

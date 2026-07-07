@@ -21,6 +21,7 @@ from opentelemetry.instrumentation.autogen.semantic_conventions import (
     GEN_AI_AGENT_NAME,
 )
 from opentelemetry.instrumentation.autogen.utils import (
+    apply_agent_stream_item,
     apply_create_result,
     make_agent_invocation,
     make_llm_invocation,
@@ -73,6 +74,28 @@ class FunctionCall:
     id: str
     name: str
     arguments: dict
+
+
+@dataclass
+class ToolCallRequestEvent:
+    content: list[FunctionCall]
+
+
+@dataclass
+class ToolCallExecutionEvent:
+    content: list[FunctionExecutionResult]
+
+
+@dataclass
+class ToolCallSummaryMessage:
+    content: str
+    source: str
+
+
+@dataclass
+class TaskResult:
+    messages: list
+    stop_reason: str | None = None
 
 
 @dataclass
@@ -251,5 +274,47 @@ def test_make_agent_invocation_uses_assistant_metadata():
     assert invocation.agent_description == "answers"
     assert invocation.request_model == "qwen-plus"
     assert invocation.response_model_name == "qwen-plus-2025-04-28"
-    assert invocation.input_messages[0].parts == [Text(content="system")]
+    assert invocation.input_messages == []
+    assert invocation.system_instruction == [Text(content="system")]
     assert invocation.tool_definitions == tool_definitions([Tool()])
+
+
+def test_apply_agent_stream_item_uses_only_final_task_result_output():
+    invocation = make_agent_invocation(type("AssistantAgent", (), {})())
+
+    apply_agent_stream_item(
+        invocation,
+        TaskResult(
+            messages=[
+                TextMessage("Use the weather tool.", "user"),
+                ToolCallRequestEvent(
+                    [FunctionCall("call-1", "lookup", {"city": "Hangzhou"})]
+                ),
+                ToolCallExecutionEvent(
+                    [FunctionExecutionResult("call-1", "sunny")]
+                ),
+                ToolCallSummaryMessage("Weather is sunny.", "assistant"),
+            ],
+            stop_reason="done",
+        ),
+        first_token_s=None,
+    )
+
+    assert invocation.output_messages[0].parts == [
+        Text(content="Weather is sunny.")
+    ]
+    assert invocation.output_messages[0].finish_reason == "stop"
+    assert invocation.finish_reasons == ["stop"]
+    assert invocation.attributes["autogen.team.message_count"] == 4
+
+
+def test_apply_agent_stream_item_skips_intermediate_tool_events():
+    invocation = make_agent_invocation(type("AssistantAgent", (), {})())
+
+    apply_agent_stream_item(
+        invocation,
+        ToolCallExecutionEvent([FunctionExecutionResult("call-1", "sunny")]),
+        first_token_s=None,
+    )
+
+    assert invocation.output_messages == []
