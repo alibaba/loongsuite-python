@@ -25,6 +25,7 @@ from opentelemetry.util.genai.types import (
     GenericToolDefinition,
     InputMessage,
     LLMInvocation,
+    MessagePart,
     OutputMessage,
     Reasoning,
     Text,
@@ -159,6 +160,17 @@ def to_input_messages(messages: Sequence[Any] | None) -> list[InputMessage]:
     return result
 
 
+def system_instruction_parts(
+    messages: Sequence[Any] | None,
+) -> list[MessagePart]:
+    parts: list[MessagePart] = []
+    for message in messages or []:
+        if _type_name(message) != "SystemMessage":
+            continue
+        parts.extend(_content_parts(field_value(message, "content")))
+    return parts
+
+
 def tool_definitions(tools: Iterable[Any] | None) -> list[Any]:
     definitions: list[Any] = []
     for tool in tools or []:
@@ -241,7 +253,7 @@ def provider_name(model_client: Any) -> str:
 
 def _finish_reason(value: Any) -> str:
     reason = _text(value or "unknown")
-    if reason == "function_calls":
+    if reason in {"tool_call", "function_call", "function_calls"}:
         return "tool_calls"
     return reason
 
@@ -311,6 +323,7 @@ def make_agent_invocation(instance: Any) -> InvokeAgentInvocation:
     )
     description = field_value(instance, "description", "_description")
     model_client = field_value(instance, "_model_client")
+    system_messages = field_value(instance, "_system_messages") or []
     return InvokeAgentInvocation(
         provider=AUTOGEN_PROVIDER_NAME,
         agent_name=name,
@@ -325,9 +338,7 @@ def make_agent_invocation(instance: Any) -> InvokeAgentInvocation:
         )
         if model_client is not None
         else None,
-        input_messages=to_input_messages(
-            field_value(instance, "_system_messages") or []
-        ),
+        system_instruction=system_instruction_parts(system_messages),
         tool_definitions=tool_definitions(field_value(instance, "_tools")),
     )
 
@@ -401,18 +412,10 @@ def apply_agent_stream_item(
             invocation.attributes["autogen.team.stop_reason"] = _text(
                 stop_reason
             )
-        if messages:
-            last_message = messages[-1]
-            parts = _content_parts(field_value(last_message, "content"))
-            if parts:
-                invocation.output_messages = [
-                    OutputMessage(
-                        role="assistant",
-                        parts=parts,
-                        finish_reason="stop",
-                    )
-                ]
-                invocation.finish_reasons = ["stop"]
+        output_message = _final_agent_output_message(messages)
+        if output_message is not None:
+            invocation.output_messages = [output_message]
+            invocation.finish_reasons = ["stop"]
 
     usage = field_value(message, "models_usage")
     prompt_tokens = field_value(usage, "prompt_tokens")
@@ -428,18 +431,51 @@ def apply_agent_stream_item(
     except (TypeError, ValueError):
         pass
 
-    content = field_value(message, "content")
-    parts = _content_parts(content)
-    if parts and message_type != "ToolCallRequestEvent":
-        invocation.output_messages = [
-            OutputMessage(
-                role="assistant",
-                parts=parts,
-                finish_reason="stop",
-            )
-        ]
-        invocation.finish_reasons = ["stop"]
+    if _is_agent_output_message_type(message_type):
+        output_message = _agent_output_message_from_message(message)
+        if output_message is not None:
+            invocation.output_messages = [output_message]
+            invocation.finish_reasons = ["stop"]
     return first_token_s
+
+
+def _final_agent_output_message(
+    messages: Sequence[Any],
+) -> OutputMessage | None:
+    for message in reversed(messages):
+        if not _is_agent_output_message_type(_type_name(message)):
+            continue
+        output_message = _agent_output_message_from_message(message)
+        if output_message is not None:
+            return output_message
+    return None
+
+
+def _is_agent_output_message_type(message_type: str) -> bool:
+    return message_type in {
+        "ChatMessage",
+        "TextMessage",
+        "ToolCallSummaryMessage",
+    }
+
+
+def _agent_output_message_from_message(message: Any) -> OutputMessage | None:
+    parts = _user_visible_parts(
+        _content_parts(field_value(message, "content"))
+    )
+    if not parts:
+        return None
+    return OutputMessage(role="assistant", parts=parts, finish_reason="stop")
+
+
+def _user_visible_parts(parts: Sequence[Any]) -> list[Any]:
+    visible: list[Any] = []
+    for part in parts:
+        part_type = getattr(part, "type", None)
+        if part_type in {"tool_call", "tool_call_response", "reasoning"}:
+            continue
+        visible.append(part)
+    return visible
 
 
 def make_tool_invocation(tool_call: Any) -> ExecuteToolInvocation:

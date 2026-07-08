@@ -35,6 +35,7 @@ class GenAIOperation:
 
 
 AUTOGEN_PROVIDER_NAME: Final = "autogen"
+AUTOGEN_LIVE_SPAN_MARKER: Final = "_loongsuite_autogen_framework"
 
 GEN_AI_AGENT_DESCRIPTION: Final = "gen_ai.agent.description"
 GEN_AI_AGENT_ID: Final = "gen_ai.agent.id"

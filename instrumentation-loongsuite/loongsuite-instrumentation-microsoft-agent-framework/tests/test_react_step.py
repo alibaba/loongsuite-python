@@ -278,17 +278,18 @@ def test_fil_wrapper_returns_coroutine(monkeypatch):
     _reset_extended_handler_singletons()
 
     react_step_patch.apply_react_step_patch(tracer_provider=None)
-    assert react_step_patch._applied is True
+    try:
+        assert react_step_patch._applied is True
 
-    # Call the wrapped method directly (no instance — staticmethod-style).
-    coro = _FunctionInvocationLayer.get_response("self-arg", "a", kw="v")
-    assert asyncio.iscoroutine(coro), (
-        "FIL wrapper must return a coroutine so MAF can `await` it"
-    )
-    result = asyncio.get_event_loop().run_until_complete(coro)
-    assert result[0] == "fil-ok"
-
-    react_step_patch.revert_react_step_patch()
+        # Call the wrapped method directly (no instance — staticmethod-style).
+        coro = _FunctionInvocationLayer.get_response("self-arg", "a", kw="v")
+        assert asyncio.iscoroutine(coro), (
+            "FIL wrapper must return a coroutine so MAF can `await` it"
+        )
+        result = asyncio.run(coro)
+        assert result[0] == "fil-ok"
+    finally:
+        react_step_patch.revert_react_step_patch()
 
 
 def test_fil_wrapper_preserves_streaming_response_type(monkeypatch):
@@ -350,11 +351,12 @@ def test_fil_wrapper_preserves_streaming_response_type(monkeypatch):
     _reset_extended_handler_singletons()
 
     react_step_patch.apply_react_step_patch(tracer_provider=None)
-    result = _FunctionInvocationLayer.get_response("self-arg", stream=True)
-    assert result is stream
-    assert not asyncio.iscoroutine(result)
-
-    react_step_patch.revert_react_step_patch()
+    try:
+        result = _FunctionInvocationLayer.get_response("self-arg", stream=True)
+        assert result is stream
+        assert not asyncio.iscoroutine(result)
+    finally:
+        react_step_patch.revert_react_step_patch()
 
 
 def test_chat_wrapper_outside_loop_passes_through(monkeypatch):
@@ -456,3 +458,86 @@ def test_chat_wrapper_inside_loop_preserves_streaming_response_type(
         react_step_patch._maf_react_loop_active.reset(token)
 
     react_step_patch.revert_react_step_patch()
+
+
+def test_react_step_scope_keeps_tool_under_planning_step(monkeypatch):
+    """A real MAF ReAct round runs tool calls after the planning chat returns.
+
+    The step span must therefore remain current until the next planning chat
+    begins, otherwise the tool becomes a sibling of the step under the agent.
+    """
+    import asyncio
+    import sys
+    import types
+
+    tp = TracerProvider()
+    exporter = InMemorySpanExporter()
+    tp.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = tp.get_tracer("fake-maf-react")
+    chat_calls = {"count": 0}
+
+    async def _chat_get_response(self, *args, **kwargs):
+        chat_calls["count"] += 1
+        with tracer.start_as_current_span("chat qwen-plus"):
+            finish_reason = "tool_call" if chat_calls["count"] == 1 else "stop"
+            message = types.SimpleNamespace(finish_reason=finish_reason)
+            return types.SimpleNamespace(messages=[message])
+
+    async def _fil_get_response(self, *args, **kwargs):
+        response = await _ChatTelemetryLayer.get_response(self)
+        with tracer.start_as_current_span("execute_tool get_weather"):
+            pass
+        return await _ChatTelemetryLayer.get_response(self, response)
+
+    class _FunctionInvocationLayer:
+        get_response = staticmethod(_fil_get_response)
+
+    class _ChatTelemetryLayer:
+        get_response = staticmethod(_chat_get_response)
+
+    tools_mod = types.ModuleType("agent_framework._tools")
+    tools_mod.FunctionInvocationLayer = _FunctionInvocationLayer  # type: ignore[attr-defined]
+    obs_mod = types.ModuleType("agent_framework.observability")
+    obs_mod.ChatTelemetryLayer = _ChatTelemetryLayer  # type: ignore[attr-defined]
+    af_mod = types.ModuleType("agent_framework")
+    af_mod._tools = tools_mod  # type: ignore[attr-defined]
+    af_mod.observability = obs_mod  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._tools", tools_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
+
+    react_step_patch.revert_react_step_patch()
+    react_step_patch._applied = False
+    react_step_patch._original_fil_get_response = None
+    react_step_patch._original_chat_get_response = None
+    _reset_extended_handler_singletons()
+
+    react_step_patch.apply_react_step_patch(tracer_provider=tp)
+    try:
+
+        async def _run():
+            with tracer.start_as_current_span("invoke_agent planner"):
+                await _FunctionInvocationLayer.get_response("self-arg")
+
+        asyncio.run(_run())
+    finally:
+        react_step_patch.revert_react_step_patch()
+
+    spans = exporter.get_finished_spans()
+    by_name = {}
+    for span in spans:
+        by_name.setdefault(span.name, []).append(span)
+    [tool] = by_name["execute_tool get_weather"]
+    first_step = sorted(
+        by_name["react step"], key=lambda span: span.start_time or 0
+    )[0]
+    first_chat = sorted(
+        by_name["chat qwen-plus"], key=lambda span: span.start_time or 0
+    )[0]
+
+    assert tool.parent.span_id == first_step.context.span_id
+    assert first_chat.parent.span_id == first_step.context.span_id
+    assert first_step.attributes.get("gen_ai.react.finish_reason") == (
+        "tool_calls"
+    )

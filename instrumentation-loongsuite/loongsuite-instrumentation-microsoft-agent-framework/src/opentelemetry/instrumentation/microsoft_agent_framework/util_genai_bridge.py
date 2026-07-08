@@ -72,17 +72,23 @@ from .semantic_conventions import (
     GEN_AI_SPAN_KIND,
     GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS,
+    MAF_LIVE_SPAN_MARKER,
     GenAIOperation,
     GenAISpanKind,
 )
 from .span_processor import (
     _FRAMEWORK_PROVIDER_NAME,
+    _agent_boundary_input_messages_value,
+    _agent_boundary_output_messages_value,
     _attr_value,
     _classify_span,
+    _delete_attr,
     _is_exception_event,
     _is_maf_span,
     _mcp_tool_name,
+    _normalize_finish_reason_value,
     _normalize_provider,
+    _normalized_output_messages_value,
     _ttft_from_events,
 )
 
@@ -101,6 +107,16 @@ _FINALIZED_ATTR = "_loongsuite_util_genai_finalized"
 _END_WRAPPED_ATTR = "_loongsuite_util_genai_end_wrapped"
 _STREAM_START_ATTR = "_loongsuite_util_genai_stream_start_s"
 _STREAM_FIRST_TOKEN_ATTR = "_loongsuite_util_genai_stream_first_token_s"
+_MAF_BRIDGE_MARKER = {MAF_LIVE_SPAN_MARKER: _FRAMEWORK_PROVIDER_NAME}
+
+
+def _mark_maf_live_span(span: OtelSpan | None) -> None:
+    if span is None:
+        return
+    try:
+        setattr(span, MAF_LIVE_SPAN_MARKER, _FRAMEWORK_PROVIDER_NAME)
+    except Exception:
+        pass
 
 
 def apply_util_genai_bridge() -> None:
@@ -272,6 +288,7 @@ def _wrap_get_span(original: Callable[..., Any]) -> Callable[..., Any]:
             original, bridge_attrs, span_name_attribute
         )
         with span_cm as span:
+            _mark_maf_live_span(span)
             try:
                 yield span
             finally:
@@ -290,6 +307,7 @@ def _wrap_start_streaming_span(
         span = _start_streaming_span_with_kind(
             original, bridge_attrs, span_name_attribute
         )
+        _mark_maf_live_span(span)
         _mark_stream_start(span)
         _wrap_span_end(span)
         return span
@@ -375,6 +393,7 @@ def _wrap_get_function_span(
     ) -> Generator[OtelSpan, Any, Any]:
         bridge_attrs = _prepare_start_attributes(attributes)
         with original(bridge_attrs) as span:
+            _mark_maf_live_span(span)
             try:
                 yield span
             finally:
@@ -399,6 +418,7 @@ def _wrap_create_mcp_client_span(
             if target:
                 bridge_attrs.setdefault("gen_ai.tool.name", target)
         with original(method_name, target, bridge_attrs) as span:
+            _mark_maf_live_span(span)
             yield span
 
     return _create_mcp_client_span
@@ -465,6 +485,7 @@ def _start_detached_span_with_kind(
     span = observability.get_tracer().start_span(
         f"{operation} {span_name}", kind=kind
     )
+    _mark_maf_live_span(span)
     span.set_attributes(attributes)
     return span
 
@@ -518,7 +539,10 @@ def _prepare_start_attributes(attributes: Mapping[Any, Any]) -> dict[str, Any]:
     op_name = _mapping_value(bridge_attrs, GEN_AI_OPERATION_NAME)
     span_name = _span_name_from_attributes(bridge_attrs)
     if not _is_maf_span(
-        span_name, op_name if isinstance(op_name, str) else None, bridge_attrs
+        span_name,
+        op_name if isinstance(op_name, str) else None,
+        bridge_attrs,
+        _MAF_BRIDGE_MARKER,
     ):
         return bridge_attrs
     span_kind, classified_op = _classify_span(
@@ -607,6 +631,38 @@ def _set_common_live_attributes(
     finish_reasons = _finish_reasons(span)
     if finish_reasons:
         span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, finish_reasons)
+    agent_boundary = (
+        span_kind == GenAISpanKind.AGENT
+        and op_name == GenAIOperation.INVOKE_AGENT
+    )
+    if agent_boundary:
+        handled_input, input_messages = _agent_boundary_input_messages_value(
+            _attr_value(span, "gen_ai.input.messages")
+        )
+        if handled_input:
+            _set_or_delete_attr(span, "gen_ai.input.messages", input_messages)
+        handled_output, output_messages = (
+            _agent_boundary_output_messages_value(
+                _attr_value(span, "gen_ai.output.messages")
+            )
+        )
+        if handled_output:
+            _set_or_delete_attr(
+                span, "gen_ai.output.messages", output_messages
+            )
+    else:
+        output_messages = _normalized_output_messages_value(
+            _attr_value(span, "gen_ai.output.messages")
+        )
+        if output_messages is not None:
+            span.set_attribute("gen_ai.output.messages", output_messages)
+
+
+def _set_or_delete_attr(span: OtelSpan, key: str, value: Any | None) -> None:
+    if value is None:
+        _delete_attr(span, key)
+    else:
+        span.set_attribute(key, value)
 
 
 def _llm_invocation(span: OtelSpan, op_name: str) -> LLMInvocation:
@@ -772,12 +828,12 @@ def _finish_reasons(span: Any) -> Optional[list[str]]:
         if isinstance(parsed, list) and all(
             isinstance(item, str) for item in parsed
         ):
-            return parsed
-        return [value]
+            return [_normalize_finish_reason_value(item) for item in parsed]
+        return [_normalize_finish_reason_value(value)]
     if isinstance(value, (list, tuple)) and all(
         isinstance(item, str) for item in value
     ):
-        return list(value)
+        return [_normalize_finish_reason_value(item) for item in value]
     return None
 
 

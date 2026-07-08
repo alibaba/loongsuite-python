@@ -26,6 +26,7 @@ Tests verify that the processor correctly:
 
 from __future__ import annotations
 
+import json
 import time
 
 from opentelemetry.instrumentation.microsoft_agent_framework.semantic_conventions import (
@@ -36,6 +37,8 @@ from opentelemetry.instrumentation.microsoft_agent_framework.semantic_convention
     GEN_AI_SPAN_KIND,
     GEN_AI_USAGE_INPUT_TOKENS,
     GEN_AI_USAGE_OUTPUT_TOKENS,
+    MAF_LIVE_SPAN_MARKER,
+    MAF_PROVIDER_NAME,
     GenAIOperation,
     GenAISpanKind,
 )
@@ -85,9 +88,14 @@ def _flush(exporter):
     return exporter.get_finished_spans()
 
 
+def _mark_maf_span(span):
+    setattr(span, MAF_LIVE_SPAN_MARKER, MAF_PROVIDER_NAME)
+
+
 def test_llm_span_gets_llm_kind_and_chat_operation():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
         span.set_attribute(GEN_AI_PROVIDER_NAME, "openai")
         span.set_attribute("gen_ai.request.model", "gpt-4o")
@@ -102,9 +110,27 @@ def test_llm_span_gets_llm_kind_and_chat_operation():
     assert s.status.status_code == StatusCode.UNSET
 
 
+def test_live_marker_set_after_start_is_visible_to_exporter_snapshot():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        # The MAF bridge marks live spans after the SDK has called
+        # SpanProcessor.on_start. on_end enrichments must update the
+        # ReadableSpan snapshot too, otherwise downstream exporters on newer
+        # SDKs will not see the fields.
+        _mark_maf_span(span)
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, "openai")
+        span.set_attribute("gen_ai.request.model", "gpt-4o")
+
+    spans = _flush(exporter)
+    assert spans[0].attributes.get(GEN_AI_SPAN_KIND) == GenAISpanKind.LLM
+    assert spans[0].kind == SpanKind.CLIENT
+
+
 def test_tool_span_gets_tool_kind():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("execute_tool get_weather") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.EXECUTE_TOOL)
         span.set_attribute("gen_ai.tool.name", "get_weather")
     spans = _flush(exporter)
@@ -116,6 +142,7 @@ def test_embedding_span():
     with tracer.start_as_current_span(
         "embeddings text-embedding-3-small"
     ) as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.EMBEDDINGS)
         span.set_attribute("gen_ai.request.model", "text-embedding-3-small")
     spans = _flush(exporter)
@@ -125,6 +152,7 @@ def test_embedding_span():
 def test_agent_span():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("invoke_agent my-agent") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
         span.set_attribute("gen_ai.agent.name", "my-agent")
     spans = _flush(exporter)
@@ -238,6 +266,7 @@ def test_message_send_span():
 def test_provider_normalization_azure_openai_to_openai():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
         span.set_attribute(GEN_AI_PROVIDER_NAME, "azure_openai")
     spans = _flush(exporter)
@@ -247,6 +276,7 @@ def test_provider_normalization_azure_openai_to_openai():
 def test_ttft_backfill_from_first_event():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
         span.set_attribute(GEN_AI_PROVIDER_NAME, "openai")
         # Emit a streaming-chunk event a bit after start.
@@ -264,6 +294,7 @@ def test_ttft_backfill_from_first_event():
 def test_ttft_backfill_skips_exception_event():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
         span.set_attribute(GEN_AI_PROVIDER_NAME, "openai")
         span.add_event("exception", {"exception.type": "RuntimeError"})
@@ -274,10 +305,161 @@ def test_ttft_backfill_skips_exception_event():
 def test_finish_reasons_json_string_normalized_to_array():
     tp, tracer, exporter, _ = _setup()
     with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
-        span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, '["stop"]')
+        span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, '["tool_call"]')
     spans = _flush(exporter)
-    assert spans[0].attributes.get(GEN_AI_RESPONSE_FINISH_REASONS) == ("stop",)
+    assert spans[0].attributes.get(GEN_AI_RESPONSE_FINISH_REASONS) == (
+        "tool_calls",
+    )
+
+
+def test_output_messages_finish_reason_added_for_agent_span():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("invoke_agent planner") as span:
+        _mark_maf_span(span)
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "parts": [{"type": "text", "content": "done"}],
+                    }
+                ]
+            ),
+        )
+    [exported] = _flush(exporter)
+    messages = json.loads(exported.attributes["gen_ai.output.messages"])
+    assert messages[0]["finish_reason"] == "stop"
+
+
+def test_agent_input_output_boundary_filters_intermediate_messages():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("invoke_agent planner") as span:
+        _mark_maf_span(span)
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(
+            "gen_ai.input.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "system",
+                        "parts": [{"type": "text", "content": "system"}],
+                    },
+                    {
+                        "role": "user",
+                        "parts": [{"type": "text", "content": "weather?"}],
+                    },
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "id": "call-1",
+                                "name": "lookup",
+                                "arguments": {"city": "Hangzhou"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "parts": [
+                            {
+                                "type": "tool_call_response",
+                                "id": "call-1",
+                                "response": "sunny",
+                            }
+                        ],
+                    },
+                ]
+            ),
+        )
+        span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "finish_reason": "tool_call",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "id": "call-1",
+                                "name": "lookup",
+                                "arguments": {"city": "Hangzhou"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "parts": [
+                            {
+                                "type": "tool_call_response",
+                                "id": "call-1",
+                                "response": "sunny",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "parts": [
+                            {
+                                "type": "reasoning",
+                                "content": "hidden scratchpad",
+                            },
+                            {
+                                "type": "text",
+                                "content": "Hangzhou is sunny.",
+                            },
+                        ],
+                    },
+                ]
+            ),
+        )
+    [exported] = _flush(exporter)
+
+    input_messages = json.loads(exported.attributes["gen_ai.input.messages"])
+    assert [message["role"] for message in input_messages] == ["user"]
+    assert input_messages[0]["parts"][0]["content"] == "weather?"
+
+    output_messages = json.loads(exported.attributes["gen_ai.output.messages"])
+    assert len(output_messages) == 1
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"] == [
+        {"type": "text", "content": "Hangzhou is sunny."}
+    ]
+    assert output_messages[0]["finish_reason"] == "stop"
+
+
+def test_output_messages_finish_reason_tool_call_is_normalized():
+    tp, tracer, exporter, _ = _setup()
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
+        span.set_attribute(
+            "gen_ai.output.messages",
+            json.dumps(
+                [
+                    {
+                        "role": "assistant",
+                        "finish_reason": "tool_call",
+                        "parts": [
+                            {
+                                "type": "tool_call",
+                                "id": "call-1",
+                                "name": "lookup",
+                                "arguments": {"q": "x"},
+                            }
+                        ],
+                    }
+                ]
+            ),
+        )
+    [exported] = _flush(exporter)
+    messages = json.loads(exported.attributes["gen_ai.output.messages"])
+    assert messages[0]["finish_reason"] == "tool_calls"
 
 
 def _setup_with_metrics():
@@ -297,6 +479,7 @@ def test_error_span_keeps_error_status_and_increments_error_counter():
     tp, tracer, exporter, processor = _setup_with_metrics()
     try:
         with tracer.start_as_current_span("chat gpt-4o") as span:
+            _mark_maf_span(span)
             span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
             span.set_attribute(GEN_AI_PROVIDER_NAME, "openai")
             span.set_status(Status(StatusCode.ERROR, "boom"))
@@ -318,6 +501,7 @@ def test_error_span_keeps_error_status_and_increments_error_counter():
 def test_metrics_counters_incremented_on_llm_span():
     tp, tracer, exporter, processor = _setup_with_metrics()
     with tracer.start_as_current_span("chat gpt-4o") as span:
+        _mark_maf_span(span)
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
         span.set_attribute("gen_ai.request.model", "gpt-4o")
         span.set_attribute(GEN_AI_USAGE_INPUT_TOKENS, 5)
@@ -340,11 +524,12 @@ def test_metrics_counters_incremented_on_llm_span():
 
 def test_react_step_span_classification():
     tp, tracer, exporter, _ = _setup()
-    with tracer.start_as_current_span("react step"):
+    with tracer.start_as_current_span("react step") as span:
+        _mark_maf_span(span)
         # When emitted by our react_step_patch, the handler sets
         # gen_ai.operation.name=react and gen_ai.span.kind=STEP itself. But
-        # if the processor sees a "react step" name without op set, it should
-        # classify it as STEP/react as a fallback.
+        # when a marked MAF span reaches the processor without op set, it
+        # should classify it as STEP/react.
         pass
     spans = _flush(exporter)
     s = spans[0]
@@ -391,6 +576,52 @@ def test_non_maf_span_is_left_untouched():
     s = spans[0]
     assert GEN_AI_SPAN_KIND not in s.attributes
     assert GEN_AI_OPERATION_NAME not in s.attributes
+    assert not processor._counters.calls_count
+
+
+def test_autogen_span_with_overlapping_agent_operation_is_left_untouched():
+    tp, tracer, exporter, processor = _setup_with_metrics()
+    with tracer.start_as_current_span("invoke_agent assistant") as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, "autogen")
+    spans = _flush(exporter)
+    s = spans[0]
+    assert s.attributes.get(GEN_AI_PROVIDER_NAME) == "autogen"
+    assert GEN_AI_SPAN_KIND not in s.attributes
+    assert not processor._counters.calls_count
+
+
+def test_autogen_llm_span_with_private_marker_is_left_untouched():
+    tp, tracer, exporter, processor = _setup_with_metrics()
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
+        span.set_attribute(GEN_AI_PROVIDER_NAME, "openai")
+        setattr(span, "_loongsuite_autogen_framework", "autogen")
+    spans = _flush(exporter)
+    s = spans[0]
+    assert s.attributes.get(GEN_AI_PROVIDER_NAME) == "openai"
+    assert GEN_AI_SPAN_KIND not in s.attributes
+    assert "_loongsuite_autogen_framework" not in s.attributes
+    assert s.kind == SpanKind.INTERNAL
+    assert not processor._counters.calls_count
+
+
+def test_foreign_agent_spans_are_left_untouched():
+    tp, tracer, exporter, processor = _setup_with_metrics()
+    for provider_name in ("langchain", "agentscope"):
+        with tracer.start_as_current_span(
+            f"invoke_agent {provider_name}-agent"
+        ) as span:
+            span.set_attribute(
+                GEN_AI_OPERATION_NAME, GenAIOperation.INVOKE_AGENT
+            )
+            span.set_attribute(GEN_AI_PROVIDER_NAME, provider_name)
+            span.set_attribute("gen_ai.agent.name", f"{provider_name}-agent")
+
+    spans = _flush(exporter)
+    assert len(spans) == 2
+    for span in spans:
+        assert GEN_AI_SPAN_KIND not in span.attributes
     assert not processor._counters.calls_count
 
 
@@ -450,6 +681,7 @@ def test_mcp_tool_call_span_classified_as_mcp_execute_tool():
     with tracer.start_as_current_span(
         "tools/call get_weather", kind=SpanKind.CLIENT
     ) as span:
+        _mark_maf_span(span)
         # MAF writes mcp.method.name (no gen_ai.operation.name).
         span.set_attribute("mcp.method.name", "tools/call")
         span.set_attribute("mcp.session.id", "sess-1")
@@ -510,6 +742,7 @@ def test_mcp_tool_call_stays_mcp_when_maf_writes_execute_tool():
     with tracer.start_as_current_span(
         "tools/call slow_summary", kind=SpanKind.CLIENT
     ) as span:
+        _mark_maf_span(span)
         # MAF writes both mcp.method.name AND gen_ai.operation.name=execute_tool.
         span.set_attribute("mcp.method.name", "tools/call")
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.EXECUTE_TOOL)
