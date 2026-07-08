@@ -787,6 +787,27 @@ def test_entry_platform_empty_env_uses_cli_default(monkeypatch):
     assert helpers.resolve_entry_platform(agent) == "cli"
 
 
+def test_extract_server_info_does_not_default_port_for_schemeless_url():
+    helpers = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.helpers"
+    )
+    agent = _FakeAgent(session_id="server-info", base_url="api.example.com")
+
+    assert helpers._extract_server_info(agent) == ("api.example.com", None)
+
+
+def test_extract_server_info_defaults_port_for_explicit_scheme():
+    helpers = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.helpers"
+    )
+    agent = _FakeAgent(
+        session_id="server-info",
+        base_url="https://api.example.com/compatible-mode/v1",
+    )
+
+    assert helpers._extract_server_info(agent) == ("api.example.com", 443)
+
+
 def test_agent_without_platform_uses_env_session_source_for_entry(
     instrumentation_module,
     tracer_provider,

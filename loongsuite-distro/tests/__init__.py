@@ -11,18 +11,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-# This variant of the requirements aims to test the system using
-# the latest supported QwenPaw runtime.
-
-qwenpaw==1.1.12.post3
-pytest
-pytest-asyncio
-wrapt<2.0.0
-opentelemetry-api
-opentelemetry-sdk
-opentelemetry-semantic-conventions
-opentelemetry-instrumentation
-
--e instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw
--e util/opentelemetry-util-genai

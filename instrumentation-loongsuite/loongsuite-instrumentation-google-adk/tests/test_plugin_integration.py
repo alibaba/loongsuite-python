@@ -412,6 +412,38 @@ class TestGoogleAdkPluginIntegration:
             "gen_ai.agent.description" in attributes
             or "agent.description" in attributes
         ), "Should have agent description attribute"
+        assert "gen_ai.agent.id" not in attributes
+
+    @pytest.mark.asyncio
+    async def test_agent_span_uses_explicit_agent_id(self):
+        """Test that Agent spans use real agent.id when ADK exposes one."""
+        self.instrumentor.instrument(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+
+        plugin = self.instrumentor._plugin
+
+        mock_agent = Mock()
+        mock_agent.name = "weather_agent"
+        mock_agent.id = "agent_123"
+        mock_agent.description = "Agent for weather queries"
+        mock_agent.sub_agents = []
+
+        mock_callback_context = create_mock_callback_context(
+            "session_789", "user_999"
+        )
+
+        await plugin.before_agent_callback(
+            agent=mock_agent, callback_context=mock_callback_context
+        )
+        await plugin.after_agent_callback(
+            agent=mock_agent, callback_context=mock_callback_context
+        )
+
+        spans = self.span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].attributes["gen_ai.agent.id"] == "agent_123"
 
     @pytest.mark.asyncio
     async def test_tool_span_attributes_semantic_conventions(self):
@@ -440,7 +472,11 @@ class TestGoogleAdkPluginIntegration:
         mock_tool_args = {"operation": "add", "a": 5, "b": 3}
         mock_tool_context = Mock()
         mock_tool_context.session_id = "session_456"
-        mock_result = {"result": 8}
+        mock_result = {
+            "result": 8,
+            "skill_name": "should-not-be-captured",
+            "frontmatter": {"description": "Not a skill load tool."},
+        }
 
         # Execute Tool span lifecycle
         await plugin.before_tool_callback(
@@ -489,6 +525,62 @@ class TestGoogleAdkPluginIntegration:
             attributes.get("gen_ai.tool.description")
             == "Mathematical calculator"
         )
+        assert "gen_ai.skill.name" not in attributes
+        assert "gen_ai.skill.id" not in attributes
+        assert "gen_ai.skill.description" not in attributes
+
+    @pytest.mark.asyncio
+    async def test_skill_load_tool_span_captures_skill_attributes(self):
+        """ADK SkillToolset load_skill spans should include skill metadata."""
+        self.instrumentor.instrument(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+
+        plugin = self.instrumentor._plugin
+
+        mock_tool = Mock()
+        mock_tool.name = "load_skill"
+        mock_tool.description = "Load full instructions for a skill."
+        tool_args = {"name": "weather-skill"}
+        mock_tool_context = Mock()
+        mock_tool_context.call_id = "skill_call_1"
+        mock_tool_context.invocation_id = "skill_invocation"
+        mock_result = {
+            "skill_name": "weather-skill",
+            "frontmatter": {
+                "description": "Weather workflow instructions.",
+                "metadata": {"version": "1.2.3"},
+            },
+            "instructions": "Use the weather references.",
+        }
+
+        await plugin.before_tool_callback(
+            tool=mock_tool,
+            tool_args=tool_args,
+            tool_context=mock_tool_context,
+        )
+        await plugin.after_tool_callback(
+            tool=mock_tool,
+            tool_args=tool_args,
+            tool_context=mock_tool_context,
+            result=mock_result,
+        )
+
+        spans = self.span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        span = spans[0]
+        attrs = span.attributes
+
+        assert span.name == "execute_tool load_skill"
+        assert attrs.get("gen_ai.tool.name") == "load_skill"
+        assert attrs.get("gen_ai.skill.name") == "weather-skill"
+        assert attrs.get("gen_ai.skill.id") == "weather-skill"
+        assert (
+            attrs.get("gen_ai.skill.description")
+            == "Weather workflow instructions."
+        )
+        assert attrs.get("gen_ai.skill.version") == "1.2.3"
 
     @pytest.mark.asyncio
     async def test_runner_span_attributes(self):
@@ -534,6 +626,7 @@ class TestGoogleAdkPluginIntegration:
         assert attributes.get("gen_ai.span.kind") == "AGENT"
         # Note: runner.app_name is namespaced with google_adk prefix
         assert attributes.get("google_adk.runner.app_name") == "test_app"
+        assert "gen_ai.agent.id" not in attributes
 
     @pytest.mark.asyncio
     async def test_runner_span_finishes_on_root_final_event(self):

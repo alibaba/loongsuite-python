@@ -141,7 +141,7 @@ def test_text_embedding_basic(instrument, span_exporter):
     """Test basic text embedding call."""
 
     response = TextEmbedding.call(
-        model="text-embedding-v1", input="Hello, world!"
+        model="text-embedding-v4", input="Hello, world!"
     )
 
     assert response is not None
@@ -165,7 +165,7 @@ def test_text_embedding_basic(instrument, span_exporter):
     # Assert all span attributes
     _assert_embedding_span_attributes(
         span,
-        request_model="text-embedding-v1",
+        request_model="text-embedding-v4",
         response=response,
         input_tokens=input_tokens,
     )
@@ -178,7 +178,7 @@ def test_text_embedding_batch(instrument, span_exporter):
     """Test text embedding with batch input."""
 
     response = TextEmbedding.call(
-        model="text-embedding-v1", input=["Hello", "World"]
+        model="text-embedding-v4", input=["Hello", "World"]
     )
 
     assert response is not None
@@ -202,7 +202,7 @@ def test_text_embedding_batch(instrument, span_exporter):
     # Assert all span attributes
     _assert_embedding_span_attributes(
         span,
-        request_model="text-embedding-v1",
+        request_model="text-embedding-v4",
         response=response,
         input_tokens=input_tokens,
     )
@@ -215,7 +215,7 @@ def test_text_embedding_with_text_type(instrument, span_exporter):
     """Test text embedding with text_type parameter."""
 
     response = TextEmbedding.call(
-        model="text-embedding-v1",
+        model="text-embedding-v4",
         input="What is machine learning?",
         text_type="query",
     )
@@ -241,7 +241,7 @@ def test_text_embedding_with_text_type(instrument, span_exporter):
     # Assert all span attributes
     _assert_embedding_span_attributes(
         span,
-        request_model="text-embedding-v1",
+        request_model="text-embedding-v4",
         response=response,
         input_tokens=input_tokens,
     )
@@ -254,7 +254,7 @@ def test_text_embedding_with_dimension(instrument, span_exporter):
     """Test text embedding with dimension parameter."""
 
     response = TextEmbedding.call(
-        model="text-embedding-v1",
+        model="text-embedding-v4",
         input="What is machine learning?",
         dimension=512,
     )
@@ -280,7 +280,7 @@ def test_text_embedding_with_dimension(instrument, span_exporter):
     # Assert all span attributes including dimension_count
     _assert_embedding_span_attributes(
         span,
-        request_model="text-embedding-v1",
+        request_model="text-embedding-v4",
         response=response,
         input_tokens=input_tokens,
         dimension_count=512,  # Should be captured from request

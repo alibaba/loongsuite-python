@@ -25,5 +25,9 @@ generate_lint_workflow(
     batch_size=4,
     parallelism=4,
 )
-generate_misc_workflow(tox_ini_path, workflows_directory_path)
+generate_misc_workflow(
+    tox_ini_path,
+    workflows_directory_path,
+    runner=arc_runner_label,
+)
 generate_contrib_workflow(workflows_directory_path)

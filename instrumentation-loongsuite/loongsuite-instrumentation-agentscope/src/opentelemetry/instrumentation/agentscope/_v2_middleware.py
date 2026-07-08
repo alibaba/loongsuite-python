@@ -259,6 +259,7 @@ class AgentScopeV2Middleware(MiddlewareBase):
         handler.start_react_step(react_invocation, context=get_current())
         invocation = ExecuteToolInvocation(
             tool_name=getattr(tool_call, "name", "unknown_tool"),
+            tool_type="function",
             tool_call_id=getattr(tool_call, "id", None),
             tool_call_arguments=_loads_json(getattr(tool_call, "input", None)),
             provider="agentscope",
