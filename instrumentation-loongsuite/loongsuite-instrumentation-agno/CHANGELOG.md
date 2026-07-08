@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Propagate Agno run user and session identity to model and tool spans while
+  preferring ENTRY baggage identity over Agno framework-provided values.
+
 ### Added
 
 - Capture `gen_ai.skill.*` attributes on Agno skill tool spans such as
