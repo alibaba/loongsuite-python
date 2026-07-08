@@ -669,6 +669,7 @@ def _create_tool_invocation(
 
     return ExecuteToolInvocation(
         tool_name=tool_name,
+        tool_type="function",
         tool_call_arguments=parsed_args,
         tool_description=tool_description,
     )

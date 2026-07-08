@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Adopt upstream semantic conventions for LoongSuite instrumentation packages.
+
 ## Version 0.7.0 (2026-07-03)
 
 There are no changelog entries for this release.

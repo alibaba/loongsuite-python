@@ -412,6 +412,38 @@ class TestGoogleAdkPluginIntegration:
             "gen_ai.agent.description" in attributes
             or "agent.description" in attributes
         ), "Should have agent description attribute"
+        assert "gen_ai.agent.id" not in attributes
+
+    @pytest.mark.asyncio
+    async def test_agent_span_uses_explicit_agent_id(self):
+        """Test that Agent spans use real agent.id when ADK exposes one."""
+        self.instrumentor.instrument(
+            tracer_provider=self.tracer_provider,
+            meter_provider=self.meter_provider,
+        )
+
+        plugin = self.instrumentor._plugin
+
+        mock_agent = Mock()
+        mock_agent.name = "weather_agent"
+        mock_agent.id = "agent_123"
+        mock_agent.description = "Agent for weather queries"
+        mock_agent.sub_agents = []
+
+        mock_callback_context = create_mock_callback_context(
+            "session_789", "user_999"
+        )
+
+        await plugin.before_agent_callback(
+            agent=mock_agent, callback_context=mock_callback_context
+        )
+        await plugin.after_agent_callback(
+            agent=mock_agent, callback_context=mock_callback_context
+        )
+
+        spans = self.span_exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].attributes["gen_ai.agent.id"] == "agent_123"
 
     @pytest.mark.asyncio
     async def test_tool_span_attributes_semantic_conventions(self):
@@ -594,6 +626,7 @@ class TestGoogleAdkPluginIntegration:
         assert attributes.get("gen_ai.span.kind") == "AGENT"
         # Note: runner.app_name is namespaced with google_adk prefix
         assert attributes.get("google_adk.runner.app_name") == "test_app"
+        assert "gen_ai.agent.id" not in attributes
 
     @pytest.mark.asyncio
     async def test_runner_span_finishes_on_root_final_event(self):

@@ -626,6 +626,7 @@ class LoongsuiteTracer(BaseTracer):
                 tool_name=run.name or "unknown_tool",
                 tool_call_arguments=tool_call_arguments,
                 tool_call_id=tool_call_id,
+                tool_type="function",
             )
             self._apply_deepagents_skill_attributes(run, invocation)
             self._handler.start_execute_tool(invocation, context=parent_ctx)

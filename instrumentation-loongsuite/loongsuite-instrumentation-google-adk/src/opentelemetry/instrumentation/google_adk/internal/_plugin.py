@@ -164,6 +164,12 @@ def _apply_adk_skill_tool_metadata(
     _apply_skill_metadata(invocation, _extract_skill_metadata(data))
 
 
+def _non_empty_string(value: Any) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
 class GoogleAdkObservabilityPlugin(BasePlugin):
     """
     OpenTelemetry ADK Observability Plugin.
@@ -382,8 +388,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             )
 
             # Set agent attributes
-            if hasattr(agent, "id") and agent.id:
-                invocation.agent_id = agent.id
+            agent_id = _non_empty_string(getattr(agent, "id", None))
+            if agent_id:
+                invocation.agent_id = agent_id
 
             if hasattr(agent, "description") and agent.description:
                 invocation.agent_description = agent.description
@@ -612,6 +619,7 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             # Create invocation object
             invocation = ExecuteToolInvocation(
                 tool_name=tool.name,
+                tool_type="function",
                 provider="google_adk",
             )
 

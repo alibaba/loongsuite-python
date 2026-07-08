@@ -240,6 +240,7 @@ async def test_v2_tool_acting_hook(instrument, span_exporter):
         span_exporter.get_finished_spans(), "execute_tool"
     )[0]
     assert tool_span.attributes["gen_ai.tool.name"] == "lookup_weather"
+    assert tool_span.attributes["gen_ai.tool.type"] == "function"
 
 
 async def test_v2_tool_result_content_capture(
@@ -332,6 +333,9 @@ async def test_v2_react_many_tools_telemetry(instrument, span_exporter):
         "search_docs",
         "calculate_total",
         "write_summary",
+    }
+    assert {span.attributes["gen_ai.tool.type"] for span in tool_spans} == {
+        "function"
     }
     react_span_ids = {span.context.span_id for span in react_spans}
     assert {span.parent.span_id for span in tool_spans} == react_span_ids
