@@ -27,9 +27,12 @@ from agno.models.base import Model
 from agno.models.response import ModelResponse
 from agno.tools.function import Function, FunctionCall
 
+from opentelemetry import baggage
+from opentelemetry import context as otel_context
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.agno import AgnoInstrumentor
 from opentelemetry.instrumentation.agno._wrapper import (
+    AgnoAgentWrapper,
     AgnoFunctionCallWrapper,
     AgnoModelWrapper,
 )
@@ -49,6 +52,10 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 from opentelemetry.util.genai.extended_handler import (
     get_extended_telemetry_handler,
+)
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
+    GEN_AI_SESSION_ID,
+    GEN_AI_USER_ID,
 )
 
 
@@ -176,6 +183,8 @@ def test_agent_model_and_tool_spans_use_genai_util(
     response = agent.run("Say hello", user_id="u1", session_id="s1")
     assert response.content == "hello"
 
+    # This standalone tool call happens after the agent run completes; run-local
+    # identity must not leak to tool spans outside the active Agno run.
     fn = Function.from_callable(lambda city: f"sunny in {city}")
     fn.name = "get_weather"
     function_call = FunctionCall(
@@ -206,6 +215,10 @@ def test_agent_model_and_tool_spans_use_genai_util(
     assert model_attrs["gen_ai.span.kind"] == "LLM"
     assert model_attrs["gen_ai.operation.name"] == "chat"
     assert model_attrs["gen_ai.request.model"] == "echo-model"
+    assert model_attrs["gen_ai.session.id"] == "s1"
+    assert model_attrs["gen_ai.user.id"] == "u1"
+    assert model_attrs["gen_ai.conversation.id"] == "s1"
+    assert model_attrs["gen_ai.agent.name"] == "EchoAgent"
     assert model_attrs["gen_ai.usage.input_tokens"] == 2
     assert model_attrs["gen_ai.usage.output_tokens"] == 3
 
@@ -213,8 +226,236 @@ def test_agent_model_and_tool_spans_use_genai_util(
     assert tool_attrs["gen_ai.operation.name"] == "execute_tool"
     assert tool_attrs["gen_ai.tool.name"] == "get_weather"
     assert tool_attrs["gen_ai.tool.call.id"] == "call_1"
+    assert "gen_ai.session.id" not in tool_attrs
+    assert "gen_ai.user.id" not in tool_attrs
     assert "Hangzhou" in tool_attrs["gen_ai.tool.call.arguments"]
     assert "sunny in Hangzhou" in tool_attrs["gen_ai.tool.call.result"]
+
+
+def test_agent_invocation_prefers_entry_baggage_identity():
+    agent = SimpleNamespace(
+        name="EntryAgent",
+        id="agent-id",
+        model=EchoModel(),
+        user_id="agno-user",
+        session_id="agno-session",
+        tools=[],
+        instructions=[],
+    )
+    ctx = baggage.set_baggage(GEN_AI_SESSION_ID, "entry-session")
+    ctx = baggage.set_baggage(GEN_AI_USER_ID, "entry-user", ctx)
+    token = otel_context.attach(ctx)
+    try:
+        invocation = create_agent_invocation(
+            agent,
+            {
+                "input": "hello",
+                "user_id": "run-user",
+                "session_id": "run-session",
+            },
+        )
+    finally:
+        otel_context.detach(token)
+
+    assert invocation.conversation_id == "entry-session"
+    assert invocation.attributes[GEN_AI_SESSION_ID] == "entry-session"
+    assert invocation.attributes[GEN_AI_USER_ID] == "entry-user"
+
+
+def test_agent_invocation_applies_entry_identity_per_key():
+    agent = SimpleNamespace(
+        name="PartialEntryAgent",
+        id="agent-id",
+        model=EchoModel(),
+        user_id="agent-user",
+        session_id="agent-session",
+        tools=[],
+        instructions=[],
+    )
+
+    ctx = baggage.set_baggage(GEN_AI_SESSION_ID, "entry-session")
+    token = otel_context.attach(ctx)
+    try:
+        session_invocation = create_agent_invocation(
+            agent,
+            {
+                "input": "hello",
+                "user_id": "run-user",
+                "session_id": "run-session",
+            },
+        )
+    finally:
+        otel_context.detach(token)
+
+    ctx = baggage.set_baggage(GEN_AI_USER_ID, "entry-user")
+    token = otel_context.attach(ctx)
+    try:
+        user_invocation = create_agent_invocation(
+            agent,
+            {
+                "input": "hello",
+                "user_id": "run-user",
+                "session_id": "run-session",
+            },
+        )
+    finally:
+        otel_context.detach(token)
+
+    assert session_invocation.conversation_id == "entry-session"
+    assert session_invocation.attributes[GEN_AI_SESSION_ID] == "entry-session"
+    assert session_invocation.attributes[GEN_AI_USER_ID] == "run-user"
+    assert user_invocation.conversation_id == "run-session"
+    assert user_invocation.attributes[GEN_AI_SESSION_ID] == "run-session"
+    assert user_invocation.attributes[GEN_AI_USER_ID] == "entry-user"
+
+
+def test_agent_invocation_falls_back_to_agent_identity():
+    agent = SimpleNamespace(
+        name="FallbackAgent",
+        id="agent-id",
+        model=EchoModel(),
+        user_id="agent-user",
+        session_id="agent-session",
+        tools=[],
+        instructions=[],
+    )
+
+    invocation = create_agent_invocation(agent, {"input": "hello"})
+
+    assert invocation.conversation_id == "agent-session"
+    assert invocation.attributes[GEN_AI_SESSION_ID] == "agent-session"
+    assert invocation.attributes[GEN_AI_USER_ID] == "agent-user"
+
+
+def test_agent_run_identity_propagates_to_tool_span(
+    span_exporter: InMemorySpanExporter,
+):
+    fn = Function.from_callable(lambda city: f"sunny in {city}")
+    fn.name = "get_weather"
+    function_call = FunctionCall(
+        function=fn,
+        arguments={"city": "Hangzhou"},
+        call_id="call_in_agent",
+    )
+    agent = SimpleNamespace(
+        name="ToolAgent",
+        id="agent-id",
+        model=EchoModel(),
+        tools=[],
+        instructions=[],
+    )
+    wrapper = AgnoAgentWrapper(get_extended_telemetry_handler())
+
+    def wrapped(
+        prompt: str, user_id: str | None = None, session_id: str | None = None
+    ):
+        assert prompt == "call the tool"
+        assert user_id == "tool-user"
+        assert session_id == "tool-session"
+        function_call.execute()
+        return SimpleNamespace(role="assistant", content="done")
+
+    response = wrapper._run(
+        wrapped,
+        agent,
+        ("call the tool",),
+        {"user_id": "tool-user", "session_id": "tool-session"},
+        {
+            "input": "call the tool",
+            "user_id": "tool-user",
+            "session_id": "tool-session",
+        },
+    )
+
+    assert response.content == "done"
+    spans = _spans_by_name(span_exporter)
+    tool_attrs = spans["execute_tool get_weather"].attributes
+    assert tool_attrs["gen_ai.session.id"] == "tool-session"
+    assert tool_attrs["gen_ai.user.id"] == "tool-user"
+    assert tool_attrs["gen_ai.agent.name"] == "ToolAgent"
+
+
+def test_nested_agent_run_restores_outer_identity(
+    span_exporter: InMemorySpanExporter,
+):
+    handler = get_extended_telemetry_handler()
+    agent_wrapper = AgnoAgentWrapper(handler)
+    model_wrapper = AgnoModelWrapper(handler)
+    outer_agent = SimpleNamespace(
+        name="OuterAgent",
+        id="outer-agent-id",
+        model=EchoModel(),
+        tools=[],
+        instructions=[],
+    )
+    inner_agent = SimpleNamespace(
+        name="InnerAgent",
+        id="inner-agent-id",
+        model=EchoModel(),
+        tools=[],
+        instructions=[],
+    )
+
+    def model_call(name: str):
+        model = SimpleNamespace(id=f"{name}-model", provider="test")
+
+        def wrapped(messages=None):
+            return SimpleNamespace(role="assistant", content=name)
+
+        return model_wrapper.response(wrapped, model, (), {"messages": []})
+
+    def inner_wrapped(prompt, user_id=None, session_id=None):
+        assert prompt == "inner"
+        assert user_id == "inner-user"
+        assert session_id == "inner-session"
+        model_call("inner")
+        return SimpleNamespace(role="assistant", content="inner done")
+
+    def outer_wrapped(prompt, user_id=None, session_id=None):
+        assert prompt == "outer"
+        assert user_id == "outer-user"
+        assert session_id == "outer-session"
+        model_call("outer-before")
+        agent_wrapper._run(
+            inner_wrapped,
+            inner_agent,
+            ("inner",),
+            {"user_id": "inner-user", "session_id": "inner-session"},
+            {
+                "input": "inner",
+                "user_id": "inner-user",
+                "session_id": "inner-session",
+            },
+        )
+        model_call("outer-after")
+        return SimpleNamespace(role="assistant", content="outer done")
+
+    agent_wrapper._run(
+        outer_wrapped,
+        outer_agent,
+        ("outer",),
+        {"user_id": "outer-user", "session_id": "outer-session"},
+        {
+            "input": "outer",
+            "user_id": "outer-user",
+            "session_id": "outer-session",
+        },
+    )
+
+    spans = _spans_by_name(span_exporter)
+    outer_before_attrs = spans["chat outer-before-model"].attributes
+    inner_attrs = spans["chat inner-model"].attributes
+    outer_after_attrs = spans["chat outer-after-model"].attributes
+
+    assert outer_before_attrs["gen_ai.user.id"] == "outer-user"
+    assert outer_before_attrs["gen_ai.session.id"] == "outer-session"
+    assert outer_before_attrs["gen_ai.agent.name"] == "OuterAgent"
+    assert inner_attrs["gen_ai.user.id"] == "inner-user"
+    assert inner_attrs["gen_ai.session.id"] == "inner-session"
+    assert inner_attrs["gen_ai.agent.name"] == "InnerAgent"
+    assert outer_after_attrs["gen_ai.user.id"] == "outer-user"
+    assert outer_after_attrs["gen_ai.session.id"] == "outer-session"
+    assert outer_after_attrs["gen_ai.agent.name"] == "OuterAgent"
 
 
 def test_agno_skill_tool_invocation_captures_skill_attributes():
@@ -289,7 +530,14 @@ def test_streaming_agent_finishes_agent_and_model_spans(
 ):
     agent = Agent(name="StreamAgent", model=EchoModel(), tools=[])
 
-    chunks = list(agent.run("stream please", stream=True))
+    chunks = list(
+        agent.run(
+            "stream please",
+            stream=True,
+            user_id="stream-user",
+            session_id="stream-session",
+        )
+    )
     assert [chunk.content for chunk in chunks] == ["he", "llo"]
 
     spans = _spans_by_name(span_exporter)
@@ -297,13 +545,56 @@ def test_streaming_agent_finishes_agent_and_model_spans(
     model_attrs = spans["chat echo-model"].attributes
 
     assert agent_attrs["gen_ai.span.kind"] == "AGENT"
+    assert agent_attrs["gen_ai.user.id"] == "stream-user"
+    assert agent_attrs["gen_ai.session.id"] == "stream-session"
     assert "hello" in agent_attrs["gen_ai.output.messages"]
     assert "gen_ai.response.time_to_first_token" in agent_attrs
     assert model_attrs["gen_ai.span.kind"] == "LLM"
+    assert model_attrs["gen_ai.user.id"] == "stream-user"
+    assert model_attrs["gen_ai.session.id"] == "stream-session"
+    assert model_attrs["gen_ai.conversation.id"] == "stream-session"
     assert "hello" in model_attrs["gen_ai.output.messages"]
     assert "gen_ai.response.time_to_first_token" in model_attrs
     assert model_attrs["gen_ai.usage.input_tokens"] == 2
     assert model_attrs["gen_ai.usage.output_tokens"] == 3
+
+
+def test_streaming_agent_identity_is_scoped_between_yields(
+    span_exporter: InMemorySpanExporter,
+):
+    agent = Agent(name="ScopedStreamAgent", model=EchoModel(), tools=[])
+    fn = Function.from_callable(lambda city: f"sunny in {city}")
+    fn.name = "get_weather"
+    function_call = FunctionCall(
+        function=fn,
+        arguments={"city": "Hangzhou"},
+        call_id="call_between_stream_chunks",
+    )
+
+    stream = agent.run(
+        "stream please",
+        stream=True,
+        user_id="scoped-stream-user",
+        session_id="scoped-stream-session",
+    )
+    first_chunk = next(stream)
+    function_call.execute()
+    remaining_chunks = list(stream)
+    chunk_contents = [
+        first_chunk.content,
+        *[chunk.content for chunk in remaining_chunks],
+    ]
+
+    assert chunk_contents == ["he", "llo"]
+
+    spans = _spans_by_name(span_exporter)
+    model_attrs = spans["chat echo-model"].attributes
+    tool_attrs = spans["execute_tool get_weather"].attributes
+
+    assert model_attrs["gen_ai.user.id"] == "scoped-stream-user"
+    assert model_attrs["gen_ai.session.id"] == "scoped-stream-session"
+    assert "gen_ai.user.id" not in tool_attrs
+    assert "gen_ai.session.id" not in tool_attrs
 
 
 def test_streaming_agent_span_finishes_when_consumer_breaks(
@@ -342,6 +633,9 @@ def test_async_agent_run_finishes_agent_and_model_spans(
     assert agent_attrs["gen_ai.span.kind"] == "AGENT"
     assert agent_attrs["gen_ai.user.id"] == "u2"
     assert agent_attrs["gen_ai.session.id"] == "s2"
+    assert model_attrs["gen_ai.user.id"] == "u2"
+    assert model_attrs["gen_ai.session.id"] == "s2"
+    assert model_attrs["gen_ai.conversation.id"] == "s2"
     assert model_attrs["gen_ai.usage.input_tokens"] == 2
     assert model_attrs["gen_ai.usage.output_tokens"] == 4
 
@@ -352,7 +646,12 @@ def test_async_streaming_agent_finishes_spans(
     async def run_agent():
         agent = Agent(name="AsyncStreamAgent", model=EchoModel(), tools=[])
         chunks = []
-        async for chunk in agent.arun("stream please", stream=True):
+        async for chunk in agent.arun(
+            "stream please",
+            stream=True,
+            user_id="async-stream-user",
+            session_id="async-stream-session",
+        ):
             chunks.append(chunk.content)
         return chunks
 
@@ -365,6 +664,49 @@ def test_async_streaming_agent_finishes_spans(
         == "AGENT"
     )
     assert "chat echo-model" in spans
+    model_attrs = spans["chat echo-model"].attributes
+    assert model_attrs["gen_ai.user.id"] == "async-stream-user"
+    assert model_attrs["gen_ai.session.id"] == "async-stream-session"
+    assert model_attrs["gen_ai.conversation.id"] == "async-stream-session"
+
+
+def test_async_streaming_agent_identity_is_scoped_between_yields(
+    span_exporter: InMemorySpanExporter,
+):
+    fn = Function.from_callable(lambda city: f"sunny in {city}")
+    fn.name = "get_weather"
+    function_call = FunctionCall(
+        function=fn,
+        arguments={"city": "Hangzhou"},
+        call_id="call_between_async_stream_chunks",
+    )
+
+    async def run_agent():
+        agent = Agent(
+            name="AsyncScopedStreamAgent", model=EchoModel(), tools=[]
+        )
+        chunks = []
+        async for chunk in agent.arun(
+            "stream please",
+            stream=True,
+            user_id="async-scoped-stream-user",
+            session_id="async-scoped-stream-session",
+        ):
+            chunks.append(chunk.content)
+            if len(chunks) == 1:
+                function_call.execute()
+        return chunks
+
+    assert asyncio.run(run_agent()) == ["he", "llo"]
+
+    spans = _spans_by_name(span_exporter)
+    model_attrs = spans["chat echo-model"].attributes
+    tool_attrs = spans["execute_tool get_weather"].attributes
+
+    assert model_attrs["gen_ai.user.id"] == "async-scoped-stream-user"
+    assert model_attrs["gen_ai.session.id"] == "async-scoped-stream-session"
+    assert "gen_ai.user.id" not in tool_attrs
+    assert "gen_ai.session.id" not in tool_attrs
 
 
 def test_concurrent_runs_do_not_drop_spans(
@@ -372,7 +714,11 @@ def test_concurrent_runs_do_not_drop_spans(
 ):
     def run_once(index: int):
         agent = Agent(name=f"Agent{index}", model=EchoModel(), tools=[])
-        return agent.run(f"hello {index}").content
+        return agent.run(
+            f"hello {index}",
+            user_id=f"user-{index}",
+            session_id=f"session-{index}",
+        ).content
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         results = list(executor.map(run_once, range(3)))
@@ -391,6 +737,28 @@ def test_concurrent_runs_do_not_drop_spans(
     ]
     assert len(agent_spans) == 3
     assert len(model_spans) == 3
+    assert {
+        (
+            span.attributes.get("gen_ai.user.id"),
+            span.attributes.get("gen_ai.session.id"),
+        )
+        for span in agent_spans
+    } == {
+        ("user-0", "session-0"),
+        ("user-1", "session-1"),
+        ("user-2", "session-2"),
+    }
+    assert {
+        (
+            span.attributes.get("gen_ai.user.id"),
+            span.attributes.get("gen_ai.session.id"),
+        )
+        for span in model_spans
+    } == {
+        ("user-0", "session-0"),
+        ("user-1", "session-1"),
+        ("user-2", "session-2"),
+    }
 
 
 @pytest.mark.parametrize("content_capture_mode", [None, "NO_CONTENT"])

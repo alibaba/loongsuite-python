@@ -28,6 +28,8 @@ from .utils import (
     create_agent_invocation,
     create_llm_invocation,
     create_tool_invocation,
+    reset_current_agno_run_identity,
+    set_current_agno_run_identity,
     update_agent_invocation_from_events,
     update_agent_invocation_from_response,
     update_llm_invocation_from_response,
@@ -113,6 +115,7 @@ class AgnoAgentWrapper:
         self._handler.start_invoke_agent(
             invocation, context=otel_context.get_current()
         )
+        identity_token = set_current_agno_run_identity(invocation.attributes)
         try:
             response = wrapped(*args, **kwargs)
             update_agent_invocation_from_response(invocation, response)
@@ -125,6 +128,8 @@ class AgnoAgentWrapper:
                 _error(exc),
             )
             raise
+        finally:
+            reset_current_agno_run_identity(identity_token)
 
     def _run_stream(
         self,
@@ -144,6 +149,21 @@ class AgnoAgentWrapper:
             self._handler.start_invoke_agent(
                 invocation, context=parent_context
             )
+            identity_token = None
+
+            def enter_identity() -> None:
+                nonlocal identity_token
+                identity_token = set_current_agno_run_identity(
+                    invocation.attributes
+                )
+
+            def exit_identity() -> None:
+                nonlocal identity_token
+                if identity_token is not None:
+                    reset_current_agno_run_identity(identity_token)
+                    identity_token = None
+
+            enter_identity()
             try:
                 stream = wrapped(*args, **kwargs)
                 for event in stream:
@@ -152,7 +172,13 @@ class AgnoAgentWrapper:
                             timeit.default_timer()
                         )
                     events.append(event)
-                    yield event
+                    # Do not expose run-local identity to caller code while
+                    # the stream chunk is yielded outside this wrapper.
+                    exit_identity()
+                    try:
+                        yield event
+                    finally:
+                        enter_identity()
                 update_agent_invocation_from_events(invocation, events)
                 _finish_invocation(self._handler.stop_invoke_agent, invocation)
                 finalized = True
@@ -160,18 +186,23 @@ class AgnoAgentWrapper:
                 error = exc
                 raise
             finally:
-                if not finalized:
-                    if error is None or _is_stream_close(error):
-                        update_agent_invocation_from_events(invocation, events)
-                        _finish_invocation(
-                            self._handler.stop_invoke_agent, invocation
-                        )
-                    else:
-                        _finish_invocation(
-                            self._handler.fail_invoke_agent,
-                            invocation,
-                            _error(error),
-                        )
+                try:
+                    if not finalized:
+                        if error is None or _is_stream_close(error):
+                            update_agent_invocation_from_events(
+                                invocation, events
+                            )
+                            _finish_invocation(
+                                self._handler.stop_invoke_agent, invocation
+                            )
+                        else:
+                            _finish_invocation(
+                                self._handler.fail_invoke_agent,
+                                invocation,
+                                _error(error),
+                            )
+                finally:
+                    exit_identity()
 
         return generator()
 
@@ -214,6 +245,7 @@ class AgnoAgentWrapper:
     ) -> Any:
         invocation = create_agent_invocation(instance, arguments)
         self._handler.start_invoke_agent(invocation, context=parent_context)
+        identity_token = set_current_agno_run_identity(invocation.attributes)
         try:
             response = wrapped(*args, **kwargs)
             if inspect.isawaitable(response):
@@ -228,6 +260,8 @@ class AgnoAgentWrapper:
                 _error(exc),
             )
             raise
+        finally:
+            reset_current_agno_run_identity(identity_token)
 
     async def _arun_stream(
         self,
@@ -244,6 +278,21 @@ class AgnoAgentWrapper:
         finalized = False
         error = None
         self._handler.start_invoke_agent(invocation, context=parent_context)
+        identity_token = None
+
+        def enter_identity() -> None:
+            nonlocal identity_token
+            identity_token = set_current_agno_run_identity(
+                invocation.attributes
+            )
+
+        def exit_identity() -> None:
+            nonlocal identity_token
+            if identity_token is not None:
+                reset_current_agno_run_identity(identity_token)
+                identity_token = None
+
+        enter_identity()
         try:
             stream = wrapped(*args, **kwargs)
             if inspect.isawaitable(stream):
@@ -252,7 +301,13 @@ class AgnoAgentWrapper:
                 if invocation.monotonic_first_token_s is None:
                     invocation.monotonic_first_token_s = timeit.default_timer()
                 events.append(event)
-                yield event
+                # Do not expose run-local identity to caller code while
+                # the stream chunk is yielded outside this wrapper.
+                exit_identity()
+                try:
+                    yield event
+                finally:
+                    enter_identity()
             update_agent_invocation_from_events(invocation, events)
             _finish_invocation(self._handler.stop_invoke_agent, invocation)
             finalized = True
@@ -260,18 +315,21 @@ class AgnoAgentWrapper:
             error = exc
             raise
         finally:
-            if not finalized:
-                if error is None or _is_stream_close(error):
-                    update_agent_invocation_from_events(invocation, events)
-                    _finish_invocation(
-                        self._handler.stop_invoke_agent, invocation
-                    )
-                else:
-                    _finish_invocation(
-                        self._handler.fail_invoke_agent,
-                        invocation,
-                        _error(error),
-                    )
+            try:
+                if not finalized:
+                    if error is None or _is_stream_close(error):
+                        update_agent_invocation_from_events(invocation, events)
+                        _finish_invocation(
+                            self._handler.stop_invoke_agent, invocation
+                        )
+                    else:
+                        _finish_invocation(
+                            self._handler.fail_invoke_agent,
+                            invocation,
+                            _error(error),
+                        )
+            finally:
+                exit_identity()
 
 
 class AgnoFunctionCallWrapper:

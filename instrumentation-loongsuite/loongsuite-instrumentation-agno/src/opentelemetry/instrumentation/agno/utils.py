@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar, Token
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Mapping, Optional, Sequence
 
+from opentelemetry import baggage
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SESSION_ID,
     GEN_AI_USER_ID,
@@ -44,6 +46,106 @@ _SKILL_TOOL_NAMES = {
     "get_skill_reference",
     "get_skill_script",
 }
+_CURRENT_AGNO_RUN_IDENTITY: ContextVar[dict[str, str] | None] = ContextVar(
+    "agno_current_run_identity",
+    default=None,
+)
+
+
+def _identity_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _first_identity_value(*values: Any) -> str | None:
+    for value in values:
+        identity = _identity_value(value)
+        if identity is not None:
+            return identity
+    return None
+
+
+def _current_baggage_value(key: str) -> str | None:
+    try:
+        value = baggage.get_baggage(key)
+    except Exception:
+        return None
+    return _identity_value(value)
+
+
+def entry_baggage_identity_attributes() -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    session_id = _current_baggage_value(GEN_AI_SESSION_ID)
+    user_id = _current_baggage_value(GEN_AI_USER_ID)
+    if session_id:
+        attributes[GEN_AI_SESSION_ID] = session_id
+    if user_id:
+        attributes[GEN_AI_USER_ID] = user_id
+    return attributes
+
+
+def _framework_identity_attributes(
+    agent: Any, arguments: Mapping[str, Any]
+) -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    user_id = _first_identity_value(
+        arguments.get("user_id"),
+        getattr(agent, "user_id", None),
+    )
+    session_id = _first_identity_value(
+        arguments.get("session_id"),
+        getattr(agent, "session_id", None),
+    )
+    if user_id:
+        attributes[GEN_AI_USER_ID] = user_id
+    if session_id:
+        attributes[GEN_AI_SESSION_ID] = session_id
+    return attributes
+
+
+def agno_run_identity_attributes(
+    agent: Any, arguments: Mapping[str, Any]
+) -> dict[str, str]:
+    attributes = _framework_identity_attributes(agent, arguments)
+    attributes.update(entry_baggage_identity_attributes())
+    return attributes
+
+
+def set_current_agno_run_identity(
+    attributes: Mapping[str, Any],
+) -> Token[dict[str, str] | None]:
+    identity = {
+        key: value
+        for key in (GEN_AI_SESSION_ID, GEN_AI_USER_ID)
+        if (value := _identity_value(attributes.get(key))) is not None
+    }
+    return _CURRENT_AGNO_RUN_IDENTITY.set(identity or None)
+
+
+def reset_current_agno_run_identity(
+    token: Token[dict[str, str] | None],
+) -> None:
+    _CURRENT_AGNO_RUN_IDENTITY.reset(token)
+
+
+def _current_identity_attributes() -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    run_identity = _CURRENT_AGNO_RUN_IDENTITY.get()
+    if run_identity:
+        attributes.update(run_identity)
+    # Re-read baggage so ENTRY identity stays highest priority for child spans
+    # even if the active OTel context changes while an Agno run is in progress.
+    attributes.update(entry_baggage_identity_attributes())
+    return attributes
+
+
+def _apply_current_identity(invocation: Any) -> str | None:
+    attributes = _current_identity_attributes()
+    for key, value in attributes.items():
+        invocation.attributes[key] = value
+    return attributes.get(GEN_AI_SESSION_ID)
 
 
 def _json_default(value: Any) -> Any:
@@ -421,15 +523,8 @@ def create_agent_invocation(
 ) -> InvokeAgentInvocation:
     model = getattr(agent, "model", None)
     input_value = arguments.get("input")
-    user_id = arguments.get("user_id") or getattr(agent, "user_id", None)
-    session_id = arguments.get("session_id") or getattr(
-        agent, "session_id", None
-    )
-    attributes: dict[str, Any] = {}
-    if user_id:
-        attributes[GEN_AI_USER_ID] = str(user_id)
-    if session_id:
-        attributes[GEN_AI_SESSION_ID] = str(session_id)
+    attributes: dict[str, Any] = agno_run_identity_attributes(agent, arguments)
+    session_id = attributes.get(GEN_AI_SESSION_ID)
 
     invocation = InvokeAgentInvocation(
         provider=_PROVIDER,
@@ -568,6 +663,9 @@ def create_llm_invocation(
         input_messages=convert_model_messages(arguments.get("messages")),
         tool_definitions=convert_tool_definitions(arguments.get("tools")),
     )
+    session_id = _apply_current_identity(invocation)
+    if session_id and not getattr(invocation, "conversation_id", None):
+        invocation.conversation_id = session_id
 
     for name in (
         "temperature",
@@ -657,6 +755,7 @@ def create_tool_invocation(function_call: Any) -> ExecuteToolInvocation:
         tool_type="function",
         tool_call_arguments=getattr(function_call, "arguments", None),
     )
+    _apply_current_identity(invocation)
     _apply_agno_skill_tool_metadata(invocation, invocation.tool_call_arguments)
     return invocation
 
