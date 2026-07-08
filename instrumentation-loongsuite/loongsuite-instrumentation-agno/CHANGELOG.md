@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Capture `gen_ai.skill.*` attributes on Agno skill tool spans such as
+  `get_skill_instructions`, `get_skill_reference`, and `get_skill_script`.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Removed

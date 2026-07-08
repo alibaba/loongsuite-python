@@ -15,7 +15,7 @@
 # This variant of the requirements aims to test the system using
 # the latest supported QwenPaw runtime.
 
-qwenpaw==1.1.4.post2
+qwenpaw==1.1.12.post3
 pytest
 pytest-asyncio
 wrapt<2.0.0

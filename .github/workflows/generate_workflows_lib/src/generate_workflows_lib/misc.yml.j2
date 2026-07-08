@@ -5,9 +5,8 @@ name: Misc {{ file_number }}
 
 on:
   push:
-    branches-ignore:
-    - 'release/*'
-    - 'otelbot/*'
+    branches:
+    - main
   pull_request:
 
 permissions:
@@ -36,7 +35,7 @@ jobs:
 
   {{ job_data }}:
     name: {{ job_data }}
-    runs-on: ubuntu-latest
+    runs-on: {{ "ubuntu-latest" if job_data == "docker-tests" else runner }}
     timeout-minutes: 30
     {%- if job_data == "generate-workflows" %}
     if: |

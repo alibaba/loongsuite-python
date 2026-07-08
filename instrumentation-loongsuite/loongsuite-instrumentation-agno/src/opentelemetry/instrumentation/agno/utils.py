@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, is_dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SESSION_ID,
@@ -39,6 +39,11 @@ from opentelemetry.util.genai.types import (
 )
 
 _PROVIDER = "agno"
+_SKILL_TOOL_NAMES = {
+    "get_skill_instructions",
+    "get_skill_reference",
+    "get_skill_script",
+}
 
 
 def _json_default(value: Any) -> Any:
@@ -80,6 +85,95 @@ def _to_dict(value: Any) -> dict[str, Any] | None:
         except Exception:
             return None
     return None
+
+
+def _mapping_from_any(value: Any) -> Dict[str, Any]:
+    data = _to_dict(value)
+    if data is not None:
+        return data
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+        except Exception:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
+
+
+def _first_text(*values: Any) -> Optional[str]:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _extract_skill_metadata(value: Any) -> Dict[str, Any]:
+    data = _mapping_from_any(value)
+    if not data:
+        return {}
+    frontmatter = _mapping_from_any(data.get("frontmatter"))
+    metadata = _mapping_from_any(data.get("metadata")) or _mapping_from_any(
+        frontmatter.get("metadata")
+    )
+    return {
+        "name": _first_text(
+            data.get("skill_name"),
+            data.get("skill"),
+            data.get("name"),
+            frontmatter.get("name"),
+        ),
+        "id": _first_text(
+            data.get("skill_id"),
+            data.get("id"),
+            metadata.get("id"),
+        ),
+        "description": _first_text(
+            data.get("skill_description"),
+            data.get("description"),
+            frontmatter.get("description"),
+        ),
+        "version": _first_text(
+            data.get("skill_version"),
+            data.get("version"),
+            metadata.get("version"),
+        ),
+    }
+
+
+def _apply_skill_metadata(
+    invocation: ExecuteToolInvocation, metadata: Mapping[str, Any]
+) -> None:
+    name = _first_text(metadata.get("name"))
+    if name:
+        invocation.skill_name = invocation.skill_name or name
+        invocation.skill_id = (
+            invocation.skill_id or _first_text(metadata.get("id")) or name
+        )
+    elif metadata.get("id"):
+        invocation.skill_id = invocation.skill_id or _first_text(
+            metadata.get("id")
+        )
+
+    description = _first_text(metadata.get("description"))
+    if description:
+        invocation.skill_description = (
+            invocation.skill_description or description
+        )
+
+    version = _first_text(metadata.get("version"))
+    if version:
+        invocation.skill_version = invocation.skill_version or version
+
+
+def _apply_agno_skill_tool_metadata(
+    invocation: ExecuteToolInvocation, data: Any
+) -> None:
+    if invocation.tool_name not in _SKILL_TOOL_NAMES:
+        return
+    _apply_skill_metadata(invocation, _extract_skill_metadata(data))
 
 
 def _get_value(value: Any, name: str, default: Any = None) -> Any:
@@ -555,7 +649,7 @@ def update_llm_invocation_from_response(
 
 def create_tool_invocation(function_call: Any) -> ExecuteToolInvocation:
     function = getattr(function_call, "function", None)
-    return ExecuteToolInvocation(
+    invocation = ExecuteToolInvocation(
         tool_name=getattr(function, "name", None) or "unknown_tool",
         provider=_PROVIDER,
         tool_call_id=getattr(function_call, "call_id", None),
@@ -563,6 +657,8 @@ def create_tool_invocation(function_call: Any) -> ExecuteToolInvocation:
         tool_type="function",
         tool_call_arguments=getattr(function_call, "arguments", None),
     )
+    _apply_agno_skill_tool_metadata(invocation, invocation.tool_call_arguments)
+    return invocation
 
 
 def update_tool_invocation_from_response(
@@ -572,3 +668,4 @@ def update_tool_invocation_from_response(
     invocation.tool_call_result = (
         result if isinstance(result, str) else _stringify(result)
     )
+    _apply_agno_skill_tool_metadata(invocation, result)

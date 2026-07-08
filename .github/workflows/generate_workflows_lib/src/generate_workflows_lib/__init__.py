@@ -356,11 +356,13 @@ def generate_contrib_workflow(
 def generate_misc_workflow(
     tox_ini_path: Path,
     workflow_directory_path: Path,
+    runner="ubuntu-latest",
 ) -> None:
     _generate_workflow(
         get_misc_job_datas(get_tox_envs(tox_ini_path)),
         "misc",
         workflow_directory_path,
+        runner=runner,
     )
 
 
@@ -445,6 +447,7 @@ def generate_extension_misc_workflow(
     tox_ini_path: Path,
     workflow_directory_path: Path,
     additional_config_path: Path,
+    runner="ubuntu-latest",
 ) -> None:
     loongsuite_envs = get_loongsuite_tox_envs(additional_config_path)
     if not loongsuite_envs:
@@ -455,6 +458,7 @@ def generate_extension_misc_workflow(
         "loongsuite_misc",
         "loongsuite_misc",
         workflow_directory_path,
+        runner=runner,
     )
 
 
