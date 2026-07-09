@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib
+import logging
 from typing import Any, Collection
 
 from wrapt import wrap_function_wrapper
@@ -30,7 +32,64 @@ from opentelemetry.instrumentation.utils import unwrap
 _AGENT = "agno.agent"
 _MODULE = "agno.models.base"
 _TOOLKIT = "agno.tools.function"
+_logger = logging.getLogger(__name__)
 __all__ = ["AgnoInstrumentor"]
+
+_INNER_MODEL_WRAPPERS = (
+    ("Model._process_model_response", "process_model_response"),
+    ("Model._aprocess_model_response", "aprocess_model_response"),
+    ("Model.process_response_stream", "process_response_stream"),
+    ("Model.aprocess_response_stream", "aprocess_response_stream"),
+    ("Model.run_function_calls", "run_function_calls"),
+    ("Model.arun_function_calls", "arun_function_calls"),
+)
+
+_FALLBACK_MODEL_WRAPPERS = (
+    ("Model.response", "response"),
+    ("Model.aresponse", "aresponse"),
+    ("Model.response_stream", "response_stream"),
+    ("Model.aresponse_stream", "aresponse_stream"),
+)
+
+
+def _has_wrap_target(module_name: str, name: str) -> bool:
+    try:
+        target = importlib.import_module(module_name)
+        for part in name.split("."):
+            target = getattr(target, part)
+    except Exception:
+        return False
+    return True
+
+
+def _wrap_model_methods(model_wrapper: AgnoModelWrapper) -> None:
+    if all(
+        _has_wrap_target(_MODULE, name)
+        for name, _wrapper_name in _INNER_MODEL_WRAPPERS
+    ):
+        for name, wrapper_name in _INNER_MODEL_WRAPPERS:
+            wrap_function_wrapper(
+                module=_MODULE,
+                name=name,
+                wrapper=getattr(model_wrapper, wrapper_name),
+            )
+        return
+
+    _logger.warning(
+        "Agno inner model hooks are unavailable; falling back to outer "
+        "Model.response wrappers."
+    )
+    for name, wrapper_name in _FALLBACK_MODEL_WRAPPERS:
+        wrap_function_wrapper(
+            module=_MODULE,
+            name=name,
+            wrapper=getattr(model_wrapper, wrapper_name),
+        )
+
+
+def _unwrap_if_present(target: Any, name: str) -> None:
+    if hasattr(target, name):
+        unwrap(target, name)
 
 
 class AgnoInstrumentor(BaseInstrumentor):  # type: ignore
@@ -91,27 +150,9 @@ class AgnoInstrumentor(BaseInstrumentor):  # type: ignore
             wrapper=function_call_wrapper.aexecute,
         )
 
-        # Wrap the model
-        wrap_function_wrapper(
-            module=_MODULE,
-            name="Model.response",
-            wrapper=model_wrapper.response,
-        )
-        wrap_function_wrapper(
-            module=_MODULE,
-            name="Model.aresponse",
-            wrapper=model_wrapper.aresponse,
-        )
-        wrap_function_wrapper(
-            module=_MODULE,
-            name="Model.response_stream",
-            wrapper=model_wrapper.response_stream,
-        )
-        wrap_function_wrapper(
-            module=_MODULE,
-            name="Model.aresponse_stream",
-            wrapper=model_wrapper.aresponse_stream,
-        )
+        # Wrap the model. Prefer Agno's per-request internals so a tool-call
+        # loop emits one LLM span per provider call.
+        _wrap_model_methods(model_wrapper)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         # Unwrap the agent call function
@@ -129,8 +170,9 @@ class AgnoInstrumentor(BaseInstrumentor):  # type: ignore
         # Unwrap the model
         import agno.models.base  # noqa: PLC0415
 
-        unwrap(agno.models.base.Model, "response")
-        unwrap(agno.models.base.Model, "aresponse")
-        unwrap(agno.models.base.Model, "response_stream")
-        unwrap(agno.models.base.Model, "aresponse_stream")
+        for name, _wrapper_name in (
+            *_INNER_MODEL_WRAPPERS,
+            *_FALLBACK_MODEL_WRAPPERS,
+        ):
+            _unwrap_if_present(agno.models.base.Model, name.split(".", 1)[1])
         self._handler = None

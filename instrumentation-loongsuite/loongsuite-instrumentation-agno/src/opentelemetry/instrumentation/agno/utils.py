@@ -712,6 +712,8 @@ def update_llm_invocation_from_response(
     )
     invocation.output_messages = [_message_to_output(response)]
     finish_reason = _finish_reason(response)
+    if finish_reason is None and getattr(response, "tool_calls", None):
+        finish_reason = "tool_calls"
     if finish_reason:
         invocation.finish_reasons = [finish_reason]
     invocation.input_tokens = _usage_value(
@@ -742,6 +744,23 @@ def update_llm_invocation_from_response(
         invocation.usage_cache_creation_input_tokens = (
             invocation.usage_cache_creation_input_tokens
             or _usage_value(usage, "cache_write_tokens")
+        )
+
+    metrics = getattr(response, "metrics", None)
+    if metrics is not None:
+        invocation.input_tokens = invocation.input_tokens or _usage_value(
+            metrics, "input_tokens", "prompt_tokens"
+        )
+        invocation.output_tokens = invocation.output_tokens or _usage_value(
+            metrics, "output_tokens", "completion_tokens"
+        )
+        invocation.usage_cache_read_input_tokens = (
+            invocation.usage_cache_read_input_tokens
+            or _usage_value(metrics, "cache_read_tokens")
+        )
+        invocation.usage_cache_creation_input_tokens = (
+            invocation.usage_cache_creation_input_tokens
+            or _usage_value(metrics, "cache_write_tokens")
         )
 
 

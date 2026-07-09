@@ -24,6 +24,7 @@ import pytest
 from agno.agent import Agent
 from agno.metrics import MessageMetrics
 from agno.models.base import Model
+from agno.models.message import Message
 from agno.models.response import ModelResponse
 from agno.tools.function import Function, FunctionCall
 
@@ -110,6 +111,81 @@ class EchoModel(Model):
         return response
 
 
+class ToolLoopModel(Model):
+    def __init__(self):
+        super().__init__(
+            id="tool-loop-model",
+            name="tool-loop",
+            provider="test",
+        )
+        self.calls = 0
+
+    def _next_response(self) -> ModelResponse:
+        self.calls += 1
+        if self.calls % 2 == 1:
+            return ModelResponse(
+                role="assistant",
+                tool_calls=[
+                    {
+                        "id": "call_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city":"Hangzhou"}',
+                        },
+                    }
+                ],
+                response_usage=MessageMetrics(
+                    input_tokens=10,
+                    output_tokens=2,
+                    cache_read_tokens=4,
+                ),
+            )
+        return ModelResponse(
+            role="assistant",
+            content="sunny in Hangzhou",
+            response_usage=MessageMetrics(input_tokens=20, output_tokens=3),
+        )
+
+    def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        return self._next_response()
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        return self._next_response()
+
+    def invoke_stream(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        response = self._next_response()
+        if response.tool_calls:
+            yield ModelResponse(
+                role="assistant",
+                tool_calls=response.tool_calls,
+                response_usage=response.response_usage,
+            )
+            return
+        yield ModelResponse(
+            role="assistant",
+            content="sunny ",
+            response_usage=MessageMetrics(input_tokens=20, output_tokens=1),
+        )
+        yield ModelResponse(
+            role="assistant",
+            content="in Hangzhou",
+            response_usage=MessageMetrics(output_tokens=2),
+        )
+
+    async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator:
+        for response in self.invoke_stream(*args, **kwargs):
+            yield response
+
+    def _parse_provider_response(
+        self, response: Any, **kwargs: Any
+    ) -> ModelResponse:
+        return response
+
+    def _parse_provider_response_delta(self, response: Any) -> ModelResponse:
+        return response
+
+
 @pytest.fixture
 def span_exporter() -> InMemorySpanExporter:
     return InMemorySpanExporter()
@@ -137,6 +213,73 @@ def instrument(tracer_provider: trace_api.TracerProvider):
 
 def _spans_by_name(span_exporter: InMemorySpanExporter):
     return {span.name: span for span in span_exporter.get_finished_spans()}
+
+
+def _spans_by_kind(
+    span_exporter: InMemorySpanExporter, span_kind: str
+) -> list[Any]:
+    return sorted(
+        [
+            span
+            for span in span_exporter.get_finished_spans()
+            if span.attributes.get("gen_ai.span.kind") == span_kind
+        ],
+        key=lambda span: span.start_time,
+    )
+
+
+def _weather_tool() -> Function:
+    fn = Function.from_callable(lambda city: f"weather for {city}: sunny")
+    fn.name = "get_weather"
+    return fn
+
+
+def _assert_tool_loop_tree(
+    span_exporter: InMemorySpanExporter,
+    agent_name: str,
+) -> None:
+    agent_spans = _spans_by_kind(span_exporter, "AGENT")
+    step_spans = _spans_by_kind(span_exporter, "STEP")
+    llm_spans = _spans_by_kind(span_exporter, "LLM")
+    tool_spans = _spans_by_kind(span_exporter, "TOOL")
+
+    agent_span = next(
+        span
+        for span in agent_spans
+        if span.name == f"invoke_agent {agent_name}"
+    )
+    assert len(step_spans) == 2
+    assert len(llm_spans) == 2
+    assert len(tool_spans) == 1
+
+    for step_span in step_spans:
+        assert step_span.parent is not None
+        assert step_span.parent.span_id == agent_span.context.span_id
+
+    assert llm_spans[0].parent is not None
+    assert llm_spans[0].parent.span_id == step_spans[0].context.span_id
+    assert tool_spans[0].parent is not None
+    assert tool_spans[0].parent.span_id == step_spans[0].context.span_id
+    assert llm_spans[1].parent is not None
+    assert llm_spans[1].parent.span_id == step_spans[1].context.span_id
+
+    assert step_spans[0].attributes["gen_ai.react.round"] == 1
+    assert step_spans[0].attributes["gen_ai.react.finish_reason"] == (
+        "tool_calls"
+    )
+    assert step_spans[1].attributes["gen_ai.react.round"] == 2
+    assert step_spans[1].attributes["gen_ai.react.finish_reason"] == "stop"
+
+    assert [
+        span.attributes["gen_ai.usage.total_tokens"] for span in llm_spans
+    ] == [
+        12,
+        23,
+    ]
+    assert agent_span.attributes["gen_ai.usage.input_tokens"] == 30
+    assert agent_span.attributes["gen_ai.usage.output_tokens"] == 5
+    assert agent_span.attributes["gen_ai.usage.total_tokens"] == 35
+    assert agent_span.attributes["gen_ai.usage.cache_read.input_tokens"] == 4
 
 
 class RecordingHandler:
@@ -707,6 +850,83 @@ def test_async_streaming_agent_identity_is_scoped_between_yields(
     assert model_attrs["gen_ai.session.id"] == "async-scoped-stream-session"
     assert "gen_ai.user.id" not in tool_attrs
     assert "gen_ai.session.id" not in tool_attrs
+
+
+def test_tool_call_loop_emits_react_steps_and_split_llm_spans(
+    span_exporter: InMemorySpanExporter,
+):
+    agent = Agent(
+        name="ToolLoopAgent",
+        model=ToolLoopModel(),
+        tools=[_weather_tool()],
+    )
+
+    response = agent.run("what is the weather")
+
+    assert response.content == "sunny in Hangzhou"
+    _assert_tool_loop_tree(span_exporter, "ToolLoopAgent")
+
+
+def test_async_tool_call_loop_emits_react_steps_and_split_llm_spans(
+    span_exporter: InMemorySpanExporter,
+):
+    async def run_agent():
+        agent = Agent(
+            name="AsyncToolLoopAgent",
+            model=ToolLoopModel(),
+            tools=[_weather_tool()],
+        )
+        return await agent.arun("what is the weather")
+
+    response = asyncio.run(run_agent())
+
+    assert response.content == "sunny in Hangzhou"
+    _assert_tool_loop_tree(span_exporter, "AsyncToolLoopAgent")
+
+
+def test_stream_tool_call_loop_emits_agent_tokens_and_split_llm_spans(
+    span_exporter: InMemorySpanExporter,
+):
+    agent = Agent(
+        name="StreamToolLoopAgent",
+        model=ToolLoopModel(),
+        tools=[_weather_tool()],
+    )
+
+    list(agent.run("what is the weather", stream=True))
+
+    _assert_tool_loop_tree(span_exporter, "StreamToolLoopAgent")
+
+
+def test_async_stream_tool_call_loop_emits_agent_tokens_and_split_llm_spans(
+    span_exporter: InMemorySpanExporter,
+):
+    async def run_agent():
+        agent = Agent(
+            name="AsyncStreamToolLoopAgent",
+            model=ToolLoopModel(),
+            tools=[_weather_tool()],
+        )
+        async for _event in agent.arun("what is the weather", stream=True):
+            pass
+
+    asyncio.run(run_agent())
+
+    _assert_tool_loop_tree(span_exporter, "AsyncStreamToolLoopAgent")
+
+
+def test_direct_model_call_without_agent_does_not_emit_react_step(
+    span_exporter: InMemorySpanExporter,
+):
+    model = EchoModel()
+
+    response = model.response(
+        messages=[Message(role="user", content="say hello")]
+    )
+
+    assert response.content == "hello"
+    assert len(_spans_by_kind(span_exporter, "LLM")) == 1
+    assert len(_spans_by_kind(span_exporter, "STEP")) == 0
 
 
 def test_concurrent_runs_do_not_drop_spans(

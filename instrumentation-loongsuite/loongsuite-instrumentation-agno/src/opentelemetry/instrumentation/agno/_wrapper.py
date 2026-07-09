@@ -14,14 +14,17 @@
 
 from __future__ import annotations
 
+import contextvars
 import inspect
 import timeit
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Mapping
 
 from opentelemetry import context as otel_context
+from opentelemetry.util.genai.extended_types import ReactStepInvocation
 from opentelemetry.util.genai.types import Error
 
 from .utils import (
@@ -78,6 +81,124 @@ def _is_stream_close(exc: BaseException) -> bool:
     return isinstance(exc, (GeneratorExit, StopIteration, StopAsyncIteration))
 
 
+@dataclass
+class _AgnoRunState:
+    handler: ExtendedTelemetryHandler
+    agent_context: Any
+    react_round: int = 0
+    active_step: ReactStepInvocation | None = None
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_cache_read_tokens: int = 0
+    llm_cache_write_tokens: int = 0
+
+
+_AGNO_RUN_STATE: contextvars.ContextVar[_AgnoRunState | None] = (
+    contextvars.ContextVar("agno_run_state", default=None)
+)
+
+
+def _current_run_state(
+    handler: ExtendedTelemetryHandler,
+) -> _AgnoRunState | None:
+    state = _AGNO_RUN_STATE.get()
+    if state is None or state.handler is not handler:
+        return None
+    return state
+
+
+def _close_active_react_step(
+    handler: ExtendedTelemetryHandler,
+    state: _AgnoRunState,
+    finish_reason: str,
+) -> None:
+    step = state.active_step
+    if step is None:
+        return
+    state.active_step = None
+    step.finish_reason = step.finish_reason or finish_reason
+    _finish_invocation(handler.stop_react_step, step)
+
+
+def _fail_active_react_step(
+    handler: ExtendedTelemetryHandler,
+    state: _AgnoRunState | None,
+    error: Error,
+) -> None:
+    if state is None or state.active_step is None:
+        return
+    step = state.active_step
+    state.active_step = None
+    _finish_invocation(handler.fail_react_step, step, error)
+
+
+def _start_next_react_step(
+    handler: ExtendedTelemetryHandler,
+    state: _AgnoRunState | None,
+) -> None:
+    if state is None:
+        return
+    if state.active_step is not None:
+        _close_active_react_step(handler, state, "tool_calls")
+    state.react_round += 1
+    invocation = ReactStepInvocation(round=state.react_round)
+    handler.start_react_step(invocation, context=state.agent_context)
+    state.active_step = invocation
+
+
+def _finish_react_step_after_llm(
+    handler: ExtendedTelemetryHandler,
+    state: _AgnoRunState | None,
+    assistant_message: Any,
+) -> None:
+    if state is None or state.active_step is None:
+        return
+    if getattr(assistant_message, "tool_calls", None):
+        state.active_step.finish_reason = "tool_calls"
+        return
+    _close_active_react_step(handler, state, "stop")
+
+
+def _record_llm_usage(
+    state: _AgnoRunState | None,
+    invocation: Any,
+) -> None:
+    if state is None:
+        return
+    state.llm_input_tokens += invocation.input_tokens or 0
+    state.llm_output_tokens += invocation.output_tokens or 0
+    state.llm_cache_read_tokens += (
+        invocation.usage_cache_read_input_tokens or 0
+    )
+    state.llm_cache_write_tokens += (
+        invocation.usage_cache_creation_input_tokens or 0
+    )
+
+
+def _apply_agent_token_fallback(
+    invocation: Any,
+    state: _AgnoRunState | None,
+) -> None:
+    if state is None:
+        return
+    if invocation.input_tokens is None and state.llm_input_tokens:
+        invocation.input_tokens = state.llm_input_tokens
+    if invocation.output_tokens is None and state.llm_output_tokens:
+        invocation.output_tokens = state.llm_output_tokens
+    if (
+        invocation.usage_cache_read_input_tokens is None
+        and state.llm_cache_read_tokens
+    ):
+        invocation.usage_cache_read_input_tokens = state.llm_cache_read_tokens
+    if (
+        invocation.usage_cache_creation_input_tokens is None
+        and state.llm_cache_write_tokens
+    ):
+        invocation.usage_cache_creation_input_tokens = (
+            state.llm_cache_write_tokens
+        )
+
+
 class AgnoAgentWrapper:
     def __init__(self, handler: ExtendedTelemetryHandler) -> None:
         self._handler = handler
@@ -115,21 +236,31 @@ class AgnoAgentWrapper:
         self._handler.start_invoke_agent(
             invocation, context=otel_context.get_current()
         )
+        state = _AgnoRunState(
+            handler=self._handler,
+            agent_context=otel_context.get_current(),
+        )
+        state_token = _AGNO_RUN_STATE.set(state)
         identity_token = set_current_agno_run_identity(invocation.attributes)
         try:
             response = wrapped(*args, **kwargs)
             update_agent_invocation_from_response(invocation, response)
+            _apply_agent_token_fallback(invocation, state)
+            _close_active_react_step(self._handler, state, "stop")
             _finish_invocation(self._handler.stop_invoke_agent, invocation)
             return response
         except Exception as exc:
+            error = _error(exc)
+            _fail_active_react_step(self._handler, state, error)
             _finish_invocation(
                 self._handler.fail_invoke_agent,
                 invocation,
-                _error(exc),
+                error,
             )
             raise
         finally:
             reset_current_agno_run_identity(identity_token)
+            _AGNO_RUN_STATE.reset(state_token)
 
     def _run_stream(
         self,
@@ -146,10 +277,16 @@ class AgnoAgentWrapper:
             events = []
             finalized = False
             error = None
+            state = None
+            state_token = None
             self._handler.start_invoke_agent(
                 invocation, context=parent_context
             )
             identity_token = None
+            state = _AgnoRunState(
+                handler=self._handler,
+                agent_context=otel_context.get_current(),
+            )
 
             def enter_identity() -> None:
                 nonlocal identity_token
@@ -163,7 +300,18 @@ class AgnoAgentWrapper:
                     reset_current_agno_run_identity(identity_token)
                     identity_token = None
 
+            def enter_run_state() -> None:
+                nonlocal state_token
+                state_token = _AGNO_RUN_STATE.set(state)
+
+            def exit_run_state() -> None:
+                nonlocal state_token
+                if state_token is not None:
+                    _AGNO_RUN_STATE.reset(state_token)
+                    state_token = None
+
             enter_identity()
+            enter_run_state()
             try:
                 stream = wrapped(*args, **kwargs)
                 for event in stream:
@@ -172,14 +320,18 @@ class AgnoAgentWrapper:
                             timeit.default_timer()
                         )
                     events.append(event)
-                    # Do not expose run-local identity to caller code while
-                    # the stream chunk is yielded outside this wrapper.
+                    # Do not expose run-local state to caller code while the
+                    # stream chunk is yielded outside this wrapper.
+                    exit_run_state()
                     exit_identity()
                     try:
                         yield event
                     finally:
                         enter_identity()
+                        enter_run_state()
                 update_agent_invocation_from_events(invocation, events)
+                _apply_agent_token_fallback(invocation, state)
+                _close_active_react_step(self._handler, state, "stop")
                 _finish_invocation(self._handler.stop_invoke_agent, invocation)
                 finalized = True
             except BaseException as exc:
@@ -192,16 +344,25 @@ class AgnoAgentWrapper:
                             update_agent_invocation_from_events(
                                 invocation, events
                             )
+                            _apply_agent_token_fallback(invocation, state)
+                            _close_active_react_step(
+                                self._handler, state, "stop"
+                            )
                             _finish_invocation(
                                 self._handler.stop_invoke_agent, invocation
                             )
                         else:
+                            invoke_error = _error(error)
+                            _fail_active_react_step(
+                                self._handler, state, invoke_error
+                            )
                             _finish_invocation(
                                 self._handler.fail_invoke_agent,
                                 invocation,
-                                _error(error),
+                                invoke_error,
                             )
                 finally:
+                    exit_run_state()
                     exit_identity()
 
         return generator()
@@ -245,23 +406,33 @@ class AgnoAgentWrapper:
     ) -> Any:
         invocation = create_agent_invocation(instance, arguments)
         self._handler.start_invoke_agent(invocation, context=parent_context)
+        state = _AgnoRunState(
+            handler=self._handler,
+            agent_context=otel_context.get_current(),
+        )
+        state_token = _AGNO_RUN_STATE.set(state)
         identity_token = set_current_agno_run_identity(invocation.attributes)
         try:
             response = wrapped(*args, **kwargs)
             if inspect.isawaitable(response):
                 response = await response
             update_agent_invocation_from_response(invocation, response)
+            _apply_agent_token_fallback(invocation, state)
+            _close_active_react_step(self._handler, state, "stop")
             _finish_invocation(self._handler.stop_invoke_agent, invocation)
             return response
         except Exception as exc:
+            error = _error(exc)
+            _fail_active_react_step(self._handler, state, error)
             _finish_invocation(
                 self._handler.fail_invoke_agent,
                 invocation,
-                _error(exc),
+                error,
             )
             raise
         finally:
             reset_current_agno_run_identity(identity_token)
+            _AGNO_RUN_STATE.reset(state_token)
 
     async def _arun_stream(
         self,
@@ -277,8 +448,14 @@ class AgnoAgentWrapper:
         events = []
         finalized = False
         error = None
+        state = None
+        state_token = None
         self._handler.start_invoke_agent(invocation, context=parent_context)
         identity_token = None
+        state = _AgnoRunState(
+            handler=self._handler,
+            agent_context=otel_context.get_current(),
+        )
 
         def enter_identity() -> None:
             nonlocal identity_token
@@ -292,7 +469,18 @@ class AgnoAgentWrapper:
                 reset_current_agno_run_identity(identity_token)
                 identity_token = None
 
+        def enter_run_state() -> None:
+            nonlocal state_token
+            state_token = _AGNO_RUN_STATE.set(state)
+
+        def exit_run_state() -> None:
+            nonlocal state_token
+            if state_token is not None:
+                _AGNO_RUN_STATE.reset(state_token)
+                state_token = None
+
         enter_identity()
+        enter_run_state()
         try:
             stream = wrapped(*args, **kwargs)
             if inspect.isawaitable(stream):
@@ -301,14 +489,18 @@ class AgnoAgentWrapper:
                 if invocation.monotonic_first_token_s is None:
                     invocation.monotonic_first_token_s = timeit.default_timer()
                 events.append(event)
-                # Do not expose run-local identity to caller code while
-                # the stream chunk is yielded outside this wrapper.
+                # Do not expose run-local state to caller code while the
+                # stream chunk is yielded outside this wrapper.
+                exit_run_state()
                 exit_identity()
                 try:
                     yield event
                 finally:
                     enter_identity()
+                    enter_run_state()
             update_agent_invocation_from_events(invocation, events)
+            _apply_agent_token_fallback(invocation, state)
+            _close_active_react_step(self._handler, state, "stop")
             _finish_invocation(self._handler.stop_invoke_agent, invocation)
             finalized = True
         except BaseException as exc:
@@ -319,16 +511,23 @@ class AgnoAgentWrapper:
                 if not finalized:
                     if error is None or _is_stream_close(error):
                         update_agent_invocation_from_events(invocation, events)
+                        _apply_agent_token_fallback(invocation, state)
+                        _close_active_react_step(self._handler, state, "stop")
                         _finish_invocation(
                             self._handler.stop_invoke_agent, invocation
                         )
                     else:
+                        invoke_error = _error(error)
+                        _fail_active_react_step(
+                            self._handler, state, invoke_error
+                        )
                         _finish_invocation(
                             self._handler.fail_invoke_agent,
                             invocation,
-                            _error(error),
+                            invoke_error,
                         )
             finally:
+                exit_run_state()
                 exit_identity()
 
 
@@ -392,6 +591,264 @@ class AgnoFunctionCallWrapper:
 class AgnoModelWrapper:
     def __init__(self, handler: ExtendedTelemetryHandler) -> None:
         self._handler = handler
+
+    def _start_llm_call(
+        self,
+        instance: Any,
+        arguments: Mapping[str, Any],
+    ) -> tuple[_AgnoRunState | None, Any]:
+        state = _current_run_state(self._handler)
+        _start_next_react_step(self._handler, state)
+        invocation = create_llm_invocation(instance, arguments)
+        self._handler.start_llm(invocation, context=otel_context.get_current())
+        return state, invocation
+
+    def _finish_llm_call(
+        self,
+        state: _AgnoRunState | None,
+        invocation: Any,
+        response: Any,
+    ) -> None:
+        update_llm_invocation_from_response(invocation, response)
+        _record_llm_usage(state, invocation)
+        _finish_invocation(self._handler.stop_llm, invocation)
+        _finish_react_step_after_llm(self._handler, state, response)
+
+    def _fail_llm_call(
+        self,
+        state: _AgnoRunState | None,
+        invocation: Any,
+        exc: BaseException,
+    ) -> None:
+        error = _error(exc)
+        _finish_invocation(self._handler.fail_llm, invocation, error)
+        _fail_active_react_step(self._handler, state, error)
+
+    @staticmethod
+    def _response_for_llm_finish(
+        arguments: Mapping[str, Any],
+        responses: list[Any] | None = None,
+    ) -> Any:
+        if responses:
+            return _merge_model_responses(responses)
+        assistant_message = arguments.get("assistant_message")
+        if assistant_message is not None and (
+            getattr(assistant_message, "metrics", None) is not None
+            or getattr(assistant_message, "content", None) is not None
+            or getattr(assistant_message, "reasoning_content", None)
+            is not None
+            or getattr(assistant_message, "tool_calls", None)
+        ):
+            return assistant_message
+        return assistant_message
+
+    def process_model_response(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        arguments = bind_arguments(wrapped, *args, **kwargs)
+        if instance is None:
+            return wrapped(*args, **kwargs)
+        state, invocation = self._start_llm_call(instance, arguments)
+        try:
+            response = wrapped(*args, **kwargs)
+            self._finish_llm_call(
+                state,
+                invocation,
+                self._response_for_llm_finish(arguments),
+            )
+            return response
+        except BaseException as exc:
+            self._fail_llm_call(state, invocation, exc)
+            raise
+
+    async def aprocess_model_response(
+        self,
+        wrapped: Callable[..., Awaitable[Any]],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        arguments = bind_arguments(wrapped, *args, **kwargs)
+        if instance is None:
+            return await wrapped(*args, **kwargs)
+        state, invocation = self._start_llm_call(instance, arguments)
+        try:
+            response = await wrapped(*args, **kwargs)
+            self._finish_llm_call(
+                state,
+                invocation,
+                self._response_for_llm_finish(arguments),
+            )
+            return response
+        except BaseException as exc:
+            self._fail_llm_call(state, invocation, exc)
+            raise
+
+    def process_response_stream(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Iterator[Any]:
+        arguments = bind_arguments(wrapped, *args, **kwargs)
+        if instance is None:
+            yield from wrapped(*args, **kwargs)
+            return
+
+        state, invocation = self._start_llm_call(instance, arguments)
+        responses = []
+        finalized = False
+        error = None
+        try:
+            stream = wrapped(*args, **kwargs)
+            for response in stream:
+                if invocation.monotonic_first_token_s is None:
+                    invocation.monotonic_first_token_s = timeit.default_timer()
+                responses.append(response)
+                yield response
+            self._finish_llm_call(
+                state,
+                invocation,
+                self._response_for_llm_finish(arguments, responses),
+            )
+            finalized = True
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            if not finalized:
+                if error is None or _is_stream_close(error):
+                    self._finish_llm_call(
+                        state,
+                        invocation,
+                        self._response_for_llm_finish(arguments, responses),
+                    )
+                else:
+                    self._fail_llm_call(state, invocation, error)
+
+    async def aprocess_response_stream(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> AsyncIterator[Any]:
+        arguments = bind_arguments(wrapped, *args, **kwargs)
+        if instance is None:
+            async for response in wrapped(*args, **kwargs):
+                yield response
+            return
+
+        state, invocation = self._start_llm_call(instance, arguments)
+        responses = []
+        finalized = False
+        error = None
+        try:
+            stream = wrapped(*args, **kwargs)
+            if inspect.isawaitable(stream):
+                stream = await stream
+            async for response in stream:
+                if invocation.monotonic_first_token_s is None:
+                    invocation.monotonic_first_token_s = timeit.default_timer()
+                responses.append(response)
+                yield response
+            self._finish_llm_call(
+                state,
+                invocation,
+                self._response_for_llm_finish(arguments, responses),
+            )
+            finalized = True
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            if not finalized:
+                if error is None or _is_stream_close(error):
+                    self._finish_llm_call(
+                        state,
+                        invocation,
+                        self._response_for_llm_finish(arguments, responses),
+                    )
+                else:
+                    self._fail_llm_call(state, invocation, error)
+
+    def run_function_calls(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> Iterator[Any]:
+        if instance is None:
+            yield from wrapped(*args, **kwargs)
+            return
+
+        state = _current_run_state(self._handler)
+        finalized = False
+        error = None
+        try:
+            for response in wrapped(*args, **kwargs):
+                yield response
+            if state is not None:
+                _close_active_react_step(self._handler, state, "tool_calls")
+            finalized = True
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            if not finalized and state is not None and state.active_step:
+                if error is None or _is_stream_close(error):
+                    _close_active_react_step(
+                        self._handler, state, "tool_calls"
+                    )
+                else:
+                    _fail_active_react_step(
+                        self._handler,
+                        state,
+                        _error(error),
+                    )
+
+    async def arun_function_calls(
+        self,
+        wrapped: Callable[..., Any],
+        instance: Any,
+        args: tuple[Any, ...],
+        kwargs: Mapping[str, Any],
+    ) -> AsyncIterator[Any]:
+        if instance is None:
+            async for response in wrapped(*args, **kwargs):
+                yield response
+            return
+
+        state = _current_run_state(self._handler)
+        finalized = False
+        error = None
+        try:
+            async for response in wrapped(*args, **kwargs):
+                yield response
+            if state is not None:
+                _close_active_react_step(self._handler, state, "tool_calls")
+            finalized = True
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            if not finalized and state is not None and state.active_step:
+                if error is None or _is_stream_close(error):
+                    _close_active_react_step(
+                        self._handler, state, "tool_calls"
+                    )
+                else:
+                    _fail_active_react_step(
+                        self._handler,
+                        state,
+                        _error(error),
+                    )
 
     def response(
         self,
