@@ -583,3 +583,260 @@ def test_activate_span_wrapper_supports_async_context_manager():
     assert (
         getattr(span, util_genai_bridge._STREAM_FIRST_TOKEN_ATTR) is not None
     )
+
+
+def test_legacy_streaming_agent_context_parents_inner_spans(monkeypatch):
+    """MAF 1.0 created streaming agent spans after ``execute()``.
+
+    The returned stream then produced inner chat/tool spans without the agent
+    span as current context. The legacy bridge patch must create the agent span
+    first and activate it while the stream resolves and pulls updates.
+    """
+
+    tp = TracerProvider()
+    exporter = InMemorySpanExporter()
+    tp.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = tp.get_tracer("fake-legacy-maf")
+
+    class _OtelAttr:
+        OPERATION = GEN_AI_OPERATION_NAME
+        AGENT_NAME = "gen_ai.agent.name"
+        AGENT_ID = "gen_ai.agent.id"
+        AGENT_INVOKE_OPERATION = GenAIOperation.INVOKE_AGENT
+
+    class _Settings:
+        ENABLED = True
+        SENSITIVE_DATA_ENABLED = True
+
+    class _ResponseStream:
+        def __init__(self, stream, *, finalizer=None):
+            self._stream_source = stream
+            self._stream = None
+            self._iterator = None
+            self._updates = []
+            self._finalizer = finalizer
+            self._finalized = False
+            self._final_result = None
+            self._cleanup_hooks = []
+            self._cleanup_run = False
+            self._transform_hooks = []
+            self._result_hooks = []
+            self._map_update = None
+            self._consumed = False
+            self._wrap_inner = False
+
+        @classmethod
+        def from_awaitable(cls, awaitable):
+            return cls(awaitable)
+
+        async def _get_stream(self):
+            if self._stream is None:
+                if hasattr(self._stream_source, "__aiter__"):
+                    self._stream = self._stream_source
+                else:
+                    self._stream = await self._stream_source
+            return self._stream
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._iterator is None:
+                stream = await self._get_stream()
+                self._iterator = stream.__aiter__()
+            try:
+                update = await self._iterator.__anext__()
+            except StopAsyncIteration:
+                self._consumed = True
+                await self._run_cleanup_hooks()
+                await self.get_final_response()
+                raise
+            self._updates.append(update)
+            return update
+
+        def __await__(self):
+            async def _wrap():
+                await self._get_stream()
+                return self
+
+            return _wrap().__await__()
+
+        async def get_final_response(self):
+            if not self._finalized and not self._consumed:
+                async for _ in self:
+                    pass
+            if not self._finalized:
+                if self._finalizer is None:
+                    self._final_result = types.SimpleNamespace(
+                        messages=[], usage_details=None
+                    )
+                else:
+                    result = self._finalizer(self._updates)
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                    self._final_result = result
+                self._finalized = True
+            return self._final_result
+
+        def with_cleanup_hook(self, hook):
+            self._cleanup_hooks.append(hook)
+            return self
+
+        async def _run_cleanup_hooks(self):
+            if self._cleanup_run:
+                return
+            self._cleanup_run = True
+            for hook in self._cleanup_hooks:
+                result = hook()
+                if asyncio.iscoroutine(result):
+                    await result
+
+    @contextlib.contextmanager
+    def _get_span(attributes, span_name_attribute):
+        span = tracer.start_span(
+            f"{attributes[GEN_AI_OPERATION_NAME]} {attributes[span_name_attribute]}"
+        )
+        span.set_attributes(attributes)
+        with trace.use_span(span, end_on_exit=True) as current_span:
+            yield current_span
+
+    @contextlib.contextmanager
+    def get_function_span(attributes):
+        span = tracer.start_span(
+            f"{attributes[GEN_AI_OPERATION_NAME]} {attributes['gen_ai.tool.name']}"
+        )
+        span.set_attributes(attributes)
+        with trace.use_span(span, end_on_exit=True) as current_span:
+            yield current_span
+
+    class _AgentTelemetryLayer:
+        id = "agent-1"
+        name = "legacy-agent"
+        description = None
+        otel_provider_name = "microsoft.agent_framework"
+
+        def _trace_agent_invocation(self, **kwargs):
+            return kwargs["execute"]()
+
+    def _get_span_attributes(**kwargs):
+        attrs = {
+            GEN_AI_OPERATION_NAME: kwargs["operation_name"],
+            GEN_AI_PROVIDER_NAME: kwargs["provider_name"],
+        }
+        if kwargs.get("agent_name"):
+            attrs["gen_ai.agent.name"] = kwargs["agent_name"]
+        if kwargs.get("agent_id"):
+            attrs["gen_ai.agent.id"] = kwargs["agent_id"]
+        return attrs
+
+    def _capture_response(span, attributes, **_kwargs):
+        span.set_attributes(attributes)
+
+    def _capture_messages(span, messages, output=False, **_kwargs):
+        attr = "gen_ai.output.messages" if output else "gen_ai.input.messages"
+        role = "assistant" if output else "user"
+        span.set_attribute(
+            attr,
+            json.dumps(
+                [
+                    {
+                        "role": role,
+                        "parts": [{"type": "text", "content": str(message)}],
+                    }
+                    for message in messages
+                ]
+            ),
+        )
+
+    obs_mod = types.ModuleType("agent_framework.observability")
+    obs_mod.OtelAttr = _OtelAttr
+    obs_mod.OBSERVABILITY_SETTINGS = _Settings
+    obs_mod.INNER_RESPONSE_TELEMETRY_CAPTURED_FIELDS = __import__(
+        "contextvars"
+    ).ContextVar("fields")
+    obs_mod.INNER_ACCUMULATED_USAGE = __import__("contextvars").ContextVar(
+        "usage"
+    )
+    obs_mod.INNER_RESPONSE_ID_CAPTURED_FIELD = "response_id"
+    obs_mod.INNER_USAGE_CAPTURED_FIELD = "usage"
+    obs_mod.AgentTelemetryLayer = _AgentTelemetryLayer
+    obs_mod._get_span = _get_span
+    obs_mod.get_function_span = get_function_span
+    obs_mod.get_tracer = lambda: tracer
+    obs_mod._get_span_attributes = _get_span_attributes
+    obs_mod._get_instructions_from_options = lambda _options: None
+    obs_mod._capture_messages = _capture_messages
+    obs_mod._get_response_attributes = lambda _attrs, _response, **_kwargs: {}
+    obs_mod._apply_accumulated_usage = lambda _attrs, _fields: None
+    obs_mod._capture_response = _capture_response
+    obs_mod.capture_exception = lambda span, exception, timestamp: (
+        span.record_exception(exception)
+    )
+
+    af_mod = types.ModuleType("agent_framework")
+    af_mod.observability = obs_mod
+    types_mod = types.ModuleType("agent_framework._types")
+    types_mod.ResponseStream = _ResponseStream
+    tools_mod = types.ModuleType("agent_framework._tools")
+    tools_mod.get_function_span = get_function_span
+    mcp_mod = types.ModuleType("agent_framework._mcp")
+
+    monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework.observability", obs_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._types", types_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._tools", tools_mod)
+    monkeypatch.setitem(sys.modules, "agent_framework._mcp", mcp_mod)
+
+    original_anext = _ResponseStream.__anext__
+    original_run_cleanup_hooks = _ResponseStream._run_cleanup_hooks
+
+    util_genai_bridge.revert_util_genai_bridge()
+    util_genai_bridge.apply_util_genai_bridge()
+    try:
+        assert hasattr(_ResponseStream, "with_pull_context_manager")
+        patched_anext = _ResponseStream.__anext__
+        util_genai_bridge.apply_util_genai_bridge()
+        assert _ResponseStream.__anext__ is patched_anext
+
+        async def _updates():
+            with tracer.start_as_current_span("chat qwen-plus"):
+                yield "delta"
+
+        def _execute():
+            return _ResponseStream(
+                _updates(),
+                finalizer=lambda _updates: types.SimpleNamespace(
+                    messages=["done"], usage_details=None
+                ),
+            )
+
+        stream = _AgentTelemetryLayer()._trace_agent_invocation(
+            messages=["hello"],
+            session=None,
+            merged_options={},
+            client_kwargs=None,
+            stream=True,
+            execute=_execute,
+        )
+
+        async def _consume():
+            async for _ in stream:
+                pass
+
+        asyncio.run(_consume())
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    spans = exporter.get_finished_spans()
+    by_name = {span.name: span for span in spans}
+    agent = by_name["invoke_agent legacy-agent"]
+    chat = by_name["chat qwen-plus"]
+    assert chat.parent.span_id == agent.context.span_id
+    assert chat.context.trace_id == agent.context.trace_id
+    input_messages = json.loads(agent.attributes["gen_ai.input.messages"])
+    assert input_messages[0]["parts"][0]["content"] == "hello"
+    output_messages = json.loads(agent.attributes["gen_ai.output.messages"])
+    assert output_messages[0]["parts"][0]["content"] == "done"
+    assert not hasattr(_ResponseStream, "with_pull_context_manager")
+    assert _ResponseStream.__anext__ is original_anext
+    assert _ResponseStream._run_cleanup_hooks is original_run_cleanup_hooks

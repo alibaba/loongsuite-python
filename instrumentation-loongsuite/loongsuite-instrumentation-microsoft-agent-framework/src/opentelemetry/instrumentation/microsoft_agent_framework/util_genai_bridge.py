@@ -27,7 +27,10 @@ import contextlib
 import inspect
 import json
 import logging
+import sys
 import timeit
+import weakref
+from time import perf_counter, time_ns
 from typing import Any, AsyncGenerator, Callable, Generator, Mapping, Optional
 
 from opentelemetry import trace as otel_trace
@@ -102,6 +105,8 @@ _original_get_function_span: Any = None
 _original_create_mcp_client_span: Any = None
 _original_tools_get_function_span: Any = None
 _original_mcp_create_mcp_client_span: Any = None
+_original_agent_trace_invocation: Any = None
+_legacy_response_stream_originals: dict[str, Any] = {}
 
 _FINALIZED_ATTR = "_loongsuite_util_genai_finalized"
 _END_WRAPPED_ATTR = "_loongsuite_util_genai_end_wrapped"
@@ -129,6 +134,7 @@ def apply_util_genai_bridge() -> None:
     global _original_get_span
     global _original_start_streaming_span
     global _original_tools_get_function_span
+    global _original_agent_trace_invocation
 
     if _applied:
         return
@@ -156,6 +162,11 @@ def apply_util_genai_bridge() -> None:
     )
     _original_create_mcp_client_span = getattr(
         observability, "create_mcp_client_span", None
+    )
+    _original_agent_trace_invocation = getattr(
+        getattr(observability, "AgentTelemetryLayer", None),
+        "_trace_agent_invocation",
+        None,
     )
 
     wrapped_get_span = (
@@ -191,6 +202,16 @@ def apply_util_genai_bridge() -> None:
         observability.get_function_span = wrapped_get_function_span  # type: ignore[attr-defined]
     if wrapped_create_mcp_client_span is not None:
         observability.create_mcp_client_span = wrapped_create_mcp_client_span  # type: ignore[attr-defined]
+
+    legacy_response_stream_patched = _patch_legacy_response_stream()
+    if legacy_response_stream_patched and _original_agent_trace_invocation:
+        agent_cls = getattr(observability, "AgentTelemetryLayer", None)
+        if agent_cls is not None:
+            agent_cls._trace_agent_invocation = (
+                _wrap_legacy_agent_trace_invocation(  # type: ignore[attr-defined]
+                    _original_agent_trace_invocation
+                )
+            )
 
     try:
         import agent_framework._tools as tools_mod  # type: ignore
@@ -228,6 +249,7 @@ def revert_util_genai_bridge() -> None:
     global _original_get_span
     global _original_start_streaming_span
     global _original_tools_get_function_span
+    global _original_agent_trace_invocation
 
     if not _applied:
         return
@@ -247,6 +269,14 @@ def revert_util_genai_bridge() -> None:
         if _original_create_mcp_client_span is not None:
             observability.create_mcp_client_span = (
                 _original_create_mcp_client_span  # type: ignore[attr-defined]
+            )
+        agent_cls = getattr(observability, "AgentTelemetryLayer", None)
+        if (
+            agent_cls is not None
+            and _original_agent_trace_invocation is not None
+        ):
+            agent_cls._trace_agent_invocation = (  # type: ignore[attr-defined]
+                _original_agent_trace_invocation
             )
     except ImportError:
         pass
@@ -275,6 +305,301 @@ def revert_util_genai_bridge() -> None:
     _original_create_mcp_client_span = None
     _original_tools_get_function_span = None
     _original_mcp_create_mcp_client_span = None
+    _original_agent_trace_invocation = None
+    _restore_legacy_response_stream()
+
+
+def _patch_legacy_response_stream() -> bool:
+    """Add per-pull context support to older MAF ``ResponseStream``.
+
+    MAF 1.0 streaming spans were created detached and the stream type had no
+    pull-context hook, so child spans created while resolving/iterating the
+    stream became roots. MAF 1.10 added ``with_pull_context_manager``; this
+    compatibility shim backports only that context propagation surface.
+    """
+    global _legacy_response_stream_originals
+
+    if _legacy_response_stream_originals:
+        return True
+    try:
+        from agent_framework._types import ResponseStream  # type: ignore
+    except ImportError:
+        return False
+    if hasattr(ResponseStream, "with_pull_context_manager"):
+        return False
+
+    originals = {
+        "__init__": ResponseStream.__init__,
+        "_get_stream": ResponseStream._get_stream,
+        "__anext__": ResponseStream.__anext__,
+        "_run_cleanup_hooks": ResponseStream._run_cleanup_hooks,
+    }
+    _legacy_response_stream_originals = originals
+
+    original_init = originals["__init__"]
+    original_get_stream = originals["_get_stream"]
+    original_anext = originals["__anext__"]
+    original_run_cleanup_hooks = originals["_run_cleanup_hooks"]
+
+    def _init(self: Any, *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        self._pull_context_manager_factories = []
+        self._stream_error = None
+
+    async def _get_stream(self: Any) -> Any:
+        if getattr(self, "_stream", None) is not None:
+            # The stream is already resolved; child spans are created while
+            # pulling updates, which is covered by the patched ``__anext__``.
+            return await original_get_stream(self)
+        with contextlib.ExitStack() as stack:
+            for factory in getattr(
+                self, "_pull_context_manager_factories", ()
+            ):
+                stack.enter_context(factory())
+            return await original_get_stream(self)
+
+    async def _anext(self: Any) -> Any:
+        with contextlib.ExitStack() as stack:
+            for factory in getattr(
+                self, "_pull_context_manager_factories", ()
+            ):
+                stack.enter_context(factory())
+            return await original_anext(self)
+
+    async def _run_cleanup_hooks(self: Any) -> Any:
+        _, exc, _ = sys.exc_info()
+        if exc is not None and not isinstance(exc, StopAsyncIteration):
+            self._stream_error = exc
+        try:
+            with contextlib.ExitStack() as stack:
+                for factory in getattr(
+                    self, "_pull_context_manager_factories", ()
+                ):
+                    stack.enter_context(factory())
+                return await original_run_cleanup_hooks(self)
+        finally:
+            if exc is not None:
+                self._stream_error = None
+
+    def _with_pull_context_manager(self: Any, cm_factory: Callable[[], Any]):
+        self._pull_context_manager_factories.append(cm_factory)
+        return self
+
+    ResponseStream.__init__ = _init  # type: ignore[assignment]
+    ResponseStream._get_stream = _get_stream  # type: ignore[assignment]
+    ResponseStream.__anext__ = _anext  # type: ignore[assignment]
+    ResponseStream._run_cleanup_hooks = _run_cleanup_hooks  # type: ignore[assignment]
+    ResponseStream.with_pull_context_manager = _with_pull_context_manager  # type: ignore[attr-defined]
+    return True
+
+
+def _restore_legacy_response_stream() -> None:
+    global _legacy_response_stream_originals
+    if not _legacy_response_stream_originals:
+        return
+    try:
+        from agent_framework._types import ResponseStream  # type: ignore
+    except ImportError:
+        _legacy_response_stream_originals = {}
+        return
+    ResponseStream.__init__ = _legacy_response_stream_originals["__init__"]  # type: ignore[assignment]
+    ResponseStream._get_stream = _legacy_response_stream_originals[
+        "_get_stream"
+    ]  # type: ignore[assignment]
+    ResponseStream.__anext__ = _legacy_response_stream_originals["__anext__"]  # type: ignore[assignment]
+    ResponseStream._run_cleanup_hooks = _legacy_response_stream_originals[  # type: ignore[assignment]
+        "_run_cleanup_hooks"
+    ]
+    try:
+        delattr(ResponseStream, "with_pull_context_manager")
+    except AttributeError:
+        pass
+    _legacy_response_stream_originals = {}
+
+
+def _wrap_legacy_agent_trace_invocation(
+    original: Callable[..., Any],
+) -> Callable[..., Any]:
+    def _trace_agent_invocation(self: Any, *args: Any, **kwargs: Any) -> Any:
+        if args or not kwargs.get("stream"):
+            return original(self, *args, **kwargs)
+        return _legacy_streaming_agent_invocation(self, **kwargs)
+
+    return _trace_agent_invocation
+
+
+def _legacy_streaming_agent_invocation(self: Any, **kwargs: Any) -> Any:
+    import agent_framework.observability as observability  # type: ignore
+    from agent_framework._types import ResponseStream  # type: ignore
+
+    execute = kwargs["execute"]
+    messages = kwargs.get("messages")
+    session = kwargs.get("session")
+    merged_options = kwargs.get("merged_options") or {}
+    client_kwargs = kwargs.get("client_kwargs")
+    if not observability.OBSERVABILITY_SETTINGS.ENABLED:
+        return execute()
+
+    provider_name = str(getattr(self, "otel_provider_name", "unknown"))
+    merged_client_kwargs = (
+        dict(client_kwargs) if client_kwargs is not None else {}
+    )
+    OtelAttr = observability.OtelAttr
+    attributes = observability._get_span_attributes(
+        operation_name=OtelAttr.AGENT_INVOKE_OPERATION,
+        provider_name=provider_name,
+        agent_id=getattr(self, "id", "unknown"),
+        agent_name=getattr(self, "name", None)
+        or getattr(self, "id", "unknown"),
+        agent_description=getattr(self, "description", None),
+        thread_id=session.service_session_id if session else None,
+        all_options=dict(merged_options),
+        **merged_client_kwargs,
+    )
+
+    operation = attributes.get(OtelAttr.OPERATION, "operation")
+    span_name = attributes.get(OtelAttr.AGENT_NAME, "unknown")
+    span = observability.get_tracer().start_span(
+        f"{operation} {span_name}",
+        kind=otel_trace.SpanKind.INTERNAL,
+        attributes=attributes,
+    )
+    _mark_maf_live_span(span)
+    _wrap_span_end(span)
+
+    if (
+        observability.OBSERVABILITY_SETTINGS.SENSITIVE_DATA_ENABLED
+        and messages
+        and span.is_recording()
+    ):
+        observability._capture_messages(
+            span=span,
+            provider_name=provider_name,
+            messages=messages,
+            system_instructions=observability._get_instructions_from_options(
+                dict(merged_options)
+            ),
+        )
+
+    span_state = {"closed": False}
+    duration_state: dict[str, float] = {}
+    start_time = perf_counter()
+    inner_response_telemetry_captured_fields: set[str] = set()
+    inner_accumulated_usage: dict[str, Any] = {}
+
+    def _close_span() -> None:
+        if span_state["closed"]:
+            return
+        span_state["closed"] = True
+        span.end()
+
+    def _record_duration() -> None:
+        duration_state["duration"] = perf_counter() - start_time
+
+    try:
+        with _activate_live_span(span):
+            run_result = execute()
+        if isinstance(run_result, ResponseStream):
+            result_stream = run_result
+        elif inspect.isawaitable(run_result):
+            result_stream = ResponseStream.from_awaitable(run_result)
+        else:
+            raise RuntimeError(
+                "Streaming telemetry requires a ResponseStream result."
+            )
+    except Exception as exception:
+        observability.capture_exception(
+            span=span, exception=exception, timestamp=time_ns()
+        )
+        _close_span()
+        raise
+
+    async def _finalize_stream() -> None:
+        try:
+            stream_error = getattr(result_stream, "_stream_error", None)
+            if stream_error is not None:
+                observability.capture_exception(
+                    span=span, exception=stream_error, timestamp=time_ns()
+                )
+                return
+            response = await result_stream.get_final_response()
+            response_attributes = observability._get_response_attributes(
+                attributes,
+                response,
+                capture_response_id=(
+                    observability.INNER_RESPONSE_ID_CAPTURED_FIELD
+                    not in inner_response_telemetry_captured_fields
+                ),
+                capture_usage=(
+                    observability.INNER_USAGE_CAPTURED_FIELD
+                    not in inner_response_telemetry_captured_fields
+                ),
+            )
+            observability._apply_accumulated_usage(
+                response_attributes,
+                inner_response_telemetry_captured_fields,
+            )
+            observability._capture_response(
+                span=span,
+                attributes=response_attributes,
+                duration=duration_state.get("duration"),
+            )
+            if (
+                observability.OBSERVABILITY_SETTINGS.SENSITIVE_DATA_ENABLED
+                and getattr(response, "messages", None)
+                and span.is_recording()
+            ):
+                observability._capture_messages(
+                    span=span,
+                    provider_name=provider_name,
+                    messages=response.messages,
+                    output=True,
+                )
+        except Exception as exception:
+            observability.capture_exception(
+                span=span, exception=exception, timestamp=time_ns()
+            )
+        finally:
+            _close_span()
+
+    @contextlib.contextmanager
+    def _inner_telemetry_pull_context() -> Any:
+        fields_token = (
+            observability.INNER_RESPONSE_TELEMETRY_CAPTURED_FIELDS.set(
+                inner_response_telemetry_captured_fields
+            )
+        )
+        usage_token = observability.INNER_ACCUMULATED_USAGE.set(
+            inner_accumulated_usage
+        )
+        try:
+            with _activate_live_span(span):
+                yield
+        finally:
+            observability.INNER_ACCUMULATED_USAGE.reset(usage_token)
+            observability.INNER_RESPONSE_TELEMETRY_CAPTURED_FIELDS.reset(
+                fields_token
+            )
+
+    wrapped_stream = (
+        result_stream.with_cleanup_hook(_record_duration)
+        .with_cleanup_hook(_finalize_stream)
+        .with_pull_context_manager(_inner_telemetry_pull_context)
+    )
+    try:
+        weakref.finalize(wrapped_stream, _close_span)
+    except TypeError:
+        logger.debug("MAF ResponseStream is not weak-referenceable")
+    return wrapped_stream
+
+
+def _activate_live_span(span: OtelSpan) -> Any:
+    return otel_trace.use_span(
+        span=span,
+        end_on_exit=False,
+        record_exception=False,
+        set_status_on_exception=False,
+    )
 
 
 def _wrap_get_span(original: Callable[..., Any]) -> Callable[..., Any]:
