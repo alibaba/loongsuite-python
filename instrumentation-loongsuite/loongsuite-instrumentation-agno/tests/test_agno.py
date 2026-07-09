@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Iterator
@@ -186,6 +187,64 @@ class ToolLoopModel(Model):
         return response
 
 
+class LatencyToolLoopModel(ToolLoopModel):
+    def __init__(self, delay_s: float = 0.03):
+        super().__init__()
+        self.delay_s = delay_s
+
+    def invoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        time.sleep(self.delay_s)
+        return self._next_response()
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        await asyncio.sleep(self.delay_s)
+        return self._next_response()
+
+    def invoke_stream(self, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        response = self._next_response()
+        time.sleep(self.delay_s)
+        if response.tool_calls:
+            yield ModelResponse(
+                role="assistant",
+                tool_calls=response.tool_calls,
+                response_usage=response.response_usage,
+            )
+            return
+        yield ModelResponse(
+            role="assistant",
+            content="sunny ",
+            response_usage=MessageMetrics(input_tokens=20, output_tokens=1),
+        )
+        time.sleep(self.delay_s)
+        yield ModelResponse(
+            role="assistant",
+            content="in Hangzhou",
+            response_usage=MessageMetrics(output_tokens=2),
+        )
+
+    async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> AsyncIterator:
+        response = self._next_response()
+        await asyncio.sleep(self.delay_s)
+        if response.tool_calls:
+            yield ModelResponse(
+                role="assistant",
+                tool_calls=response.tool_calls,
+                response_usage=response.response_usage,
+            )
+            return
+        yield ModelResponse(
+            role="assistant",
+            content="sunny ",
+            response_usage=MessageMetrics(input_tokens=20, output_tokens=1),
+        )
+        await asyncio.sleep(self.delay_s)
+        yield ModelResponse(
+            role="assistant",
+            content="in Hangzhou",
+            response_usage=MessageMetrics(output_tokens=2),
+        )
+
+
 @pytest.fixture
 def span_exporter() -> InMemorySpanExporter:
     return InMemorySpanExporter()
@@ -226,6 +285,10 @@ def _spans_by_kind(
         ],
         key=lambda span: span.start_time,
     )
+
+
+def _duration_ms(span: Any) -> float:
+    return (span.end_time - span.start_time) / 1_000_000
 
 
 def _weather_tool() -> Function:
@@ -896,6 +959,40 @@ def test_stream_tool_call_loop_emits_agent_tokens_and_split_llm_spans(
     list(agent.run("what is the weather", stream=True))
 
     _assert_tool_loop_tree(span_exporter, "StreamToolLoopAgent")
+
+
+def test_tool_call_loop_llm_spans_cover_provider_latency(
+    span_exporter: InMemorySpanExporter,
+):
+    agent = Agent(
+        name="LatencyToolLoopAgent",
+        model=LatencyToolLoopModel(),
+        tools=[_weather_tool()],
+        telemetry=False,
+    )
+
+    agent.run("what is the weather")
+
+    llm_spans = _spans_by_kind(span_exporter, "LLM")
+    assert len(llm_spans) == 2
+    assert all(_duration_ms(span) >= 25 for span in llm_spans)
+
+
+def test_stream_tool_call_loop_llm_spans_cover_provider_latency(
+    span_exporter: InMemorySpanExporter,
+):
+    agent = Agent(
+        name="LatencyStreamToolLoopAgent",
+        model=LatencyToolLoopModel(),
+        tools=[_weather_tool()],
+        telemetry=False,
+    )
+
+    list(agent.run("what is the weather", stream=True))
+
+    llm_spans = _spans_by_kind(span_exporter, "LLM")
+    assert len(llm_spans) == 2
+    assert all(_duration_ms(span) >= 25 for span in llm_spans)
 
 
 def test_async_stream_tool_call_loop_emits_agent_tokens_and_split_llm_spans(
