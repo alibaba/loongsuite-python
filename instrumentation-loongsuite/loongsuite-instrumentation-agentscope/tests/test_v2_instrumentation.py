@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
+import json
 import os
 from dataclasses import asdict
 from types import SimpleNamespace
@@ -41,12 +42,16 @@ from agentscope.message import (  # noqa: E402
 from agentscope.model import ChatResponse, DashScopeChatModel  # noqa: E402
 from agentscope.tool import ToolResponse  # noqa: E402
 
+from opentelemetry import trace as trace_api  # noqa: E402
 from opentelemetry.instrumentation.agentscope._v2_middleware import (  # noqa: E402
     AgentScopeV2Middleware,
     _message_to_input,
 )
 from opentelemetry.instrumentation.agentscope.package import (  # noqa: E402
     get_installed_instrumentation_dependencies,
+)
+from opentelemetry.semconv._incubating.attributes import (  # noqa: E402
+    gen_ai_attributes as GenAI,
 )
 from opentelemetry.trace.status import StatusCode  # noqa: E402
 from opentelemetry.util.genai.utils import gen_ai_json_dumps  # noqa: E402
@@ -207,6 +212,114 @@ async def test_v2_streaming_model_call_error_path(instrument, span_exporter):
     span = _spans_by_operation(span_exporter.get_finished_spans(), "chat")[0]
     assert span.status.status_code == StatusCode.ERROR
     assert span.attributes["error.type"] == "RuntimeError"
+
+
+async def test_v2_streaming_model_call_starts_llm_span_before_model_handler(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="stream_suppression_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=True),
+    )
+    middleware = _middleware(agent._model_call_middlewares)
+    observed_current_span_ids = []
+    consumer_current_span_ids = []
+
+    async def stream_handler(**kwargs):
+        del kwargs
+        observed_current_span_ids.append(
+            trace_api.get_current_span().get_span_context().span_id
+        )
+
+        async def stream():
+            observed_current_span_ids.append(
+                trace_api.get_current_span().get_span_context().span_id
+            )
+            yield ChatResponse(
+                content=[TextBlock(text="partial")],
+                is_last=False,
+            )
+            observed_current_span_ids.append(
+                trace_api.get_current_span().get_span_context().span_id
+            )
+            yield ChatResponse(
+                content=[TextBlock(text="done")],
+                is_last=True,
+            )
+
+        return stream()
+
+    stream = await middleware.on_model_call(
+        agent,
+        {
+            "current_model": agent.model,
+            "messages": [UserMsg(name="user", content="hello")],
+        },
+        stream_handler,
+    )
+
+    async for _ in stream:
+        consumer_current_span_ids.append(
+            trace_api.get_current_span().get_span_context().span_id
+        )
+
+    spans = _spans_by_operation(span_exporter.get_finished_spans(), "chat")
+    assert len(spans) == 1
+    llm_span_id = spans[0].context.span_id
+    assert observed_current_span_ids == [llm_span_id, llm_span_id, llm_span_id]
+    assert consumer_current_span_ids == [llm_span_id, llm_span_id]
+    assert (
+        trace_api.get_current_span().get_span_context().span_id != llm_span_id
+    )
+
+
+async def test_v2_streaming_model_call_captures_input_and_output_content(
+    instrument_with_content,
+    span_exporter,
+):
+    agent = Agent(
+        name="stream_content_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=True),
+    )
+    middleware = _middleware(agent._model_call_middlewares)
+
+    async def stream_handler(**kwargs):
+        del kwargs
+
+        async def stream():
+            yield ChatResponse(
+                content=[TextBlock(text="partial")],
+                is_last=False,
+            )
+            yield ChatResponse(
+                content=[TextBlock(text="done")],
+                is_last=True,
+            )
+
+        return stream()
+
+    stream = await middleware.on_model_call(
+        agent,
+        {
+            "current_model": agent.model,
+            "messages": [UserMsg(name="user", content="hello")],
+        },
+        stream_handler,
+    )
+
+    async for _ in stream:
+        pass
+
+    span = _spans_by_operation(span_exporter.get_finished_spans(), "chat")[0]
+    input_messages = json.loads(span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
+    output_messages = json.loads(span.attributes[GenAI.GEN_AI_OUTPUT_MESSAGES])
+    assert input_messages[0]["role"] == "user"
+    assert input_messages[0]["parts"][0]["content"] == "hello"
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["parts"][0]["content"] == "done"
 
 
 async def test_v2_tool_acting_hook(instrument, span_exporter):
