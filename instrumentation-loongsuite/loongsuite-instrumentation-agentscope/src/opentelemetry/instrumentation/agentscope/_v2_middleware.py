@@ -31,7 +31,7 @@ from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatModelBase, ChatResponse
 from agentscope.tool import ToolResponse
 
-from opentelemetry.context import Context, get_current
+from opentelemetry.context import get_current
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation,
@@ -175,30 +175,20 @@ class AgentScopeV2Middleware(MiddlewareBase):
 
         invocation = _create_llm_invocation(model, input_kwargs)
         span_context = get_current()
-        started = False
-        if not _is_streaming_model(model, input_kwargs):
-            handler.start_llm(invocation, context=span_context)
-            started = True
+        handler.start_llm(invocation, context=span_context)
         try:
             result = await next_handler(**input_kwargs)
             if inspect.isasyncgen(result):
                 return self._wrap_model_stream(
                     result,
                     invocation,
-                    span_context,
                     handler,
-                    span_started=started,
                 )
 
-            if not started:
-                handler.start_llm(invocation, context=span_context)
-                started = True
             _finish_llm_invocation(invocation, result)
             handler.stop_llm(invocation)
             return result
         except BaseException as exc:
-            if not started:
-                handler.start_llm(invocation, context=span_context)
             handler.fail_llm(
                 invocation,
                 Error(message=str(exc) or type(exc).__name__, type=type(exc)),
@@ -209,17 +199,11 @@ class AgentScopeV2Middleware(MiddlewareBase):
         self,
         result: AsyncGenerator[ChatResponse, None],
         invocation: LLMInvocation,
-        span_context: Context,
         handler: ExtendedTelemetryHandler,
-        *,
-        span_started: bool,
     ) -> AsyncGenerator[ChatResponse, None]:
         first_token_seen = False
         last_chunk = None
         closed = False
-        if not span_started:
-            handler.start_llm(invocation, context=span_context)
-            span_started = True
         try:
             async for chunk in result:
                 if not first_token_seen:
@@ -239,7 +223,7 @@ class AgentScopeV2Middleware(MiddlewareBase):
             handler.stop_llm(invocation)
             closed = True
         finally:
-            if span_started and not closed:
+            if not closed:
                 handler.stop_llm(invocation)
 
     async def on_acting(
@@ -402,6 +386,10 @@ def _chat_response_to_output(response: ChatResponse) -> OutputMessage:
 
 
 def _blocks_to_parts(blocks: Sequence[Any]) -> list[Any]:
+    if blocks is None:
+        return []
+    if isinstance(blocks, str):
+        return [Text(content=blocks)]
     parts = []
     for block in blocks:
         block_type = getattr(block, "type", None)
