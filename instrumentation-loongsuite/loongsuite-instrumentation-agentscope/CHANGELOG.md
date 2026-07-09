@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Start AgentScope v2 streaming LLM spans before invoking the underlying model
+  call so TTFT and stream lifecycle are recorded on the framework LLM span.
+- Capture AgentScope v2 string message content as text parts so LLM input and
+  output message attributes are populated when content capture is enabled.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Added
