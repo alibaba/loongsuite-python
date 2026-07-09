@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Split Agno 2.x tool-call loops into ReAct step spans with one LLM span per
+  provider request, and populate streaming agent token usage from child LLM
+  spans when Agno run events do not include metrics.
 - Propagate Agno run user and session identity to model and tool spans while
   preferring ENTRY baggage identity over Agno framework-provided values.
 
