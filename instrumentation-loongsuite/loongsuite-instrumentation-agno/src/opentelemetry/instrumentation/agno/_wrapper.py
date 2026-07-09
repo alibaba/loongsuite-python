@@ -631,16 +631,7 @@ class AgnoModelWrapper:
     ) -> Any:
         if responses:
             return _merge_model_responses(responses)
-        assistant_message = arguments.get("assistant_message")
-        if assistant_message is not None and (
-            getattr(assistant_message, "metrics", None) is not None
-            or getattr(assistant_message, "content", None) is not None
-            or getattr(assistant_message, "reasoning_content", None)
-            is not None
-            or getattr(assistant_message, "tool_calls", None)
-        ):
-            return assistant_message
-        return assistant_message
+        return arguments.get("assistant_message")
 
     def process_model_response(
         self,
