@@ -19,9 +19,16 @@ from __future__ import annotations
 import importlib
 import inspect
 import sys
+from importlib.metadata import (
+    PackageNotFoundError,
+)
+from importlib.metadata import (
+    version as distribution_version,
+)
 from types import ModuleType
 
 import pytest
+from packaging.version import Version
 
 from opentelemetry.instrumentation.deerflow import (
     DeerFlowInstrumentor,
@@ -47,6 +54,20 @@ class _Graph:
 def test_has_no_pypi_target_library_dependency():
     assert _instruments == ()
     assert DeerFlowInstrumentor().instrumentation_dependencies() == ()
+
+
+def test_official_source_distribution_and_gateway_signature_are_supported():
+    assert Version("2") <= Version(distribution_version("deerflow-harness"))
+    assert Version(distribution_version("deerflow-harness")) < Version("3")
+    assert _deerflow_runtime_supported() is True
+
+    run_agent = importlib.import_module(
+        "deerflow.runtime.runs.worker"
+    ).run_agent
+    parameters = inspect.signature(inspect.unwrap(run_agent)).parameters
+    assert list(parameters)[:3] == ["bridge", "run_manager", "record"]
+    assert parameters["graph_input"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["config"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 @pytest.mark.parametrize(
@@ -95,6 +116,77 @@ def test_runtime_guard_silently_skips_failed_deerflow_import(monkeypatch):
     )
 
     assert _deerflow_runtime_supported() is False
+
+
+def test_runtime_guard_silently_skips_missing_distribution_metadata(
+    monkeypatch,
+):
+    real_import = importlib.import_module
+
+    def import_module(name):
+        if name == "deerflow":
+            return object()
+        return real_import(name)
+
+    def missing_distribution(_distribution):
+        raise PackageNotFoundError
+
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow.importlib.import_module",
+        import_module,
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow.version",
+        missing_distribution,
+    )
+
+    assert _deerflow_runtime_supported() is False
+
+
+def test_instrument_rolls_back_started_dependency_on_setup_error(monkeypatch):
+    class StartedDependency:
+        def __init__(self):
+            self.uninstrument_calls = 0
+
+        def uninstrument(self):
+            self.uninstrument_calls += 1
+
+    dependency = StartedDependency()
+    dependency_calls = 0
+    deerflow_uninstrument_calls = 0
+
+    def instrument_dependency(*_args, **_kwargs):
+        nonlocal dependency_calls
+        dependency_calls += 1
+        if dependency_calls == 1:
+            return dependency
+        raise RuntimeError("dependency setup failed")
+
+    def uninstrument_patches():
+        nonlocal deerflow_uninstrument_calls
+        deerflow_uninstrument_calls += 1
+
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow._deerflow_runtime_supported",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow._instrument_dependency",
+        instrument_dependency,
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow.uninstrument_deerflow",
+        uninstrument_patches,
+    )
+
+    instrumentor = DeerFlowInstrumentor()
+    with pytest.raises(RuntimeError, match="dependency setup failed"):
+        instrumentor._instrument()
+
+    assert dependency.uninstrument_calls == 1
+    assert deerflow_uninstrument_calls == 1
+    assert instrumentor._dependency_instrumentors == []
+    assert instrumentor._deerflow_patched is False
 
 
 def test_create_agent_alias_marks_only_new_flavor():
