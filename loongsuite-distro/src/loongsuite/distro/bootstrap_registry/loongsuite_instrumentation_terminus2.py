@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-terminus2",
-    "instrumentation": "loongsuite-instrumentation-terminus2==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-terminus2==0.8.0.dev",
     "libraries": [
         "terminal-bench >= 0.1.0",
     ],

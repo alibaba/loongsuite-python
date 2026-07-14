@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-qwen-agent",
-    "instrumentation": "loongsuite-instrumentation-qwen-agent==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-qwen-agent==0.8.0.dev",
     "libraries": [
         "qwen-agent >= 0.0.20",
     ],

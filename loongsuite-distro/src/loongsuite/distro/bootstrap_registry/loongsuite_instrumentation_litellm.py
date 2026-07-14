@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-litellm",
-    "instrumentation": "loongsuite-instrumentation-litellm==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-litellm==0.8.0.dev",
     "libraries": [
         "litellm >= 1.0.0",
     ],

@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-vita",
-    "instrumentation": "loongsuite-instrumentation-vita==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-vita==0.8.0.dev",
     "libraries": [
         "vita >= 0.0.1",
     ],

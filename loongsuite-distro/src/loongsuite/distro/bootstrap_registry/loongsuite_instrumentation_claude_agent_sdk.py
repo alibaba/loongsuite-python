@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-claude-agent-sdk",
-    "instrumentation": "loongsuite-instrumentation-claude-agent-sdk==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-claude-agent-sdk==0.8.0.dev",
     "libraries": [
         "claude-agent-sdk >= 0.1.0",
     ],

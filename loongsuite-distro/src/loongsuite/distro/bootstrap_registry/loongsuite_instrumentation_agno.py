@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-agno",
-    "instrumentation": "loongsuite-instrumentation-agno==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-agno==0.8.0.dev",
     "libraries": [
         "agno >= 2.0.0, < 3",
     ],

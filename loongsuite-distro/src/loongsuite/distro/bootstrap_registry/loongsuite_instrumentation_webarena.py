@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-webarena",
-    "instrumentation": "loongsuite-instrumentation-webarena==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-webarena==0.8.0.dev",
     "libraries": [
         "webarena >= 0.0.1",
     ],
