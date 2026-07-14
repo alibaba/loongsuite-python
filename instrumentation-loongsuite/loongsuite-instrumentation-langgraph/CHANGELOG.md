@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Propagate explicit agent flavor metadata through `Pregel.stream` and
+  `Pregel.astream` using copy-on-write config updates while retaining the
+  legacy ReAct marker fallback.
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.

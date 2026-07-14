@@ -1,0 +1,10 @@
+deerflow-harness @ git+https://github.com/bytedance/deer-flow.git@7e7f0410797693cf882594555ba414e0361d4c6f#subdirectory=backend/packages/harness
+pytest
+pytest-asyncio
+wrapt<2.0.0
+
+-e opentelemetry-instrumentation
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-langchain
+-e instrumentation-loongsuite/loongsuite-instrumentation-langgraph
+-e instrumentation-loongsuite/loongsuite-instrumentation-deerflow

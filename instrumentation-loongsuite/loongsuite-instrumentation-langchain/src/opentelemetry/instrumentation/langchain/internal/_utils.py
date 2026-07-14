@@ -18,6 +18,11 @@ import json
 import logging
 from typing import Any
 
+from opentelemetry.instrumentation.langchain.internal._agent_flavor import (
+    DEEPAGENTS_AGENT_FLAVOR,
+    LANGGRAPH_PREBUILT_AGENT_FLAVOR,
+    get_agent_flavor,
+)
 from opentelemetry.util.genai.extended_types import RetrievalDocument
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
@@ -44,9 +49,6 @@ AGENT_RUN_NAMES = frozenset(
     }
 )
 
-_LANGGRAPH_REACT_METADATA_KEY = "_loongsuite_react_agent"
-_DEEPAGENTS_METADATA_KEY = "_loongsuite_deepagents_agent"
-
 LANGGRAPH_REACT_STEP_NODE = "agent"
 DEEPAGENTS_REACT_STEP_NODE = "model"
 
@@ -72,8 +74,7 @@ def _has_langgraph_react_metadata(run: Any) -> bool:
     Note: the metadata propagates to child runs, so the caller must
     distinguish the top-level graph from child nodes.
     """
-    metadata = getattr(run, "metadata", None) or {}
-    return bool(metadata.get(_LANGGRAPH_REACT_METADATA_KEY))
+    return get_agent_flavor(run) == LANGGRAPH_PREBUILT_AGENT_FLAVOR
 
 
 def _has_deepagents_metadata(run: Any) -> bool:
@@ -84,8 +85,7 @@ def _has_deepagents_metadata(run: Any) -> bool:
     ``"model"`` instead of LangGraph ReAct's ``"agent"`` node, so the tracer
     uses this separate marker to preserve the framework-specific STEP rule.
     """
-    metadata = getattr(run, "metadata", None) or {}
-    return bool(metadata.get(_DEEPAGENTS_METADATA_KEY))
+    return get_agent_flavor(run) == DEEPAGENTS_AGENT_FLAVOR
 
 
 # ---------------------------------------------------------------------------

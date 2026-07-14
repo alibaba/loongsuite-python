@@ -128,6 +128,16 @@ from opentelemetry.util.genai.handler import (
 from opentelemetry.util.genai.span_utils import _apply_error_attributes
 from opentelemetry.util.genai.types import Error, LLMInvocation
 
+_ENTRY_ACTIVE_CONTEXT_KEY = "loongsuite.gen_ai.entry.active"
+
+
+def is_entry_context_active(context: Context | None = None) -> bool:
+    """Return whether the current context is inside a LoongSuite ENTRY."""
+
+    return bool(
+        otel_context.get_value(_ENTRY_ACTIVE_CONTEXT_KEY, context=context)
+    )
+
 
 class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # pylint: disable=too-many-public-methods
     """
@@ -815,6 +825,7 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         current_context = _current_context(context)
         _inject_agent_name_from_baggage(invocation, current_context)
         ctx = set_span_in_context(span, current_context)
+        ctx = otel_context.set_value(_ENTRY_ACTIVE_CONTEXT_KEY, True, ctx)
         if invocation.session_id is not None:
             ctx = baggage.set_baggage(
                 _GEN_AI_SESSION_ID, invocation.session_id, ctx

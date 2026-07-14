@@ -40,6 +40,11 @@ from typing import TYPE_CHECKING, Any, Callable, Collection, Type
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.langchain.internal._agent_flavor import (
+    AGENT_FLAVOR_METADATA_KEY,
+    LANGCHAIN_CREATE_AGENT_FLAVOR,
+    REACT_AGENT_METADATA_KEY,
+)
 from opentelemetry.instrumentation.langchain.package import _instruments
 from opentelemetry.instrumentation.utils import unwrap
 
@@ -140,20 +145,19 @@ def _uninstrument_agent_executor() -> None:
 # create_agent patch (langchain >= 1.x)
 # ------------------------------------------------------------------
 
-_REACT_AGENT_GRAPH_ATTR = "_loongsuite_react_agent"
-
 
 def _create_agent_wrapper(
     wrapped: Any, _instance: Any, args: Any, kwargs: Any
 ) -> Any:
     """``wrapt`` wrapper for ``create_agent``.
 
-    Calls the original factory, then marks the returned graph with
-    ``_loongsuite_react_agent = True`` so that the langgraph Pregel
-    stream/astream wrapper can inject metadata into ``RunnableConfig``.
+    Calls the original factory, then marks the returned graph as a LangChain
+    ``create_agent`` graph. The legacy boolean is retained for compatibility
+    with older LangGraph instrumentation.
     """
     graph = wrapped(*args, **kwargs)
-    setattr(graph, _REACT_AGENT_GRAPH_ATTR, True)
+    setattr(graph, AGENT_FLAVOR_METADATA_KEY, LANGCHAIN_CREATE_AGENT_FLAVOR)
+    setattr(graph, REACT_AGENT_METADATA_KEY, True)
     return graph
 
 
