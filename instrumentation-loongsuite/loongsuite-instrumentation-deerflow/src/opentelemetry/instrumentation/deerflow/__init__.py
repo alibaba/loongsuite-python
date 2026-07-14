@@ -132,34 +132,34 @@ class DeerFlowInstrumentor(BaseInstrumentor):
         if not _deerflow_runtime_supported():
             return
 
-        for module_name, class_name in (
-            (
-                "opentelemetry.instrumentation.langchain",
-                "LangChainInstrumentor",
-            ),
-            (
-                "opentelemetry.instrumentation.langgraph",
-                "LangGraphInstrumentor",
-            ),
-        ):
-            instrumentor = _instrument_dependency(
-                module_name,
-                class_name,
-                **kwargs,
-            )
-            if instrumentor is not None:
-                self._dependency_instrumentors.append(instrumentor)
-
-        from opentelemetry.util.genai.extended_handler import (  # noqa: PLC0415
-            ExtendedTelemetryHandler,
-        )
-
-        handler = ExtendedTelemetryHandler(
-            tracer_provider=kwargs.get("tracer_provider"),
-            meter_provider=kwargs.get("meter_provider"),
-            logger_provider=kwargs.get("logger_provider"),
-        )
         try:
+            for module_name, class_name in (
+                (
+                    "opentelemetry.instrumentation.langchain",
+                    "LangChainInstrumentor",
+                ),
+                (
+                    "opentelemetry.instrumentation.langgraph",
+                    "LangGraphInstrumentor",
+                ),
+            ):
+                instrumentor = _instrument_dependency(
+                    module_name,
+                    class_name,
+                    **kwargs,
+                )
+                if instrumentor is not None:
+                    self._dependency_instrumentors.append(instrumentor)
+
+            from opentelemetry.util.genai.extended_handler import (  # noqa: PLC0415
+                ExtendedTelemetryHandler,
+            )
+
+            handler = ExtendedTelemetryHandler(
+                tracer_provider=kwargs.get("tracer_provider"),
+                meter_provider=kwargs.get("meter_provider"),
+                logger_provider=kwargs.get("logger_provider"),
+            )
             self._deerflow_patched = instrument_deerflow(handler)
         except BaseException:
             uninstrument_deerflow()
