@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-qwenpaw",
-    "instrumentation": "loongsuite-instrumentation-qwenpaw==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-qwenpaw==0.8.0.dev",
     "libraries": [
         "qwenpaw >= 1.1.0",
         "copaw >= 0.1.0, <= 1.0.2",

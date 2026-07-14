@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-autogen",
-    "instrumentation": "loongsuite-instrumentation-autogen==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-autogen==0.8.0.dev",
     "libraries": [
         "autogen-agentchat >= 0.7.0, < 0.8.0",
     ],

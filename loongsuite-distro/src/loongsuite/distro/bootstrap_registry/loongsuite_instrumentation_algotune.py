@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-algotune",
-    "instrumentation": "loongsuite-instrumentation-algotune==0.7.0.dev",
+    "instrumentation": "loongsuite-instrumentation-algotune==0.8.0.dev",
     "libraries": [],
     "default": True,
 }
