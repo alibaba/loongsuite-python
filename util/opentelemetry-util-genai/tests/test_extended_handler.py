@@ -61,6 +61,7 @@ from opentelemetry.util.genai.environment_variables import (
 from opentelemetry.util.genai.extended_handler import (
     ExtendedTelemetryHandler,
     get_extended_telemetry_handler,
+    is_entry_context_active,
 )
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
@@ -1464,6 +1465,17 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
         restored_baggage = get_all_baggage()
         self.assertNotIn("gen_ai.session.id", restored_baggage)
         self.assertNotIn("gen_ai.user.id", restored_baggage)
+
+    def test_entry_context_marker_survives_nested_child_span(self):
+        """ENTRY ancestry remains detectable when a child span is current."""
+        self.assertFalse(is_entry_context_active())
+
+        with self.telemetry_handler.entry():
+            self.assertTrue(is_entry_context_active())
+            with self.telemetry_handler.embedding():
+                self.assertTrue(is_entry_context_active())
+
+        self.assertFalse(is_entry_context_active())
 
     def test_entry_baggage_overwrites_existing(self):
         """If baggage already contains session_id/user_id, entry overwrites them."""

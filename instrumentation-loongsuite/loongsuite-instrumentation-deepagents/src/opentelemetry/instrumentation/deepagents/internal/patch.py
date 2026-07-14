@@ -16,10 +16,9 @@
 
 DeepAgents builds on ``langchain.agents.create_agent`` and returns
 ``create_agent(...).with_config(...)``. That final ``with_config`` call creates
-a new graph object and drops the marker that LangChain instrumentation places
-on the original graph. This module restores the marker on the returned graph
-and injects the marker into call-time config, mirroring LangGraph's lightweight
-metadata handoff.
+a new graph object and drops the flavor that LangChain instrumentation places
+on the original graph. This module marks the returned graph as ``deepagents``
+and injects that flavor into call-time config.
 """
 
 from __future__ import annotations
@@ -40,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 CREATE_DEEP_AGENT_MODULE = "deepagents.graph"
 CREATE_DEEP_AGENT_NAME = "create_deep_agent"
+AGENT_FLAVOR_METADATA_KEY = "_loongsuite_agent_flavor"
+DEEPAGENTS_AGENT_FLAVOR = "deepagents"
 REACT_AGENT_METADATA_KEY = "_loongsuite_react_agent"
 DEEPAGENTS_METADATA_KEY = "_loongsuite_deepagents_agent"
 GRAPH_METHODS_WRAPPED_ATTR = "_loongsuite_deepagents_methods_wrapped"
@@ -181,6 +182,7 @@ def _restore_top_level_create_deep_agent() -> None:
 
 def _mark_graph(graph: Any) -> None:
     with suppress(Exception):
+        setattr(graph, AGENT_FLAVOR_METADATA_KEY, DEEPAGENTS_AGENT_FLAVOR)
         setattr(graph, REACT_AGENT_METADATA_KEY, True)
         setattr(graph, DEEPAGENTS_METADATA_KEY, True)
 
@@ -241,6 +243,7 @@ def _restore_graph_methods(graph: Any) -> None:
     for attr_name in (
         GRAPH_ORIGINAL_METHODS_ATTR,
         GRAPH_METHODS_WRAPPED_ATTR,
+        AGENT_FLAVOR_METADATA_KEY,
         REACT_AGENT_METADATA_KEY,
         DEEPAGENTS_METADATA_KEY,
     ):
@@ -313,6 +316,8 @@ def _inject_react_metadata(config: Any) -> Any:
     config = ensure_config(config)
     config = {**config}
     metadata = dict(config.get("metadata") or {})
+    metadata[AGENT_FLAVOR_METADATA_KEY] = DEEPAGENTS_AGENT_FLAVOR
+    metadata.setdefault(REACT_AGENT_METADATA_KEY, True)
     metadata.setdefault(DEEPAGENTS_METADATA_KEY, True)
     config["metadata"] = metadata
     return config

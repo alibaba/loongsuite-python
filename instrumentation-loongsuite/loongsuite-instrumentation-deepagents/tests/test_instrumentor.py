@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from opentelemetry.instrumentation.deepagents import DeepAgentsInstrumentor
 from opentelemetry.instrumentation.deepagents.internal.patch import (
+    AGENT_FLAVOR_METADATA_KEY,
+    DEEPAGENTS_AGENT_FLAVOR,
     DEEPAGENTS_METADATA_KEY,
     GRAPH_METHODS_WRAPPED_ATTR,
     GRAPH_ORIGINAL_METHODS_ATTR,
@@ -99,10 +101,18 @@ def test_uninstrument_restores_wrapped_graph_methods():
         _wrap_graph_methods(graph)
 
         assert getattr(graph, GRAPH_METHODS_WRAPPED_ATTR) is True
+        assert (
+            getattr(graph, AGENT_FLAVOR_METADATA_KEY)
+            == DEEPAGENTS_AGENT_FLAVOR
+        )
         assert getattr(graph, REACT_AGENT_METADATA_KEY) is True
         assert getattr(graph, DEEPAGENTS_METADATA_KEY) is True
 
         invoke_config = graph.invoke("hello")
+        assert (
+            invoke_config["metadata"][AGENT_FLAVOR_METADATA_KEY]
+            == DEEPAGENTS_AGENT_FLAVOR
+        )
         assert invoke_config["metadata"][DEEPAGENTS_METADATA_KEY] is True
 
         stream_iter = graph.stream("hello")
@@ -114,19 +124,29 @@ def test_uninstrument_restores_wrapped_graph_methods():
 
         child_graph = graph.with_config({"metadata": {"customer": "kept"}})
         assert getattr(child_graph, GRAPH_METHODS_WRAPPED_ATTR) is True
+        assert (
+            getattr(child_graph, AGENT_FLAVOR_METADATA_KEY)
+            == DEEPAGENTS_AGENT_FLAVOR
+        )
         assert getattr(child_graph, DEEPAGENTS_METADATA_KEY) is True
         child_config = child_graph.invoke("hello")
         assert child_config["metadata"]["customer"] == "kept"
+        assert (
+            child_config["metadata"][AGENT_FLAVOR_METADATA_KEY]
+            == DEEPAGENTS_AGENT_FLAVOR
+        )
         assert child_config["metadata"][DEEPAGENTS_METADATA_KEY] is True
 
         uninstrument_create_deep_agent()
 
         assert not hasattr(graph, GRAPH_METHODS_WRAPPED_ATTR)
         assert not hasattr(graph, GRAPH_ORIGINAL_METHODS_ATTR)
+        assert not hasattr(graph, AGENT_FLAVOR_METADATA_KEY)
         assert not hasattr(graph, REACT_AGENT_METADATA_KEY)
         assert not hasattr(graph, DEEPAGENTS_METADATA_KEY)
         assert not hasattr(child_graph, GRAPH_METHODS_WRAPPED_ATTR)
         assert not hasattr(child_graph, GRAPH_ORIGINAL_METHODS_ATTR)
+        assert not hasattr(child_graph, AGENT_FLAVOR_METADATA_KEY)
         assert not hasattr(child_graph, REACT_AGENT_METADATA_KEY)
         assert not hasattr(child_graph, DEEPAGENTS_METADATA_KEY)
         assert graph.invoke("hello") is None

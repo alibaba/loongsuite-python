@@ -28,6 +28,12 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
 
+from opentelemetry.instrumentation.langchain.internal._agent_flavor import (
+    AGENT_FLAVOR_METADATA_KEY,
+    DEEPAGENTS_AGENT_FLAVOR,
+    LANGCHAIN_CREATE_AGENT_FLAVOR,
+)
+
 
 class _SequenceToolCallingModel(BaseChatModel):
     def __init__(self, responses: list[AIMessage]):
@@ -156,6 +162,148 @@ def _assert_kind_under_step(
     return matches
 
 
+def test_langchain_create_agent_model_node_creates_single_step(
+    instrument, span_exporter
+):
+    """LangChain 1.x ``create_agent`` uses ``model``, not ``agent``, nodes."""
+    from langchain.agents import create_agent  # noqa: PLC0415
+
+    agent = create_agent(
+        model=_SequenceToolCallingModel(
+            [AIMessage(content="Plain LangChain final answer.")]
+        ),
+        tools=[lookup_city],
+        name="plain_langchain_agent",
+    )
+
+    assert (
+        getattr(agent, AGENT_FLAVOR_METADATA_KEY)
+        == LANGCHAIN_CREATE_AGENT_FLAVOR
+    )
+    assert not hasattr(agent, "_loongsuite_deepagents_agent")
+
+    result = agent.invoke({"messages": [{"role": "user", "content": "hello"}]})
+
+    assert result["messages"][-1].content == "Plain LangChain final answer."
+    spans = span_exporter.get_finished_spans()
+    agent_span = _assert_single_agent(spans, "plain_langchain_agent")
+    step_spans = _spans_by_kind(spans, "STEP")
+    assert len(step_spans) == 1
+    _assert_step_is_under_agent(agent_span, step_spans[0])
+
+
+def test_langchain_create_agent_tool_loop_creates_two_steps(
+    instrument, span_exporter
+):
+    from langchain.agents import create_agent  # noqa: PLC0415
+
+    agent = create_agent(
+        model=_SequenceToolCallingModel(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "lookup_city",
+                            "args": {"query": "where"},
+                            "id": "plain_call_1",
+                        }
+                    ],
+                ),
+                AIMessage(content="Plain answer: Hangzhou."),
+            ]
+        ),
+        tools=[lookup_city],
+        name="plain_langchain_tool_agent",
+    )
+
+    result = agent.invoke({"messages": [{"role": "user", "content": "where"}]})
+
+    assert result["messages"][-1].content == "Plain answer: Hangzhou."
+    spans = span_exporter.get_finished_spans()
+    _assert_single_agent(spans, "plain_langchain_tool_agent")
+    step_spans = sorted(
+        _spans_by_kind(spans, "STEP"),
+        key=lambda span: span.attributes.get("gen_ai.react.round", 0),
+    )
+    assert len(step_spans) == 2
+    assert [
+        span.attributes.get("gen_ai.react.finish_reason")
+        for span in step_spans
+    ] == ["tool_calls", "stop"]
+
+
+def test_langchain_create_agent_stream_creates_single_step(
+    instrument,
+    span_exporter,
+):
+    from langchain.agents import create_agent  # noqa: PLC0415
+
+    agent = create_agent(
+        model=_SequenceToolCallingModel(
+            [AIMessage(content="Plain streamed answer.")]
+        ),
+        tools=[lookup_city],
+        name="plain_langchain_stream_agent",
+    )
+
+    chunks = list(
+        agent.stream({"messages": [{"role": "user", "content": "hello"}]})
+    )
+
+    assert chunks
+    spans = span_exporter.get_finished_spans()
+    agent_span = _assert_single_agent(spans, "plain_langchain_stream_agent")
+    step_spans = _spans_by_kind(spans, "STEP")
+    assert len(step_spans) == 1
+    _assert_step_is_under_agent(agent_span, step_spans[0])
+
+
+@pytest.mark.asyncio
+async def test_langchain_create_agent_async_tool_loop_creates_two_steps(
+    instrument,
+    span_exporter,
+):
+    from langchain.agents import create_agent  # noqa: PLC0415
+
+    agent = create_agent(
+        model=_SequenceToolCallingModel(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "lookup_city",
+                            "args": {"query": "where"},
+                            "id": "plain_async_call_1",
+                        }
+                    ],
+                ),
+                AIMessage(content="Async answer: Hangzhou."),
+            ]
+        ),
+        tools=[lookup_city],
+        name="plain_langchain_async_agent",
+    )
+
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": "where"}]}
+    )
+
+    assert result["messages"][-1].content == "Async answer: Hangzhou."
+    spans = span_exporter.get_finished_spans()
+    _assert_single_agent(spans, "plain_langchain_async_agent")
+    step_spans = sorted(
+        _spans_by_kind(spans, "STEP"),
+        key=lambda span: span.attributes.get("gen_ai.react.round", 0),
+    )
+    assert len(step_spans) == 2
+    assert [
+        span.attributes.get("gen_ai.react.finish_reason")
+        for span in step_spans
+    ] == ["tool_calls", "stop"]
+
+
 def test_deepagents_root_span_is_agent_and_single_step(
     instrument, span_exporter
 ):
@@ -166,6 +314,7 @@ def test_deepagents_root_span_is_agent_and_single_step(
 
     assert getattr(agent, "_loongsuite_react_agent") is True
     assert getattr(agent, "_loongsuite_deepagents_agent") is True
+    assert getattr(agent, AGENT_FLAVOR_METADATA_KEY) == DEEPAGENTS_AGENT_FLAVOR
 
     result = agent.invoke({"messages": [{"role": "user", "content": "hello"}]})
 

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Distinguish LangGraph prebuilt, LangChain `create_agent`, DeepAgents, and
+  DeerFlow graphs with explicit agent flavors so each framework's model
+  decision node creates exactly one ReAct `STEP` span.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Added
