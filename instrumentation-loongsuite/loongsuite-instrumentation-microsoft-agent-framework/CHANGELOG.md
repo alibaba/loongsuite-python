@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Avoid enriching non-MAF spans that use overlapping GenAI operation names.
 - Preserve parent-child context for legacy Microsoft Agent Framework streaming
   agent spans.
+- Stop exporting process-cumulative GenAI ObservableGauges and use Microsoft
+  Agent Framework's native metric instruments instead.
+- Keep non-streaming MAF spans current for nested work and scope Robin provider
+  suppression to the active LLM call when that optional integration is present.
 
 ## Version 0.7.0 (2026-07-03)
 

@@ -26,7 +26,9 @@ import contextlib
 import json
 import sys
 import types
+from unittest.mock import MagicMock
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.instrumentation.microsoft_agent_framework import (
     util_genai_bridge,
@@ -54,13 +56,12 @@ def _install_fake_observability(monkeypatch):
     tp = TracerProvider()
     exporter = InMemorySpanExporter()
     tp.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = tp.get_tracer("fake-maf")
 
     @contextlib.contextmanager
     def _get_span(attributes, span_name_attribute):
         operation = attributes.get(GEN_AI_OPERATION_NAME, "operation")
         span_name = attributes.get(span_name_attribute, "unknown")
-        span = tracer.start_span(f"{operation} {span_name}")
+        span = obs_mod.get_tracer().start_span(f"{operation} {span_name}")
         span.set_attributes(attributes)
         with trace.use_span(
             span,
@@ -73,7 +74,7 @@ def _install_fake_observability(monkeypatch):
     def _start_streaming_span(attributes, span_name_attribute):
         operation = attributes.get(GEN_AI_OPERATION_NAME, "operation")
         span_name = attributes.get(span_name_attribute, "unknown")
-        span = tracer.start_span(f"{operation} {span_name}")
+        span = obs_mod.get_tracer().start_span(f"{operation} {span_name}")
         span.set_attributes(attributes)
         return span
 
@@ -84,7 +85,7 @@ def _install_fake_observability(monkeypatch):
 
     @contextlib.contextmanager
     def get_function_span(attributes):
-        span = tracer.start_span(
+        span = obs_mod.get_tracer().start_span(
             f"{attributes[GEN_AI_OPERATION_NAME]} {attributes['gen_ai.tool.name']}"
         )
         span.set_attributes(attributes)
@@ -99,12 +100,35 @@ def _install_fake_observability(monkeypatch):
     @contextlib.contextmanager
     def create_mcp_client_span(method_name, target=None, attributes=None):
         span_name = f"{method_name} {target}" if target else method_name
-        span = tracer.start_span(span_name, kind=trace.SpanKind.CLIENT)
+        span = obs_mod.get_tracer().start_span(
+            span_name, kind=trace.SpanKind.CLIENT
+        )
         span.set_attribute("mcp.method.name", method_name)
         if attributes:
             span.set_attributes(attributes)
         with trace.use_span(span, end_on_exit=True) as current_span:
             yield current_span
+
+    def get_tracer(
+        instrumenting_module_name="agent_framework",
+        instrumenting_library_version=None,
+        schema_url=None,
+        attributes=None,
+    ):
+        return tp.get_tracer(
+            instrumenting_module_name,
+            instrumenting_library_version,
+            schema_url,
+            attributes,
+        )
+
+    def get_meter(
+        name="agent_framework",
+        version=None,
+        schema_url=None,
+        attributes=None,
+    ):
+        return name, version, schema_url, attributes
 
     obs_mod = types.ModuleType("agent_framework.observability")
     obs_mod._get_span = _get_span
@@ -112,12 +136,14 @@ def _install_fake_observability(monkeypatch):
     obs_mod._activate_span = _activate_span
     obs_mod.get_function_span = get_function_span
     obs_mod.create_mcp_client_span = create_mcp_client_span
-    obs_mod.get_tracer = lambda: tracer
+    obs_mod.get_tracer = get_tracer
+    obs_mod.get_meter = get_meter
 
     af_mod = types.ModuleType("agent_framework")
     af_mod.observability = obs_mod
     tools_mod = types.ModuleType("agent_framework._tools")
     tools_mod.get_function_span = get_function_span
+    tools_mod.get_meter = get_meter
     mcp_mod = types.ModuleType("agent_framework._mcp")
     mcp_mod.create_mcp_client_span = create_mcp_client_span
     monkeypatch.setitem(sys.modules, "agent_framework", af_mod)
@@ -126,6 +152,80 @@ def _install_fake_observability(monkeypatch):
     monkeypatch.setitem(sys.modules, "agent_framework._mcp", mcp_mod)
     util_genai_bridge.revert_util_genai_bridge()
     return obs_mod, exporter
+
+
+def test_non_streaming_span_stays_current_and_restores_context(monkeypatch):
+    obs_mod, exporter = _install_fake_observability(monkeypatch)
+    suppress_key = otel_context.create_key("test-suppress-llm-sdk")
+    monkeypatch.setattr(
+        util_genai_bridge,
+        "_SUPPRESS_LLM_SDK_KEY",
+        suppress_key,
+    )
+
+    util_genai_bridge.apply_util_genai_bridge()
+    tracer = obs_mod.get_tracer("test-parent")
+    try:
+        with tracer.start_as_current_span("entry") as outer:
+            with obs_mod._get_span(
+                {
+                    GEN_AI_OPERATION_NAME: GenAIOperation.CHAT,
+                    GEN_AI_REQUEST_MODEL: "qwen-plus",
+                },
+                GEN_AI_REQUEST_MODEL,
+            ) as llm_span:
+                assert trace.get_current_span() is llm_span
+                assert otel_context.get_value(suppress_key) is True
+            assert trace.get_current_span() is outer
+            assert otel_context.get_value(suppress_key) is None
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert (
+        spans["chat qwen-plus"].parent.span_id
+        == spans["entry"].context.span_id
+    )
+
+
+def test_explicit_providers_route_maf_spans_and_native_metrics(monkeypatch):
+    obs_mod, default_exporter = _install_fake_observability(monkeypatch)
+    original_get_tracer = obs_mod.get_tracer
+    original_get_meter = obs_mod.get_meter
+    tools_mod = sys.modules["agent_framework._tools"]
+    original_tools_get_meter = tools_mod.get_meter
+
+    explicit_provider = TracerProvider()
+    explicit_exporter = InMemorySpanExporter()
+    explicit_provider.add_span_processor(
+        SimpleSpanProcessor(explicit_exporter)
+    )
+    meter_provider = MagicMock()
+
+    util_genai_bridge.apply_util_genai_bridge(
+        tracer_provider=explicit_provider,
+        meter_provider=meter_provider,
+    )
+    try:
+        with obs_mod._get_span(
+            {
+                GEN_AI_OPERATION_NAME: GenAIOperation.CHAT,
+                GEN_AI_REQUEST_MODEL: "qwen-plus",
+            },
+            GEN_AI_REQUEST_MODEL,
+        ):
+            pass
+        obs_mod.get_meter("agent_framework.metrics")
+        tools_mod.get_meter("agent_framework.tools")
+    finally:
+        util_genai_bridge.revert_util_genai_bridge()
+
+    assert not default_exporter.get_finished_spans()
+    assert len(explicit_exporter.get_finished_spans()) == 1
+    assert meter_provider.get_meter.call_count == 2
+    assert obs_mod.get_tracer is original_get_tracer
+    assert obs_mod.get_meter is original_get_meter
+    assert tools_mod.get_meter is original_tools_get_meter
 
 
 def test_llm_get_span_is_finalized_by_util_genai_before_export(monkeypatch):
