@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Treat user cancellation, early stream closure, and DeerFlow interrupted runs
+  as non-error entry completions while retaining their interrupted status.
+- Clarify the initial sandbox, skill, and memory observability boundaries.
+
 ## Version 0.8.0 (2026-07-14)
 
 ### Added

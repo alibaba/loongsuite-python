@@ -365,7 +365,10 @@ class _GatewayRunAgentWrapper:
                     else "error"
                 )
             invocation.attributes[DEERFLOW_RUN_STATUS] = status
-            _safe_fail_entry(self._handler, invocation, exc)
+            if status == "interrupted":
+                _safe_stop_entry(self._handler, invocation)
+            else:
+                _safe_fail_entry(self._handler, invocation, exc)
             raise
         else:
             status = _run_status_value(record)
@@ -374,7 +377,7 @@ class _GatewayRunAgentWrapper:
                 invocation.output_messages = to_output_messages(
                     getattr(record, "last_ai_message", None)
                 )
-            if status == "success":
+            if status in {"success", "interrupted"}:
                 _safe_stop_entry(self._handler, invocation)
             else:
                 _safe_fail_entry(
@@ -457,7 +460,10 @@ def _finish_isolated_entry(
             else:
                 status = "error"
             invocation.attributes[DEERFLOW_RUN_STATUS] = status
-            _safe_fail_entry(handler, invocation, error)
+            if status == "interrupted":
+                _safe_stop_entry(handler, invocation)
+            else:
+                _safe_fail_entry(handler, invocation, error)
     finally:
         _ENTRY_DEPTH.reset(depth_token)
         _reset_deerflow_trace_id(deerflow_trace_token)
@@ -723,6 +729,29 @@ def _restore_late_gateway_aliases() -> None:
         except Exception:  # noqa: BLE001
             logger.debug(
                 "Could not restore late DeerFlow Gateway alias %s.%s",
+                module_name,
+                target,
+                exc_info=True,
+            )
+
+
+def remove_owned_langchain_alias_wrappers() -> None:
+    """Remove cached LangChain wrappers after DeerFlow-owned teardown."""
+    for module_name, target in CREATE_AGENT_ALIASES:
+        try:
+            owner, attribute = _resolve_patch_owner(module_name, target)
+            candidate = getattr(owner, attribute)
+            wrapper = getattr(candidate, "_self_wrapper", None)
+            if (
+                getattr(wrapper, "__module__", None)
+                == "opentelemetry.instrumentation.langchain"
+                and getattr(wrapper, "__name__", None)
+                == "_create_agent_wrapper"
+            ):
+                unwrap(owner, attribute)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "Could not restore DeerFlow dependency alias %s.%s",
                 module_name,
                 target,
                 exc_info=True,
