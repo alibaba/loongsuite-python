@@ -103,7 +103,13 @@ def test_client_stream_uses_isolated_context_and_generated_thread_id(
     first = next(result)
     assert first.data["content"] == "hello "
     assert not trace.get_current_span().get_span_context().is_valid
-    assert list(result)[0].data["content"] == "world"
+    with tracer_provider.get_tracer(__name__).start_as_current_span(
+        "consumer-between-yields"
+    ) as consumer_span:
+        consumer_context = consumer_span.get_span_context()
+    second = next(result)
+    assert second.data["content"] == "world"
+    assert list(result) == []
     assert not trace.get_current_span().get_span_context().is_valid
 
     assert observed["message"] == "question"
@@ -112,6 +118,8 @@ def test_client_stream_uses_isolated_context_and_generated_thread_id(
     assert observed["span_during_resume"] is True
 
     entry = _entry_spans(span_exporter)[0]
+    assert consumer_context.trace_id != entry.context.trace_id
+    assert consumer_context.span_id != entry.context.span_id
     assert entry.attributes[GEN_AI_SESSION_ID] == observed["thread_id"]
     assert entry.attributes[GEN_AI_USER_ID] == "deerflow-user"
     assert entry.attributes["gen_ai.framework"] == "deerflow"
@@ -131,6 +139,26 @@ def test_client_stream_uses_isolated_context_and_generated_thread_id(
         ]
         == "hello world"
     )
+
+
+def test_client_stream_never_consumed_does_not_create_entry(
+    handler,
+    span_exporter,
+):
+    observed = {"started": False}
+
+    def stream(_message, *, thread_id=None):
+        del thread_id
+        observed["started"] = True
+        yield _Event("end", {})
+
+    result = _ClientStreamWrapper(handler)(stream, _Client(), ("q",), {})
+
+    assert observed["started"] is False
+    assert _entry_spans(span_exporter) == []
+    result.close()
+    assert observed["started"] is False
+    assert _entry_spans(span_exporter) == []
 
 
 def test_client_stream_keeps_caller_parent_when_consumed_in_other_thread(
@@ -219,7 +247,7 @@ def test_default_client_does_not_invent_assistant_id(handler, span_exporter):
     assert "deerflow.assistant.id" not in entry.attributes
 
 
-def test_client_stream_close_fails_entry_and_closes_inner(
+def test_client_stream_close_interrupts_entry_without_error(
     handler,
     span_exporter,
 ):
@@ -240,8 +268,8 @@ def test_client_stream_close_fails_entry_and_closes_inner(
     assert observed["closed"] is True
     assert not trace.get_current_span().get_span_context().is_valid
     entry = _entry_spans(span_exporter)[0]
-    assert entry.status.status_code == StatusCode.ERROR
-    assert entry.attributes["error.type"] == "GeneratorExit"
+    assert entry.status.status_code == StatusCode.UNSET
+    assert "error.type" not in entry.attributes
     assert entry.attributes[DEERFLOW_RUN_STATUS] == "interrupted"
 
 
@@ -647,7 +675,6 @@ async def test_gateway_entry_uses_mutated_success_status(
     [
         ("error", "DeerFlowRunError"),
         ("timeout", "DeerFlowRunTimeout"),
-        ("interrupted", "DeerFlowRunInterrupted"),
     ],
 )
 async def test_gateway_terminal_status_fails_entry(
@@ -683,7 +710,38 @@ async def test_gateway_terminal_status_fails_entry(
 
 
 @pytest.mark.asyncio
-async def test_gateway_cancellation_fails_entry_as_interrupted(
+async def test_gateway_interrupted_status_stops_entry_without_error(
+    handler,
+    span_exporter,
+):
+    record = SimpleNamespace(
+        run_id="run-interrupted",
+        thread_id="thread-interrupted",
+        assistant_id=None,
+        user_id=None,
+        metadata={},
+        status="running",
+        error=None,
+    )
+
+    async def run_agent(_bridge, _manager, mutable_record, **_kwargs):
+        mutable_record.status = "interrupted"
+
+    await _GatewayRunAgentWrapper(handler)(
+        run_agent,
+        None,
+        (None, None, record),
+        {"graph_input": {}, "config": {}},
+    )
+
+    entry = _entry_spans(span_exporter)[0]
+    assert entry.status.status_code == StatusCode.UNSET
+    assert "error.type" not in entry.attributes
+    assert entry.attributes[DEERFLOW_RUN_STATUS] == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_gateway_cancellation_interrupts_entry_without_error(
     handler,
     span_exporter,
 ):
@@ -709,8 +767,8 @@ async def test_gateway_cancellation_fails_entry_as_interrupted(
         )
 
     entry = _entry_spans(span_exporter)[0]
-    assert entry.status.status_code == StatusCode.ERROR
-    assert entry.attributes["error.type"] == "CancelledError"
+    assert entry.status.status_code == StatusCode.UNSET
+    assert "error.type" not in entry.attributes
     assert entry.attributes[DEERFLOW_RUN_STATUS] == "interrupted"
 
 

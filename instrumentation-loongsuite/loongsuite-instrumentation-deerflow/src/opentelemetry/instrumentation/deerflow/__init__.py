@@ -25,6 +25,7 @@ from packaging.version import InvalidVersion, Version
 
 from opentelemetry.instrumentation.deerflow.internal.patch import (
     instrument_deerflow,
+    remove_owned_langchain_alias_wrappers,
     uninstrument_deerflow,
 )
 from opentelemetry.instrumentation.deerflow.package import _instruments
@@ -37,6 +38,13 @@ logger = logging.getLogger(__name__)
 _DEERFLOW_DISTRIBUTION = "deerflow-harness"
 _MINIMUM_VERSION = Version("2")
 _MAXIMUM_VERSION = Version("3")
+
+
+def _is_langchain_instrumentor(instrumentor: BaseInstrumentor) -> bool:
+    return (
+        instrumentor.__class__.__module__
+        == "opentelemetry.instrumentation.langchain"
+    )
 
 
 def _deerflow_runtime_supported() -> bool:
@@ -163,8 +171,14 @@ class DeerFlowInstrumentor(BaseInstrumentor):
             self._deerflow_patched = instrument_deerflow(handler)
         except BaseException:
             uninstrument_deerflow()
+            owned_langchain = any(
+                _is_langchain_instrumentor(instrumentor)
+                for instrumentor in self._dependency_instrumentors
+            )
             for instrumentor in reversed(self._dependency_instrumentors):
                 instrumentor.uninstrument()
+            if owned_langchain:
+                remove_owned_langchain_alias_wrappers()
             self._dependency_instrumentors = []
             raise
 
@@ -174,9 +188,14 @@ class DeerFlowInstrumentor(BaseInstrumentor):
             uninstrument_deerflow()
         self._deerflow_patched = False
 
-        for instrumentor in reversed(
-            getattr(self, "_dependency_instrumentors", [])
-        ):
+        dependency_instrumentors = getattr(
+            self, "_dependency_instrumentors", []
+        )
+        owned_langchain = any(
+            _is_langchain_instrumentor(instrumentor)
+            for instrumentor in dependency_instrumentors
+        )
+        for instrumentor in reversed(dependency_instrumentors):
             try:
                 instrumentor.uninstrument()
             except Exception:  # noqa: BLE001
@@ -185,4 +204,6 @@ class DeerFlowInstrumentor(BaseInstrumentor):
                     instrumentor.__class__.__name__,
                     exc_info=True,
                 )
+        if owned_langchain:
+            remove_owned_langchain_alias_wrappers()
         self._dependency_instrumentors = []

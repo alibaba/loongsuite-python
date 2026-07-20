@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import subprocess
 import sys
 from importlib.metadata import (
     PackageNotFoundError,
@@ -68,6 +69,71 @@ def test_official_source_distribution_and_gateway_signature_are_supported():
     assert list(parameters)[:3] == ["bridge", "run_manager", "record"]
     assert parameters["graph_input"].kind is inspect.Parameter.KEYWORD_ONLY
     assert parameters["config"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_probe_first_cold_start_wraps_each_deerflow_alias_once():
+    script = """
+import importlib
+import sys
+
+assert not any(name == "deerflow" or name.startswith("deerflow.") for name in sys.modules)
+
+from opentelemetry.instrumentation.deerflow import DeerFlowInstrumentor
+from opentelemetry.instrumentation.deerflow.internal.constants import (
+    CREATE_AGENT_ALIASES,
+    GATEWAY_RUN_AGENT_ALIASES,
+)
+
+
+def wrapper_depth(value):
+    depth = 0
+    seen = set()
+    while hasattr(value, "__wrapped__") and id(value) not in seen:
+        seen.add(id(value))
+        value = value.__wrapped__
+        depth += 1
+    return depth
+
+
+def wrapper_modules(value):
+    modules = []
+    seen = set()
+    while hasattr(value, "__wrapped__") and id(value) not in seen:
+        seen.add(id(value))
+        wrapper = getattr(value, "_self_wrapper", None)
+        modules.append(getattr(wrapper, "__module__", None))
+        value = value.__wrapped__
+    return modules
+
+
+instrumentor = DeerFlowInstrumentor()
+instrumentor.instrument()
+assert instrumentor.is_instrumented_by_opentelemetry
+
+aliases = (*CREATE_AGENT_ALIASES, *GATEWAY_RUN_AGENT_ALIASES)
+for module_name, target in aliases:
+    module = importlib.import_module(module_name)
+    value = getattr(module, target)
+    modules = wrapper_modules(value)
+    assert modules.count(
+        "opentelemetry.instrumentation.deerflow.internal.patch"
+    ) == 1, (module_name, target, modules)
+    expected_depth = 2 if (module_name, target) in CREATE_AGENT_ALIASES else 1
+    assert wrapper_depth(value) == expected_depth, (module_name, target, modules)
+
+instrumentor.uninstrument()
+for module_name, target in aliases:
+    module = importlib.import_module(module_name)
+    assert wrapper_depth(getattr(module, target)) == 0, (module_name, target)
+"""
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(

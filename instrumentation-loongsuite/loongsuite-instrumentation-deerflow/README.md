@@ -55,8 +55,12 @@ expose its internally generated run id.
 Message content is disabled by default and follows the existing experimental
 GenAI content-capture switch.
 
-`task` remains a normal LangChain tool. This package does not patch DeerFlow's
-sandbox, memory, skills, or context propagation internals.
+`task` remains a normal LangChain tool. Operations performed in a sandbox are
+visible when DeerFlow exposes them as LangChain tools, and work selected by a
+skill remains visible through its downstream LLM and tool calls. This package
+does not create separate lifecycle spans for sandbox allocation or reuse, skill
+activation, or background memory work, and it does not patch DeerFlow's context
+propagation internals.
 
 ## Compatibility
 
