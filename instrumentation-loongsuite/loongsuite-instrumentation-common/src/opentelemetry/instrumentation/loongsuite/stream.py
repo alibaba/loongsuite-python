@@ -97,12 +97,16 @@ class IsolatedStream(_FinalizationState, Generic[_T], Iterator[_T]):
             raise
 
         if self._on_chunk is not None:
-            call_advice(
-                self._on_chunk,
-                chunk,
-                instrumentation_name=self._instrumentation_name,
-                advice_method="stream_chunk",
-            )
+            try:
+                call_advice(
+                    self._on_chunk,
+                    chunk,
+                    instrumentation_name=self._instrumentation_name,
+                    advice_method="stream_chunk",
+                )
+            except BaseException as exception:
+                self._finalize_stream(exception)
+                raise
         return chunk
 
     def __next__(self) -> _T:
@@ -168,7 +172,7 @@ class IsolatedStream(_FinalizationState, Generic[_T], Iterator[_T]):
         except BaseException as exception:
             self._finalize_stream(exception)
             raise
-        self._finalize_stream(exc_value)
+        self._finalize_stream(None if suppressed else exc_value)
         return suppressed
 
     def _finalize_stream(self, error: Optional[BaseException]) -> None:
@@ -315,7 +319,7 @@ class IsolatedAsyncStream(_FinalizationState, Generic[_T], AsyncIterator[_T]):
         except BaseException as exception:
             await self._finalize_preserving(exception)
             raise
-        await self._finalize_stream(exc_value)
+        await self._finalize_stream(None if suppressed else exc_value)
         return suppressed
 
     async def _finalize_preserving(self, error: BaseException) -> None:

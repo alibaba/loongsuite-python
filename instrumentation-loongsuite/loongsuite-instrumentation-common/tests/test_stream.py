@@ -74,6 +74,27 @@ def test_stream_callback_failure_does_not_drop_chunks():
     assert stream.is_finalized
 
 
+def test_stream_callback_base_exception_finalizes_and_propagates():
+    expected = BaseException("instrumentation control flow")
+    errors = []
+
+    def fail_chunk(_chunk):
+        raise expected
+
+    stream = IsolatedStream(
+        iter(["chunk"]),
+        on_chunk=fail_chunk,
+        on_error=errors.append,
+        instrumentation_name="test",
+    )
+
+    with pytest.raises(BaseException) as caught:
+        next(stream)
+    assert caught.value is expected
+    assert errors == [expected]
+    assert stream.is_finalized
+
+
 def test_stream_business_exception_identity_is_preserved():
     expected = RuntimeError("application boom")
     errors = []
@@ -183,9 +204,17 @@ def test_stream_preserves_context_manager_suppression_result():
         def __exit__(self, exc_type, exc_value, traceback):
             return True
 
-    stream = IsolatedStream(SuppressingStream())
+    finished = []
+    errors = []
+    stream = IsolatedStream(
+        SuppressingStream(),
+        on_finish=lambda: finished.append(True),
+        on_error=errors.append,
+    )
     assert stream.__enter__() is stream
     assert stream.__exit__(RuntimeError, RuntimeError("boom"), None) is True
+    assert finished == [True]
+    assert errors == []
 
 
 def test_stream_context_exit_closes_plain_iterator():
@@ -310,7 +339,13 @@ async def test_async_stream_preserves_context_manager_suppression_result():
         async def __aexit__(self, exc_type, exc_value, traceback):
             return True
 
-    stream = IsolatedAsyncStream(SuppressingAsyncStream())
+    finished = []
+    errors = []
+    stream = IsolatedAsyncStream(
+        SuppressingAsyncStream(),
+        on_finish=lambda: finished.append(True),
+        on_error=errors.append,
+    )
     assert await stream.__aenter__() is stream
     assert (
         await stream.__aexit__(
@@ -320,6 +355,8 @@ async def test_async_stream_preserves_context_manager_suppression_result():
         )
         is True
     )
+    assert finished == [True]
+    assert errors == []
 
 
 @pytest.mark.asyncio
