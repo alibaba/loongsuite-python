@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Prefer provider-supplied OpenAI-compatible response IDs (including
+  DashScope-style `request_id` values) for `gen_ai.response.id` on Hermes LLM
+  spans, while retaining Hermes's response ID as a fallback.
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.
