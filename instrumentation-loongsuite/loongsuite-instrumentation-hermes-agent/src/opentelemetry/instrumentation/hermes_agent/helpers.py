@@ -69,6 +69,38 @@ def obj_get(value: Any, field: str, default: Any = None) -> Any:
     return getattr(value, field, default)
 
 
+def response_identifier(
+    value: Any,
+    *,
+    fields: tuple[str, ...] = (
+        "id",
+        "request_id",
+        "response_id",
+        "_request_id",
+    ),
+) -> str | None:
+    """Return a normalized provider/framework response identifier.
+
+    OpenAI-compatible providers expose ``id`` while native DashScope-style
+    responses commonly call the same correlation value ``request_id``.  Keep
+    the extraction intentionally narrow so unrelated object identifiers are
+    never promoted to ``gen_ai.response.id``.
+    """
+
+    if isinstance(value, str):
+        normalized_value = value.strip()
+        return normalized_value or None
+
+    for field in fields:
+        candidate = obj_get(value, field)
+        if not isinstance(candidate, (str, int)):
+            continue
+        normalized = str(candidate).strip()
+        if normalized:
+            return normalized
+    return None
+
+
 def _normalize_platform(value: Any) -> str:
     platform = getattr(value, "value", value)
     return str(platform or "").strip().lower()
@@ -674,6 +706,8 @@ def update_llm_invocation_from_response(
     invocation: LLMInvocation,
     instance: Any,
     response: Any,
+    *,
+    provider_response_id: str | None = None,
 ) -> tuple[int, int, int]:
     response_model = getattr(response, "model", None)
     if response_model:
@@ -681,7 +715,18 @@ def update_llm_invocation_from_response(
     else:
         invocation.response_model_name = invocation.request_model
 
-    response_id = getattr(response, "id", None)
+    # Prefer the ID captured from the provider SDK stream. Hermes currently
+    # synthesizes ``stream-*`` IDs while aggregating OpenAI-compatible chunks,
+    # so the final framework response is only a fallback. Native-style
+    # ``request_id`` fields are checked before the framework ``id`` for the
+    # same reason.
+    response_id = response_identifier(
+        provider_response_id,
+        fields=("id",),
+    ) or response_identifier(
+        response,
+        fields=("request_id", "id", "response_id", "_request_id"),
+    )
     if response_id:
         invocation.response_id = response_id
 

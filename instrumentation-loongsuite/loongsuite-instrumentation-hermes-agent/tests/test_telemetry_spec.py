@@ -141,6 +141,10 @@ def test_instrumentation_skips_missing_hermes_targets(
     )
 
     assert ("run_agent", "AIAgent.run_conversation") in wrapped_targets
+    assert (
+        "run_agent",
+        "AIAgent._create_request_openai_client",
+    ) in wrapped_targets
     assert ("tools.memory_tool", "memory_tool") in wrapped_targets
     assert not any(
         module_name == "tools.session_search_tool"
@@ -186,6 +190,10 @@ def test_uninstrumentation_skips_missing_hermes_targets(
     instrumentation_module.HermesAgentInstrumentor()._uninstrument()
 
     assert (ai_agent, "run_conversation") in unwrapped_targets
+    assert (
+        ai_agent,
+        "_create_request_openai_client",
+    ) in unwrapped_targets
     assert (modules["tools.memory_tool"], "memory_tool") in unwrapped_targets
     assert not any(
         parent is modules["tools.delegate_tool"]
@@ -387,6 +395,423 @@ def _runtime(instrumentation_module, tracer_provider, meter_provider):
             "delegate_task",
         ),
     )
+
+
+class _FakeProviderResource:
+    def __init__(self, responses):
+        self._responses = iter(responses)
+
+    def create(self, **_kwargs):
+        return next(self._responses)
+
+
+class _ReadOnlyProviderResource:
+    __slots__ = ("_response",)
+
+    def __init__(self, response):
+        self._response = response
+
+    def create(self, **_kwargs):
+        return self._response
+
+
+def _provider_client(responses):
+    resource = _FakeProviderResource(responses)
+    return SimpleNamespace(
+        chat=SimpleNamespace(completions=resource),
+        responses=None,
+        completions=None,
+    )
+
+
+def _stream_chunk(response_id=None, *, request_id=None):
+    return SimpleNamespace(id=response_id, request_id=request_id)
+
+
+def _run_streaming_capture(
+    runtime,
+    agent,
+    provider_responses,
+    *,
+    framework_response_id="stream-framework-id",
+):
+    wrappers_module = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.wrappers"
+    )
+    provider_client_wrapper = wrappers_module.ProviderClientWrapper()
+    client = _provider_client(provider_responses)
+
+    def streaming_call(_api_kwargs, *, on_first_delta):
+        request_client = provider_client_wrapper(
+            lambda: client,
+            agent,
+            (),
+            {},
+        )
+        first_delta = True
+        for _chunk in request_client.chat.completions.create(stream=True):
+            if first_delta:
+                first_delta = False
+                on_first_delta()
+        return _response(
+            content="完成",
+            response_id=framework_response_id,
+        )
+
+    runtime.streaming_llm_wrapper(
+        streaming_call,
+        agent,
+        (
+            {
+                "model": agent.model,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        ),
+        {},
+    )
+
+
+def test_streaming_provider_response_id_overrides_hermes_framework_id(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-provider-id")
+
+    _run_streaming_capture(
+        runtime,
+        agent,
+        [
+            iter(
+                [
+                    _stream_chunk("chatcmpl-provider-123"),
+                    _stream_chunk("chatcmpl-provider-123"),
+                ]
+            )
+        ],
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert llm_span.attributes["gen_ai.response.id"] == "chatcmpl-provider-123"
+
+
+def test_streaming_request_id_from_usage_trailer_is_preserved(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-request-id")
+
+    _run_streaming_capture(
+        runtime,
+        agent,
+        [
+            iter(
+                [
+                    _stream_chunk(),
+                    _stream_chunk(request_id="dashscope-request-456"),
+                ]
+            )
+        ],
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert llm_span.attributes["gen_ai.response.id"] == "dashscope-request-456"
+
+
+def test_streaming_retry_uses_successful_provider_attempt_id(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-provider-retry")
+    wrappers_module = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.wrappers"
+    )
+    provider_client_wrapper = wrappers_module.ProviderClientWrapper()
+    client = _provider_client(
+        [
+            iter([_stream_chunk("chatcmpl-failed-attempt")]),
+            iter([_stream_chunk("chatcmpl-successful-attempt")]),
+        ]
+    )
+
+    def streaming_call(_api_kwargs, *, on_first_delta):
+        request_client = provider_client_wrapper(
+            lambda: client,
+            agent,
+            (),
+            {},
+        )
+        for _chunk in request_client.chat.completions.create(stream=True):
+            on_first_delta()
+        for _chunk in request_client.chat.completions.create(stream=True):
+            on_first_delta()
+        return _response(
+            content="恢复成功",
+            response_id="stream-retry-framework-id",
+        )
+
+    runtime.streaming_llm_wrapper(
+        streaming_call,
+        agent,
+        ({"model": agent.model, "messages": []},),
+        {},
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert (
+        llm_span.attributes["gen_ai.response.id"]
+        == "chatcmpl-successful-attempt"
+    )
+
+
+def test_streaming_retry_does_not_reuse_failed_provider_attempt_id(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-provider-retry-fallback")
+    wrappers_module = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.wrappers"
+    )
+    provider_client_wrapper = wrappers_module.ProviderClientWrapper()
+    client = _provider_client(
+        [
+            iter([_stream_chunk("chatcmpl-failed-attempt")]),
+            iter([_stream_chunk()]),
+        ]
+    )
+
+    def streaming_call(_api_kwargs, *, on_first_delta):
+        request_client = provider_client_wrapper(
+            lambda: client,
+            agent,
+            (),
+            {},
+        )
+        for _chunk in request_client.chat.completions.create(stream=True):
+            on_first_delta()
+        for _chunk in request_client.chat.completions.create(stream=True):
+            on_first_delta()
+        return _response(
+            content="恢复成功",
+            response_id="stream-retry-framework-fallback",
+        )
+
+    runtime.streaming_llm_wrapper(
+        streaming_call,
+        agent,
+        ({"model": agent.model, "messages": []},),
+        {},
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert (
+        llm_span.attributes["gen_ai.response.id"]
+        == "stream-retry-framework-fallback"
+    )
+
+
+def test_streaming_without_provider_id_falls_back_to_hermes_response_id(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-provider-fallback")
+
+    _run_streaming_capture(
+        runtime,
+        agent,
+        [iter([_stream_chunk()])],
+        framework_response_id="stream-hermes-fallback",
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert (
+        llm_span.attributes["gen_ai.response.id"] == "stream-hermes-fallback"
+    )
+
+
+def test_read_only_provider_resource_falls_back_without_breaking_call(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-provider-read-only")
+    wrappers_module = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.wrappers"
+    )
+    provider_client_wrapper = wrappers_module.ProviderClientWrapper()
+    resource = _ReadOnlyProviderResource(
+        iter([_stream_chunk("chatcmpl-not-captured")])
+    )
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=resource),
+        responses=None,
+        completions=None,
+    )
+
+    def streaming_call(_api_kwargs, *, on_first_delta):
+        request_client = provider_client_wrapper(
+            lambda: client,
+            agent,
+            (),
+            {},
+        )
+        for _chunk in request_client.chat.completions.create(stream=True):
+            on_first_delta()
+        return _response(
+            content="完成",
+            response_id="stream-read-only-fallback",
+        )
+
+    runtime.streaming_llm_wrapper(
+        streaming_call,
+        agent,
+        ({"model": agent.model, "messages": []},),
+        {},
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert (
+        llm_span.attributes["gen_ai.response.id"]
+        == "stream-read-only-fallback"
+    )
+
+
+def test_provider_attempt_from_previous_call_does_not_leak(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-provider-stale-attempt")
+    wrappers_module = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.wrappers"
+    )
+    provider_client_wrapper = wrappers_module.ProviderClientWrapper()
+    client = _provider_client(
+        [iter([_stream_chunk("chatcmpl-previous-call")])]
+    )
+    request_client = provider_client_wrapper(lambda: client, agent, (), {})
+    list(request_client.chat.completions.create(stream=True))
+
+    runtime.llm_wrapper(
+        lambda _api_kwargs: _response(
+            content="新调用",
+            response_id="framework-current-call",
+        ),
+        agent,
+        ({"model": agent.model, "messages": []},),
+        {},
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert (
+        llm_span.attributes["gen_ai.response.id"] == "framework-current-call"
+    )
+
+
+def test_native_request_id_precedes_framework_response_id(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-native-request-id")
+    response = _response(content="完成", response_id="framework-response-id")
+    response.request_id = "dashscope-native-request-id"
+
+    runtime.llm_wrapper(
+        lambda api_kwargs: response,
+        agent,
+        ({"model": agent.model, "messages": []},),
+        {},
+    )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert (
+        llm_span.attributes["gen_ai.response.id"]
+        == "dashscope-native-request-id"
+    )
+
+
+def test_streaming_provider_response_ids_are_isolated_across_threads(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    shared_agent = _FakeAgent(session_id="session-provider-concurrent")
+    barrier = threading.Barrier(2)
+    errors = []
+
+    def run_stream(thread_id):
+        try:
+            wrappers_module = importlib.import_module(
+                "opentelemetry.instrumentation.hermes_agent.wrappers"
+            )
+            provider_client_wrapper = wrappers_module.ProviderClientWrapper()
+            client = _provider_client(
+                [iter([_stream_chunk(f"chatcmpl-thread-{thread_id}")])]
+            )
+
+            def streaming_call(_api_kwargs, *, on_first_delta):
+                request_client = provider_client_wrapper(
+                    lambda: client,
+                    shared_agent,
+                    (),
+                    {},
+                )
+                stream = request_client.chat.completions.create(stream=True)
+                next(stream)
+                barrier.wait(timeout=5)
+                on_first_delta()
+                return _response(
+                    content=f"完成-{thread_id}",
+                    response_id=f"stream-framework-{thread_id}",
+                )
+
+            runtime.streaming_llm_wrapper(
+                streaming_call,
+                shared_agent,
+                ({"model": shared_agent.model, "messages": []},),
+                {},
+            )
+        except BaseException as exc:  # pragma: no cover - defensive
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run_stream, args=(thread_id,))
+        for thread_id in (1, 2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert {
+        span.attributes["gen_ai.response.id"]
+        for span in _spans_by_kind(span_exporter, "LLM")
+    } == {"chatcmpl-thread-1", "chatcmpl-thread-2"}
 
 
 def test_agent_layer_reuses_existing_entry_instead_of_creating_a_new_one(
