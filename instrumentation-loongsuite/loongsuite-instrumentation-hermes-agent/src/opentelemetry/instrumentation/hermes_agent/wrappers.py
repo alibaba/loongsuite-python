@@ -307,6 +307,7 @@ class LLMCallWrapper:
 
         api_kwargs = args[0] if args else kwargs.get("api_kwargs", {})
         invocation = create_llm_invocation(instance, api_kwargs)
+        invocation.stream = True if self._streaming else None
         provider = invocation.provider or provider_name(instance)
         model = invocation.request_model or ""
         self._handler.start_llm(invocation)
@@ -318,6 +319,8 @@ class LLMCallWrapper:
 
                 def _wrapped_first_delta():
                     now = timeit.default_timer()
+                    if invocation.monotonic_first_chunk_s is None:
+                        invocation.monotonic_first_chunk_s = now
                     invocation.monotonic_first_token_s = now
                     if current_state["first_token_monotonic_s"] is None:
                         current_state["first_token_monotonic_s"] = now

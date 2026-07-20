@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Mark streaming LLM requests with `gen_ai.request.stream=true`.
+- Omit opt-in Retrieval query and document attributes unless content capture is
+  enabled.
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.

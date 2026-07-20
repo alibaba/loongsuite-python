@@ -37,6 +37,7 @@ from opentelemetry.semconv.attributes import (
 from opentelemetry.trace import Span
 from opentelemetry.trace.propagation import set_span_in_context
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (  # pylint: disable=no-name-in-module
+    GEN_AI_AGENT_VERSION,
     GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
     GEN_AI_REACT_FINISH_REASON,
     GEN_AI_REACT_ROUND,
@@ -53,6 +54,7 @@ from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import
     GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN,
     GEN_AI_RETRIEVAL_DOCUMENTS,
     GEN_AI_RETRIEVAL_QUERY_TEXT,
+    GEN_AI_RETRIEVAL_TOP_K,
     GEN_AI_SESSION_ID,
     GEN_AI_SKILL_DESCRIPTION,
     GEN_AI_SKILL_ID,
@@ -148,6 +150,8 @@ def _get_invoke_agent_common_attributes(
         attributes[GenAI.GEN_AI_AGENT_ID] = invocation.agent_id
     if invocation.agent_name is not None:
         attributes[GenAI.GEN_AI_AGENT_NAME] = invocation.agent_name
+    if invocation.agent_version is not None:
+        attributes[GEN_AI_AGENT_VERSION] = invocation.agent_version
     if invocation.conversation_id is not None:
         attributes[GenAI.GEN_AI_CONVERSATION_ID] = invocation.conversation_id
     if invocation.data_source_id is not None:
@@ -318,32 +322,23 @@ def _get_retrieval_documents_attributes(
     documents: list[RetrievalDocument] | None,
 ) -> dict[str, Any]:
     """
-    Get retrieval attributes.
-    Records documents only when experimental mode is enabled.
-    Serialization follows ToolDefinition pattern:
-    - When content capturing is SPAN_ONLY or SPAN_AND_EVENT: full (id, score, content, metadata)
-    - Otherwise (NO_CONTENT): only id and score
+    Get opt-in retrieval document attributes.
+
+    The upstream convention marks the entire ``gen_ai.retrieval.documents``
+    attribute as opt-in, so it must be omitted unless span content capture is
+    explicitly enabled. When enabled, serialize the complete document model.
     """
     attributes: dict[str, Any] = {}
-    if not is_experimental_mode():
+    if not is_experimental_mode() or get_content_capturing_mode() not in (
+        ContentCapturingMode.SPAN_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    ):
         return attributes
     if not documents:
         return attributes
 
-    should_record_full = get_content_capturing_mode() in (
-        ContentCapturingMode.SPAN_ONLY,
-        ContentCapturingMode.SPAN_AND_EVENT,
-    )
-
-    doc_dicts: list[dict[str, Any]] = []
-    for doc in documents:
-        if should_record_full:
-            doc_dicts.append(asdict(doc))
-        else:
-            doc_dicts.append({"id": doc.id, "score": doc.score})
-
-    if doc_dicts:
-        attributes[GEN_AI_RETRIEVAL_DOCUMENTS] = gen_ai_json_dumps(doc_dicts)
+    doc_dicts = [asdict(doc) for doc in documents]
+    attributes[GEN_AI_RETRIEVAL_DOCUMENTS] = gen_ai_json_dumps(doc_dicts)
     return attributes
 
 
@@ -481,6 +476,8 @@ def _apply_create_agent_finish_attributes(
         attributes[GenAI.GEN_AI_AGENT_ID] = invocation.agent_id
     if invocation.agent_name is not None:
         attributes[GenAI.GEN_AI_AGENT_NAME] = invocation.agent_name
+    if invocation.agent_version is not None:
+        attributes[GEN_AI_AGENT_VERSION] = invocation.agent_version
     if invocation.request_model is not None:
         attributes[GenAI.GEN_AI_REQUEST_MODEL] = invocation.request_model
     if invocation.server_port is not None:
@@ -638,7 +635,7 @@ def _get_retrieval_span_name(invocation: RetrievalInvocation) -> str:
 def _apply_retrieval_finish_attributes(
     span: Span, invocation: RetrievalInvocation
 ) -> None:
-    """Apply attributes for retrieval operations (per LoongSuite semantic convention)."""
+    """Apply attributes for upstream OpenTelemetry GenAI retrieval operations."""
     span.update_name(_get_retrieval_span_name(invocation))
 
     # Build all attributes
@@ -662,7 +659,7 @@ def _apply_retrieval_finish_attributes(
 
     # Recommended
     if invocation.top_k is not None:
-        attributes[GenAI.GEN_AI_REQUEST_TOP_K] = invocation.top_k
+        attributes[GEN_AI_RETRIEVAL_TOP_K] = invocation.top_k
 
     # Optional: retrieval query (sensitive - controlled by content capturing mode)
     if invocation.query is not None and (

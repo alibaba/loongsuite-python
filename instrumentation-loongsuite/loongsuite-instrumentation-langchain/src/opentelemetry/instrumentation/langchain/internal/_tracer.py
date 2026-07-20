@@ -273,6 +273,7 @@ class LoongsuiteTracer(BaseTracer):
             and rd.invocation is not None
         ):
             inv: LLMInvocation = rd.invocation
+            inv.stream = True
             if inv.monotonic_first_token_s is None:
                 inv.monotonic_first_token_s = timeit.default_timer()
         return None

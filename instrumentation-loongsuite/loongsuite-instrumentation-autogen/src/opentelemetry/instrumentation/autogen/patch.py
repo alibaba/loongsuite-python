@@ -464,15 +464,20 @@ def _direct_model_create_stream_wrapper(wrapped, instance, args, kwargs):  # typ
     async def _generator():  # type: ignore[no-untyped-def]
         handler = _get_handler()
         invocation = _make_direct_model_invocation(instance, args, kwargs)
+        invocation.stream = True
         handler.start_llm(invocation)
         _mark_autogen_live_span(invocation)
         try:
             async for item in wrapped(*args, **kwargs):
+                now = timeit.default_timer()
+                if invocation.monotonic_first_chunk_s is None:
+                    invocation.monotonic_first_chunk_s = now
                 if (
                     isinstance(item, str)
+                    and bool(item)
                     and invocation.monotonic_first_token_s is None
                 ):
-                    invocation.monotonic_first_token_s = timeit.default_timer()
+                    invocation.monotonic_first_token_s = now
                 elif type(item).__name__ == "CreateResult":
                     apply_create_result(invocation, item)
                 yield item
@@ -523,6 +528,11 @@ def _call_llm_wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyp
             agent_name=agent_name,
             output_type=output_type,
         )
+        invocation.stream = (
+            True
+            if _arg_value(args, kwargs, "model_client_stream") is True
+            else None
+        )
         handler.start_llm(invocation)
         _mark_autogen_live_span(invocation)
         try:
@@ -531,11 +541,15 @@ def _call_llm_wrapper(wrapped, instance, args, kwargs):  # type: ignore[no-untyp
                 _suppress_direct_model_span,
                 True,
             ):
+                now = timeit.default_timer()
+                if invocation.monotonic_first_chunk_s is None:
+                    invocation.monotonic_first_chunk_s = now
                 if (
                     type(item).__name__ == "ModelClientStreamingChunkEvent"
+                    and bool(getattr(item, "content", None))
                     and invocation.monotonic_first_token_s is None
                 ):
-                    invocation.monotonic_first_token_s = timeit.default_timer()
+                    invocation.monotonic_first_token_s = now
                 elif type(item).__name__ == "CreateResult":
                     apply_create_result(invocation, item)
                 yield item

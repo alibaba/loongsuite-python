@@ -35,10 +35,18 @@ from opentelemetry.util.genai.extended_semconv import (
     gen_ai_extended_attributes as GenAIExtended,  # LoongSuite Extension
 )
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (  # pylint: disable=no-name-in-module
+    GEN_AI_CONVERSATION_COMPACTED,
+    GEN_AI_PROMPT_NAME,
+    GEN_AI_PROMPT_VARIABLE_PREFIX,
+    GEN_AI_PROMPT_VERSION,
+    GEN_AI_REQUEST_REASONING_LEVEL,
+    GEN_AI_REQUEST_STREAM,
+    GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
     GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN,  # LoongSuite Extension
     GEN_AI_SPAN_KIND,  # LoongSuite Extension
     GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,  # LoongSuite Extension
     GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,  # LoongSuite Extension
+    GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     GEN_AI_USAGE_TOTAL_TOKENS,  # LoongSuite Extension
     GenAiSpanKindValues,  # LoongSuite Extension
 )
@@ -75,6 +83,10 @@ def _get_llm_common_attributes(
             GenAI.GEN_AI_CONVERSATION_ID,
             invocation.conversation_id,
         ),  # LoongSuite Extension
+        (
+            GEN_AI_CONVERSATION_COMPACTED,
+            True if invocation.conversation_compacted is True else None,
+        ),
         (server_attributes.SERVER_ADDRESS, invocation.server_address),
         (server_attributes.SERVER_PORT, invocation.server_port),
     )
@@ -256,6 +268,9 @@ def _maybe_emit_llm_event(
     attributes: dict[str, Any] = {}
     attributes.update(_get_llm_common_attributes(invocation))
     attributes.update(_get_llm_request_attributes(invocation))
+    attributes.update(
+        _get_prompt_variables_attributes(invocation, for_span=False)
+    )
     attributes.update(_get_llm_response_attributes(invocation))
     attributes.update(
         _get_llm_messages_attributes_for_event(
@@ -293,6 +308,9 @@ def _apply_llm_finish_attributes(
     attributes: dict[str, Any] = {}
     attributes.update(_get_llm_common_attributes(invocation))
     attributes.update(_get_llm_request_attributes(invocation))
+    attributes.update(
+        _get_prompt_variables_attributes(invocation, for_span=True)
+    )
     attributes.update(_get_llm_response_attributes(invocation))
     attributes.update(
         _get_llm_messages_attributes_for_span(
@@ -325,6 +343,10 @@ def _get_llm_request_attributes(
 ) -> dict[str, Any]:
     """Get GenAI request semantic convention attributes."""
     optional_attrs = (
+        (GEN_AI_PROMPT_NAME, invocation.prompt_name),
+        (GEN_AI_PROMPT_VERSION, invocation.prompt_version),
+        (GEN_AI_REQUEST_STREAM, True if invocation.stream is True else None),
+        (GEN_AI_REQUEST_REASONING_LEVEL, invocation.reasoning_level),
         (
             GenAI.GEN_AI_OUTPUT_TYPE,
             invocation.output_type,
@@ -347,6 +369,31 @@ def _get_llm_request_attributes(
     )
 
     return {key: value for key, value in optional_attrs if value is not None}
+
+
+def _get_prompt_variables_attributes(
+    invocation: LLMInvocation, *, for_span: bool
+) -> dict[str, str]:
+    """Return opt-in prompt variables for the requested telemetry signal."""
+    if not is_experimental_mode():
+        return {}
+
+    allowed_modes = (
+        (ContentCapturingMode.SPAN_ONLY, ContentCapturingMode.SPAN_AND_EVENT)
+        if for_span
+        else (
+            ContentCapturingMode.EVENT_ONLY,
+            ContentCapturingMode.SPAN_AND_EVENT,
+        )
+    )
+    if get_content_capturing_mode() not in allowed_modes:
+        return {}
+
+    return {
+        f"{GEN_AI_PROMPT_VARIABLE_PREFIX}{name}": value
+        for name, value in invocation.prompt_variables.items()
+        if name and value is not None
+    }
 
 
 def _get_llm_response_attributes(
@@ -380,6 +427,10 @@ def _get_llm_response_attributes(
         (GenAI.GEN_AI_USAGE_INPUT_TOKENS, invocation.input_tokens),
         (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, invocation.output_tokens),
         (
+            GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
+            invocation.reasoning_output_tokens,
+        ),
+        (
             GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,  # LoongSuite Extension
             invocation.usage_cache_creation_input_tokens,
         ),
@@ -399,6 +450,15 @@ def _get_llm_response_attributes(
         total_tokens += invocation.output_tokens
     if total_tokens > 0:
         result[GEN_AI_USAGE_TOTAL_TOKENS] = total_tokens
+
+    if (
+        invocation.monotonic_first_chunk_s is not None
+        and invocation.monotonic_start_s is not None
+        and invocation.monotonic_first_chunk_s >= invocation.monotonic_start_s
+    ):
+        result[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK] = (
+            invocation.monotonic_first_chunk_s - invocation.monotonic_start_s
+        )
 
     # LoongSuite Extension: Time to first token for streaming responses (in nanoseconds)
     if (

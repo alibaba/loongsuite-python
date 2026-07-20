@@ -20,7 +20,26 @@ These attributes are defined according to the memory-span.md and memory-log.md s
 from enum import Enum
 from typing import Final
 
-# Memory operation type
+# Current upstream OpenTelemetry GenAI Memory attributes. These are defined
+# locally until LoongSuite can raise its semantic-conventions dependency floor.
+GEN_AI_MEMORY_STORE_ID: Final = "gen_ai.memory.store.id"
+"""Unique identifier of the memory store."""
+
+GEN_AI_MEMORY_RECORD_ID: Final = "gen_ai.memory.record.id"
+"""Unique identifier of a memory record."""
+
+GEN_AI_MEMORY_RECORD_COUNT: Final = "gen_ai.memory.record.count"
+"""Number of memory records affected by the operation."""
+
+GEN_AI_MEMORY_QUERY_TEXT: Final = "gen_ai.memory.query.text"
+"""Opt-in text used to query a memory store."""
+
+GEN_AI_MEMORY_RECORDS: Final = "gen_ai.memory.records"
+"""Opt-in structured records stored or retrieved by the operation."""
+
+# Legacy LoongSuite Memory attributes. Kept as import-compatible constants for
+# one transition cycle, but the standard Memory span utility no longer emits
+# them.
 GEN_AI_MEMORY_OPERATION: Final = "gen_ai.memory.operation"
 """
 The type of memory operation being performed.
@@ -133,3 +152,15 @@ class GenAiMemoryOperationValues(Enum):
 
     DELETE_ALL = "delete_all"
     """Delete all memory records."""
+
+
+class GenAiMemoryOperationNameValues(Enum):
+    """Operation names from the upstream GenAI Memory span convention."""
+
+    CREATE_MEMORY_STORE = "create_memory_store"
+    SEARCH_MEMORY = "search_memory"
+    CREATE_MEMORY = "create_memory"
+    UPDATE_MEMORY = "update_memory"
+    UPSERT_MEMORY = "upsert_memory"
+    DELETE_MEMORY = "delete_memory"
+    DELETE_MEMORY_STORE = "delete_memory_store"

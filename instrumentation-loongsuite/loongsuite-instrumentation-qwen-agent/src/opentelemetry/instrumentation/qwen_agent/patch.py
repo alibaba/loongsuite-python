@@ -290,11 +290,15 @@ def _wrap_streaming_llm_response(
     """Wrap a streaming LLM response iterator to capture output on completion."""
     try:
         last_response = None
-        first_token = True
         for response in response_iter:
-            if first_token:
-                invocation.monotonic_first_token_s = timeit.default_timer()
-                first_token = False
+            now = timeit.default_timer()
+            if invocation.monotonic_first_chunk_s is None:
+                invocation.monotonic_first_chunk_s = now
+            if (
+                invocation.monotonic_first_token_s is None
+                and _qwen_response_has_token(response)
+            ):
+                invocation.monotonic_first_token_s = now
             _apply_usage_to_llm_invocation(invocation, response)
             last_response = response
             yield response
@@ -330,6 +334,34 @@ def _wrap_streaming_llm_response(
     except Exception as e:
         handler.fail_llm(invocation, Error(message=str(e), type=type(e)))
         raise
+
+
+def _qwen_response_has_token(response: Any) -> bool:
+    messages = response if isinstance(response, list) else [response]
+    for message in messages:
+        content = (
+            message.get("content")
+            if isinstance(message, dict)
+            else getattr(message, "content", None)
+        )
+        if isinstance(content, str) and content:
+            return True
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, str) and part:
+                    return True
+                if isinstance(part, dict) and (
+                    part.get("text") or part.get("function_call")
+                ):
+                    return True
+        function_call = (
+            message.get("function_call")
+            if isinstance(message, dict)
+            else getattr(message, "function_call", None)
+        )
+        if function_call:
+            return True
+    return False
 
 
 def wrap_agent_call_llm(

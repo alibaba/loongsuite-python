@@ -40,6 +40,15 @@ E2E_AGENT_ID = "test_agent_client_full"
 E2E_RUN_ID = "test_run_client_full"
 
 
+def _memory_spans(spans, operation_name):
+    return [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == operation_name
+        and span.attributes.get("gen_ai.span.kind") == "MEMORY"
+    ]
+
+
 def _new_client():
     pytest.importorskip("mem0")
     MemoryClient = pytest.importorskip("mem0.client.main").MemoryClient  # type: ignore
@@ -100,31 +109,19 @@ def test_client_add_vcr(span_exporter, instrument_with_content):
 
     # Verify add operation span attributes
     spans = span_exporter.get_finished_spans()
-    add_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "add"
-    ]
+    add_spans = _memory_spans(spans, "upsert_memory")
     assert add_spans, "Should have add operation span"
 
     add_span = add_spans[0]
-    # Basic attributes
-    assert (
-        add_span.attributes.get("gen_ai.operation.name") == "memory_operation"
-    )
-    assert add_span.attributes.get("gen_ai.memory.operation") == "add"
-    assert add_span.attributes.get("gen_ai.memory.user_id") == E2E_USER_ID
-    assert add_span.attributes.get("gen_ai.memory.agent_id") == E2E_AGENT_ID
+    assert add_span.name == "upsert_memory"
+    assert isinstance(add_span.attributes["gen_ai.memory.record.count"], int)
 
     # Server attributes
     assert "server.address" in add_span.attributes
     assert "server.port" in add_span.attributes
 
-    # Input messages
-    if "gen_ai.memory.input.messages" in add_span.attributes:
-        assert isinstance(
-            add_span.attributes["gen_ai.memory.input.messages"], str
-        )
+    if "gen_ai.memory.records" in add_span.attributes:
+        assert isinstance(add_span.attributes["gen_ai.memory.records"], str)
 
 
 @pytest.mark.vcr(cassette_name="test_client_get_all_vcr")
@@ -141,25 +138,15 @@ def test_client_get_all_vcr(span_exporter, instrument_with_content):
 
     # Verify get_all operation span attributes
     spans = span_exporter.get_finished_spans()
-    getall_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "get_all"
-    ]
+    getall_spans = _memory_spans(spans, "search_memory")
     assert getall_spans, "Should have get_all operation span"
 
     getall_span = getall_spans[0]
-    assert (
-        getall_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
+    assert isinstance(
+        getall_span.attributes["gen_ai.memory.record.count"], int
     )
-    assert getall_span.attributes.get("gen_ai.memory.operation") == "get_all"
     assert "server.address" in getall_span.attributes
     assert "server.port" in getall_span.attributes
-
-    # top_k parameter
-    if "gen_ai.memory.top_k" in getall_span.attributes:
-        assert getall_span.attributes["gen_ai.memory.top_k"] == top_k
 
 
 @pytest.mark.vcr(cassette_name="test_client_get_vcr")
@@ -174,20 +161,13 @@ def test_client_get_vcr(span_exporter, instrument_with_content):
 
     # Verify get operation span attributes
     spans = span_exporter.get_finished_spans()
-    get_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "get"
-    ]
+    get_spans = _memory_spans(spans, "search_memory")
     assert get_spans, "Should have get operation span"
 
     get_span = get_spans[0]
     assert (
-        get_span.attributes.get("gen_ai.operation.name") == "memory_operation"
+        get_span.attributes["gen_ai.memory.record.id"] == HARDCODED_MEMORY_ID_1
     )
-    assert get_span.attributes.get("gen_ai.memory.operation") == "get"
-    assert "gen_ai.memory.id" in get_span.attributes
-    assert get_span.attributes["gen_ai.memory.id"] == HARDCODED_MEMORY_ID_1
     assert "server.address" in get_span.attributes
 
 
@@ -205,25 +185,14 @@ def test_client_search_vcr(span_exporter, instrument_with_content):
 
     # Verify search operation span attributes
     spans = span_exporter.get_finished_spans()
-    search_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "search"
-    ]
+    search_spans = _memory_spans(spans, "search_memory")
     assert search_spans, "Should have search operation span"
 
     search_span = search_spans[0]
-    assert (
-        search_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
+    assert search_span.attributes["gen_ai.memory.query.text"] == query
+    assert isinstance(
+        search_span.attributes["gen_ai.memory.record.count"], int
     )
-    assert search_span.attributes.get("gen_ai.memory.operation") == "search"
-
-    # Query-related attributes
-    if "gen_ai.memory.input.messages" in search_span.attributes:
-        assert query in str(
-            search_span.attributes["gen_ai.memory.input.messages"]
-        )
 
     assert "server.address" in search_span.attributes
 
@@ -241,28 +210,18 @@ def test_client_update_vcr(span_exporter, instrument_with_content):
 
     # Verify update operation span attributes
     spans = span_exporter.get_finished_spans()
-    update_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "update"
-    ]
+    update_spans = _memory_spans(spans, "update_memory")
     assert update_spans, "Should have update operation span"
 
     update_span = update_spans[0]
     assert (
-        update_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
+        update_span.attributes["gen_ai.memory.record.id"]
+        == HARDCODED_MEMORY_ID_1
     )
-    assert update_span.attributes.get("gen_ai.memory.operation") == "update"
-    assert "gen_ai.memory.id" in update_span.attributes
-    assert update_span.attributes["gen_ai.memory.id"] == HARDCODED_MEMORY_ID_1
     assert "server.address" in update_span.attributes
 
-    # Input messages (new content)
-    if "gen_ai.memory.input.messages" in update_span.attributes:
-        assert new_text in str(
-            update_span.attributes["gen_ai.memory.input.messages"]
-        )
+    if "gen_ai.memory.records" in update_span.attributes:
+        assert new_text in update_span.attributes["gen_ai.memory.records"]
 
 
 @pytest.mark.vcr(cassette_name="test_client_delete_vcr")
@@ -290,21 +249,11 @@ def test_client_delete_vcr(span_exporter, instrument_with_content):
 
     # Verify delete operation span attributes
     spans = span_exporter.get_finished_spans()
-    delete_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "delete"
-    ]
+    delete_spans = _memory_spans(spans, "delete_memory")
     assert delete_spans, "Should have delete operation span"
 
     delete_span = delete_spans[0]
-    assert (
-        delete_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
-    )
-    assert delete_span.attributes.get("gen_ai.memory.operation") == "delete"
-    assert "gen_ai.memory.id" in delete_span.attributes
-    assert delete_span.attributes["gen_ai.memory.id"] == mem_id
+    assert delete_span.attributes["gen_ai.memory.record.id"] == mem_id
     assert "server.address" in delete_span.attributes
 
 
@@ -320,21 +269,14 @@ def test_client_history_vcr(span_exporter, instrument_with_content):
 
     # Verify history operation span attributes
     spans = span_exporter.get_finished_spans()
-    history_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "history"
-    ]
+    history_spans = _memory_spans(spans, "search_memory")
     assert history_spans, "Should have history operation span"
 
     history_span = history_spans[0]
     assert (
-        history_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
+        history_span.attributes["gen_ai.memory.record.id"]
+        == HARDCODED_MEMORY_ID_1
     )
-    assert history_span.attributes.get("gen_ai.memory.operation") == "history"
-    assert "gen_ai.memory.id" in history_span.attributes
-    assert history_span.attributes["gen_ai.memory.id"] == HARDCODED_MEMORY_ID_1
     assert "server.address" in history_span.attributes
 
 
