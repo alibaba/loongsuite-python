@@ -60,6 +60,7 @@ import logging
 import threading
 import timeit
 import weakref
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import wraps
 from typing import Any, AsyncGenerator, MutableMapping
@@ -79,6 +80,31 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_get(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    try:
+        return getattr(value, name, None)
+    except (AttributeError, KeyError):
+        return None
+
+
+def _stream_chunk_has_token(chunk: Any) -> bool:
+    content = _safe_get(chunk, "content")
+    if isinstance(content, str):
+        return bool(content)
+    for block in content or []:
+        block_type = _safe_get(block, "type")
+        if block_type == "text" and _safe_get(block, "text"):
+            return True
+        if block_type == "thinking" and _safe_get(block, "thinking"):
+            return True
+        if block_type == "tool_call":
+            return True
+    return bool(_safe_get(chunk, "tool_calls"))
+
 
 # Fixed hook name shared by all concurrent invocations on a given agent.
 # Using a stable name (rather than a per-call uuid) lets AgentScope's own
@@ -392,12 +418,16 @@ class AgentScopeChatModelWrapper:
         """Wrap streaming response to update invocation when done."""
         try:
             last_chunk = None
-            first_token_received = False
             async for chunk in generator:
-                # Record time when first token is received
-                if not first_token_received:
-                    first_token_received = True
-                    invocation.monotonic_first_token_s = timeit.default_timer()
+                now = timeit.default_timer()
+                invocation.stream = True
+                if invocation.monotonic_first_chunk_s is None:
+                    invocation.monotonic_first_chunk_s = now
+                if (
+                    invocation.monotonic_first_token_s is None
+                    and _stream_chunk_has_token(chunk)
+                ):
+                    invocation.monotonic_first_token_s = now
 
                 last_chunk = chunk
                 yield chunk

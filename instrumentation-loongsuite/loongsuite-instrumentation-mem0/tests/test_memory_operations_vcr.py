@@ -23,10 +23,6 @@ from typing import Any, Dict, List, cast
 
 import pytest
 
-from opentelemetry.semconv._incubating.attributes import (
-    gen_ai_attributes as GenAIAttributes,
-)
-
 _mem0 = pytest.importorskip("mem0")
 _factory = pytest.importorskip("mem0.utils.factory")
 
@@ -228,25 +224,16 @@ def test_memory_add_full_flow(
     assert m.add(test_message, user_id="u_123") is not None
 
     spans = span_exporter.get_finished_spans()
-    # verify top-level operation type via attributes, not relying on span.name
+    # Verify the upstream Memory operation and LoongSuite classification.
     add_span = next(
         s
         for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "add"
+        if s.attributes.get("gen_ai.operation.name") == "upsert_memory"
+        and s.attributes.get("gen_ai.span.kind") == "MEMORY"
     )
-    assert GenAIAttributes.GEN_AI_OPERATION_NAME in add_span.attributes
-
-    # Verify input messages collection (messages passed as positional parameter)
-    assert "gen_ai.memory.input.messages" in add_span.attributes
-    assert test_message in add_span.attributes["gen_ai.memory.input.messages"]
-
-    # Verify output messages collection (if has results)
-    if (
-        "gen_ai.memory.result.count" in add_span.attributes
-        and add_span.attributes["gen_ai.memory.result.count"] > 0
-    ):
-        # If has results, should have output messages
-        assert "gen_ai.memory.output.messages" in add_span.attributes
+    assert add_span.name == "upsert_memory"
+    assert isinstance(add_span.attributes["gen_ai.memory.record.count"], int)
+    assert test_message in add_span.attributes["gen_ai.memory.records"]
 
 
 @pytest.mark.vcr()
@@ -272,23 +259,17 @@ def test_memory_search_full_flow(
     assert m.search(test_query, user_id="u_123", limit=2) is not None
 
     spans = span_exporter.get_finished_spans()
-    # verify top-level operation type via attributes
+    # Verify the upstream Memory search operation.
     search_span = next(
         s
         for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "search"
+        if s.attributes.get("gen_ai.operation.name") == "search_memory"
+        and s.attributes.get("gen_ai.span.kind") == "MEMORY"
     )
-
-    # Verify input messages collection (query passed as positional parameter)
-    assert "gen_ai.memory.input.messages" in search_span.attributes
-    assert test_query in search_span.attributes["gen_ai.memory.input.messages"]
-
-    # Verify output messages collection (if has results)
-    # FakeVectorStore search will return results, so should have output messages
-    if "gen_ai.memory.result.count" in search_span.attributes:
-        # As long as executed, regardless of whether results are empty, may have output messages
-        # here not mandatory, because results may be empty
-        pass
+    assert search_span.attributes["gen_ai.memory.query.text"] == test_query
+    assert isinstance(
+        search_span.attributes["gen_ai.memory.record.count"], int
+    )
 
 
 @pytest.mark.vcr()

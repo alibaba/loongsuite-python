@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Align streaming timing and response extraction with the current upstream
+  GenAI conventions.
 - Split Agno 2.x tool-call loops into ReAct step spans with one LLM span per
   provider request, and populate streaming agent token usage from child LLM
   spans when Agno run events do not include metrics.

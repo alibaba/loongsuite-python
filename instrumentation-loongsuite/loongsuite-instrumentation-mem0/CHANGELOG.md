@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Map Mem0 methods to upstream Memory operations and emit store, record, count,
+  query, and records attributes while preserving the LoongSuite `MEMORY` span
+  classification.
+- Stop emitting legacy Mem0 user, agent, run, limit, and input/output message
+  attributes and the legacy `gen_ai.memory.operation.details` event on standard
+  Memory telemetry.
+
 ## Version 0.7.0 (2026-07-03)
 
 There are no changelog entries for this release.

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Capture time to first chunk independently from time to first token, and emit
+  the stream request indicator only when AutoGen enables model streaming.
 - Avoid enriching non-AutoGen spans that use overlapping GenAI operation names.
 
 ## Version 0.7.0 (2026-07-03)

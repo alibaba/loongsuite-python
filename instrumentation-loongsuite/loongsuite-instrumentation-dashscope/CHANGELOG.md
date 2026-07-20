@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Capture stream request state, reasoning token usage, response IDs, and
+  independent time-to-first-chunk and time-to-first-token timestamps.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Fixed
