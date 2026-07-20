@@ -185,6 +185,13 @@ def _registry_entry(pkg: dict) -> dict:
     }
 
 
+def _bootstrap_enabled(pyproject: dict) -> bool:
+    """Return whether a LoongSuite package belongs in auto-bootstrap."""
+    return (
+        pyproject.get("tool", {}).get("loongsuite", {}).get("bootstrap", True)
+    )
+
+
 def _render_python_string(value: str) -> str:
     return json.dumps(value)
 
@@ -399,6 +406,18 @@ def get_instrumentation_packages(
                 continue
 
             try:
+                # Shared runtime packages are built and published, but must not
+                # be treated as auto-enabled instrumentations.
+                with open(pyproject_toml, "rb") as f:
+                    pyproject = tomli.load(f)
+
+                if not _bootstrap_enabled(pyproject):
+                    logger.info(
+                        "Skipping %s because tool.loongsuite.bootstrap is false",
+                        pkg_dir.name,
+                    )
+                    continue
+
                 # Get version using hatch command
                 version = subprocess.check_output(
                     "hatch version",
@@ -407,10 +426,6 @@ def get_instrumentation_packages(
                     universal_newlines=True,
                     stderr=subprocess.DEVNULL,
                 ).strip()
-
-                # Read pyproject.toml
-                with open(pyproject_toml, "rb") as f:
-                    pyproject = tomli.load(f)
 
                 pkg_name = pyproject["project"]["name"]
 

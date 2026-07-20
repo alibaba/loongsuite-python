@@ -47,4 +47,5 @@ pytest-recording
 -e opentelemetry-instrumentation
 -e util/opentelemetry-util-http
 -e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-common
 -e instrumentation-loongsuite/loongsuite-instrumentation-litellm

@@ -3,14 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "loongsuite-instrumentation-litellm"
+name = "loongsuite-instrumentation-common"
 dynamic = ["version"]
-description = "LoongSuite LiteLLM instrumentation"
-readme = "README.rst"
+description = "Shared failure-isolation primitives for LoongSuite instrumentations"
+readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 authors = [
-  { name = "Zhiyong Liu", email = "liuzhiyong.lzy@alibaba-inc.com" },
   { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
 ]
 classifiers = [
@@ -19,41 +18,37 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = [
-  "opentelemetry-api >= 1.37.0",
-  "opentelemetry-instrumentation >= 0.58b0",
-  "opentelemetry-semantic-conventions >= 0.60b0",
-  "wrapt >= 1.0.0, < 2.0.0",
-  "opentelemetry-util-genai",
-  "loongsuite-instrumentation-common >= 0.1.0.dev0",
-]
-
-[project.optional-dependencies]
-instruments = [
-  "litellm >= 1.0.0",
-]
-
-[project.entry-points.opentelemetry_instrumentor]
-litellm = "opentelemetry.instrumentation.litellm:LiteLLMInstrumentor"
+dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-litellm"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-common"
 Repository = "https://github.com/alibaba/loongsuite-python"
 
+[tool.loongsuite]
+bootstrap = false
+
+[tool.loongsuite.readme]
+supported-packages = ["LoongSuite instrumentations (shared runtime)"]
+
 [tool.hatch.version]
-path = "src/opentelemetry/instrumentation/litellm/version.py"
+path = "src/opentelemetry/instrumentation/loongsuite/version.py"
 
 [tool.hatch.build.targets.sdist]
 include = [
-  "/examples",
   "/src",
   "/tests",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentelemetry"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

@@ -25,6 +25,7 @@ from opentelemetry.instrumentation.litellm._utils import (
     get_litellm_value,
     parse_tool_call_arguments,
 )
+from opentelemetry.instrumentation.loongsuite import call_advice
 from opentelemetry.util.genai.types import (
     OutputMessage,
     Reasoning,
@@ -220,7 +221,12 @@ class StreamWrapper:
         try:
             chunk = next(self.stream)
 
-            self._accumulator.record_chunk(chunk)
+            call_advice(
+                self._accumulator.record_chunk,
+                chunk,
+                instrumentation_name="litellm",
+                advice_method="stream_chunk",
+            )
 
             # Only keep the last chunk (contains usage info)
             self.last_chunk = chunk
@@ -353,7 +359,12 @@ class AsyncStreamWrapper:
         error = None
         try:
             async for chunk in self.stream:
-                self._accumulator.record_chunk(chunk)
+                call_advice(
+                    self._accumulator.record_chunk,
+                    chunk,
+                    instrumentation_name="litellm",
+                    advice_method="stream_chunk",
+                )
 
                 # Only keep the last chunk (contains usage info)
                 self.last_chunk = chunk
