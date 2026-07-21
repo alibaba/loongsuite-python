@@ -76,16 +76,6 @@ def test_registry_entry_combines_instruments_and_marks_default():
     }
 
 
-def test_bootstrap_enabled_defaults_true_and_supports_shared_runtime_opt_out():
-    assert generate._bootstrap_enabled({}) is True
-    assert (
-        generate._bootstrap_enabled(
-            {"tool": {"loongsuite": {"bootstrap": False}}}
-        )
-        is False
-    )
-
-
 def test_render_registry_module_contains_local_metadata():
     source = generate._render_registry_module(
         {

@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Failure-isolated helpers for instrumentation-only callbacks."""
+"""Failure isolation for instrumentation-only advice functions.
+
+These decorators must only wrap probe-owned work. Application calls and stream
+iteration belong outside the decorated function so application exceptions are
+never mistaken for instrumentation failures.
+"""
 
 import inspect
 import logging
@@ -29,7 +34,7 @@ def _log_advice_failure(
     advice_method: str,
     exception: Exception,
 ) -> None:
-    """Report instrumentation failure without creating another failure path."""
+    """Report a suppressed instrumentation failure without leaking logging errors."""
     try:
         _logger.debug(
             "LoongSuite instrumentation %s advice %s failed: %s",
@@ -38,49 +43,9 @@ def _log_advice_failure(
             exception,
             exc_info=True,
         )
-    except Exception:  # pragma: no cover - logging implementations vary
+    except Exception:  # pylint: disable=broad-exception-caught
+        # Custom logging handlers are external callbacks and may also fail.
         pass
-
-
-def call_advice(
-    callback: Callable[..., Any],
-    *args: Any,
-    instrumentation_name: str = "unknown",
-    advice_method: str = "unknown",
-    **kwargs: Any,
-) -> Any:
-    """Call a synchronous instrumentation callback using fail-open semantics."""
-    try:
-        return callback(*args, **kwargs)
-    except Exception as exception:  # pylint: disable=broad-exception-caught
-        _log_advice_failure(
-            instrumentation_name,
-            advice_method,
-            exception,
-        )
-        return None
-
-
-async def async_call_advice(
-    callback: Callable[..., Any],
-    *args: Any,
-    instrumentation_name: str = "unknown",
-    advice_method: str = "unknown",
-    **kwargs: Any,
-) -> Any:
-    """Call a sync or async instrumentation callback using fail-open semantics."""
-    try:
-        result = callback(*args, **kwargs)
-        if inspect.isawaitable(result):
-            return await result
-        return result
-    except Exception as exception:  # pylint: disable=broad-exception-caught
-        _log_advice_failure(
-            instrumentation_name,
-            advice_method,
-            exception,
-        )
-        return None
 
 
 def hook_advice(
@@ -88,18 +53,25 @@ def hook_advice(
     advice_method: str = "unknown",
     throw_exception: bool = False,
 ) -> Callable[[_F], _F]:
-    """Decorate a synchronous instrumentation-only callback.
+    """Decorate synchronous instrumentation-only work with fail-open semantics.
 
-    Generator functions are rejected because calling them only creates a
-    generator. Their body and failures occur later, outside this decorator's
-    exception boundary. Use :class:`IsolatedStream` for that lifecycle.
+    Generator functions are rejected because their bodies execute during later
+    iteration, after this decorator has returned the generator object. Stream
+    iteration must instead be isolated by the owning instrumentation wrapper.
     """
 
     def decorator(func: _F) -> _F:
-        if inspect.isgeneratorfunction(func):
+        if inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(
+            func
+        ):
             raise TypeError(
                 "hook_advice cannot decorate generator functions; "
-                "use IsolatedStream"
+                "isolate iteration in the instrumentation stream wrapper"
+            )
+        if inspect.iscoroutinefunction(func):
+            raise TypeError(
+                "hook_advice cannot decorate coroutine functions; "
+                "use async_hook_advice"
             )
 
         @wraps(func)
@@ -126,17 +98,22 @@ def async_hook_advice(
     advice_method: str = "unknown",
     throw_exception: bool = False,
 ) -> Callable[[_F], _F]:
-    """Decorate an asynchronous instrumentation-only callback.
+    """Decorate asynchronous instrumentation-only work with fail-open semantics.
 
-    Async generators are rejected because they are asynchronous iterators, not
-    awaitables. Use :class:`IsolatedAsyncStream` for that lifecycle.
+    Async generators are rejected because their bodies execute during later
+    iteration. The owning instrumentation wrapper must isolate that lifecycle.
     """
 
     def decorator(func: _F) -> _F:
         if inspect.isasyncgenfunction(func):
             raise TypeError(
                 "async_hook_advice cannot decorate async generator functions; "
-                "use IsolatedAsyncStream"
+                "isolate iteration in the instrumentation stream wrapper"
+            )
+        if not inspect.iscoroutinefunction(func):
+            raise TypeError(
+                "async_hook_advice requires a coroutine function; "
+                "use hook_advice for synchronous advice"
             )
 
         @wraps(func)

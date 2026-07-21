@@ -8,7 +8,6 @@
 | [loongsuite-instrumentation-bfclv4](./loongsuite-instrumentation-bfclv4) | bfcl-eval >= 4.0.0 | No | development
 | [loongsuite-instrumentation-claude-agent-sdk](./loongsuite-instrumentation-claude-agent-sdk) | claude-agent-sdk >= 0.1.0 | No | development
 | [loongsuite-instrumentation-claw-eval](./loongsuite-instrumentation-claw-eval) | claw-eval >= 0.1.0 | No | development
-| [loongsuite-instrumentation-common](./loongsuite-instrumentation-common) | LoongSuite instrumentations (shared runtime) | No | development
 | [loongsuite-instrumentation-crewai](./loongsuite-instrumentation-crewai) | crewai >= 0.80.0 | No | development
 | [loongsuite-instrumentation-dashscope](./loongsuite-instrumentation-dashscope) | dashscope >= 1.0.0 | No | development
 | [loongsuite-instrumentation-deepagents](./loongsuite-instrumentation-deepagents) | deepagents >= 0.6.0, < 0.7.0 | No | development

@@ -25,7 +25,7 @@ from opentelemetry.instrumentation.litellm._utils import (
     get_litellm_value,
     parse_tool_call_arguments,
 )
-from opentelemetry.instrumentation.loongsuite import call_advice
+from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.types import (
     OutputMessage,
     Reasoning,
@@ -34,6 +34,37 @@ from opentelemetry.util.genai.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _debug_safely(message: str, *args: Any, exc_info: bool = False) -> None:
+    """Keep diagnostic logging out of the application failure path."""
+    try:
+        logger.debug(message, *args, exc_info=exc_info)
+    except Exception:  # pragma: no cover - custom logging handlers vary
+        pass
+
+
+def _record_stream_chunk(accumulator: Any, chunk: Any) -> None:
+    """Record probe-owned chunk state without affecting stream delivery."""
+    try:
+        accumulator.record_chunk(chunk)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        _debug_safely(
+            "Error recording LiteLLM stream chunk: %s",
+            exc,
+            exc_info=True,
+        )
+
+
+@hook_advice("litellm", "stream_finalize")
+def _invoke_stream_callback(
+    callback: Any,
+    span: Any,
+    last_chunk: Any,
+    error: Optional[BaseException],
+) -> None:
+    """Run the external finalization callback as fail-open probe advice."""
+    callback(span, last_chunk, error)
 
 
 class _StreamAccumulator:
@@ -213,6 +244,7 @@ class StreamWrapper:
         self.last_chunk = None  # Only keep last chunk to avoid memory leak
         self.chunk_count = 0
         self._finalized = False
+        self._stream_closed = False
 
     def __iter__(self):
         return self
@@ -221,12 +253,7 @@ class StreamWrapper:
         try:
             chunk = next(self.stream)
 
-            call_advice(
-                self._accumulator.record_chunk,
-                chunk,
-                instrumentation_name="litellm",
-                advice_method="stream_chunk",
-            )
+            _record_stream_chunk(self._accumulator, chunk)
 
             # Only keep the last chunk (contains usage info)
             self.last_chunk = chunk
@@ -239,7 +266,7 @@ class StreamWrapper:
             raise
         except Exception as e:
             # Error during streaming
-            logger.debug(f"Error during streaming: {e}")
+            _debug_safely("Error during streaming: %s", e, exc_info=True)
             self._finalize(error=e)
             raise
 
@@ -276,9 +303,17 @@ class StreamWrapper:
         try:
             self._finalize()
         except Exception as exc:
-            logger.debug("Error finalizing unclosed LiteLLM stream: %s", exc)
+            _debug_safely(
+                "Error finalizing unclosed LiteLLM stream: %s",
+                exc,
+                exc_info=True,
+            )
 
     def _close_stream(self) -> None:
+        if self._stream_closed:
+            return
+
+        self._stream_closed = True
         close = getattr(self.stream, "close", None)
         if not callable(close):
             return
@@ -286,9 +321,11 @@ class StreamWrapper:
         try:
             close()
         except Exception as exc:
-            logger.debug("Error closing LiteLLM stream: %s", exc)
+            _debug_safely(
+                "Error closing LiteLLM stream: %s", exc, exc_info=True
+            )
 
-    def _finalize(self, error: Optional[Exception] = None):
+    def _finalize(self, error: Optional[BaseException] = None):
         """Finalize the span with data from last chunk."""
         if self._finalized:
             return
@@ -301,12 +338,19 @@ class StreamWrapper:
             # or handler.fail_llm().
             # which will end the span. We no longer call span.end() here.
             if self.callback:
-                self.callback(self.span, self.last_chunk, error)
+                _invoke_stream_callback(
+                    self.callback,
+                    self.span,
+                    self.last_chunk,
+                    error,
+                )
 
             # Clear reference to avoid holding memory
             self.last_chunk = None
         except Exception as e:
-            logger.debug(f"Error finalizing stream: {e}")
+            _debug_safely(
+                "Error finalizing LiteLLM stream: %s", e, exc_info=True
+            )
 
     def get_output_messages(self) -> list[OutputMessage]:
         return self._accumulator.get_output_messages()
@@ -343,6 +387,7 @@ class AsyncStreamWrapper:
         self.chunk_count = 0
         self._finalized = False
         self._stream_exhausted = False
+        self._stream_closed = False
 
     def __aiter__(self):
         # Return an async generator that wraps the stream and ensures finalization
@@ -359,12 +404,7 @@ class AsyncStreamWrapper:
         error = None
         try:
             async for chunk in self.stream:
-                call_advice(
-                    self._accumulator.record_chunk,
-                    chunk,
-                    instrumentation_name="litellm",
-                    advice_method="stream_chunk",
-                )
+                _record_stream_chunk(self._accumulator, chunk)
 
                 # Only keep the last chunk (contains usage info)
                 self.last_chunk = chunk
@@ -373,18 +413,25 @@ class AsyncStreamWrapper:
                 yield chunk
 
             # Stream exhausted normally
-            logger.debug(
-                f"AsyncStreamWrapper: Stream completed (chunks: {self.chunk_count})"
+            _debug_safely(
+                "AsyncStreamWrapper: Stream completed (chunks: %s)",
+                self.chunk_count,
             )
         except Exception as e:
             # Error during streaming
-            logger.debug(f"AsyncStreamWrapper: Error during streaming: {e}")
+            _debug_safely(
+                "AsyncStreamWrapper: Error during streaming: %s",
+                e,
+                exc_info=True,
+            )
             error = e
             raise
         finally:
             # Always finalize, whether completed normally, with error, or closed early
-            await self._aclose_stream()
-            self._finalize(error=error)
+            try:
+                await self._aclose_stream()
+            finally:
+                self._finalize(error=error)
 
     async def __aenter__(self):
         """Support async context manager protocol."""
@@ -392,26 +439,36 @@ class AsyncStreamWrapper:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Ensure finalization on async context exit."""
-        await self._aclose_stream()
-        if exc_type is not None:
-            # Exception occurred during iteration
-            self._finalize(error=exc_val)
-        else:
-            # Normal exit (may have completed or early terminated)
-            self._finalize()
+        try:
+            await self._aclose_stream()
+        finally:
+            if exc_type is not None:
+                # Exception occurred during iteration
+                self._finalize(error=exc_val)
+            else:
+                # Normal exit (may have completed or early terminated)
+                self._finalize()
         return False
 
     async def aclose(self):
         """Explicitly close and finalize the async stream."""
-        await self._aclose_stream()
-        self._finalize()
+        try:
+            await self._aclose_stream()
+        finally:
+            self._finalize()
 
     def close(self):
         """Synchronous close method for compatibility."""
-        self._close_stream()
-        self._finalize()
+        try:
+            self._close_stream()
+        finally:
+            self._finalize()
 
     def _close_stream(self) -> None:
+        if self._stream_closed:
+            return
+
+        self._stream_closed = True
         close = getattr(self.stream, "close", None)
         if not callable(close):
             return
@@ -419,20 +476,43 @@ class AsyncStreamWrapper:
         try:
             close()
         except Exception as exc:
-            logger.debug("Error closing LiteLLM async stream: %s", exc)
+            _debug_safely(
+                "Error closing LiteLLM async stream: %s",
+                exc,
+                exc_info=True,
+            )
 
     async def _aclose_stream(self) -> None:
+        if self._stream_closed:
+            return
+
+        self._stream_closed = True
         aclose = getattr(self.stream, "aclose", None)
         if callable(aclose):
             try:
                 await aclose()
                 return
             except Exception as exc:
-                logger.debug("Error closing LiteLLM async stream: %s", exc)
+                _debug_safely(
+                    "Error closing LiteLLM async stream: %s",
+                    exc,
+                    exc_info=True,
+                )
 
-        self._close_stream()
+        close = getattr(self.stream, "close", None)
+        if not callable(close):
+            return
 
-    def _finalize(self, error: Optional[Exception] = None):
+        try:
+            close()
+        except Exception as exc:
+            _debug_safely(
+                "Error closing LiteLLM async stream: %s",
+                exc,
+                exc_info=True,
+            )
+
+    def _finalize(self, error: Optional[BaseException] = None):
         """Finalize the span with data from last chunk."""
         if self._finalized:
             return
@@ -444,15 +524,21 @@ class AsyncStreamWrapper:
             # or handler.fail_llm().
             # which will end the span. We no longer call span.end() here.
             if self.callback:
-                try:
-                    self.callback(self.span, self.last_chunk, error)
-                except Exception as callback_error:
-                    logger.debug(f"Error in stream callback: {callback_error}")
+                _invoke_stream_callback(
+                    self.callback,
+                    self.span,
+                    self.last_chunk,
+                    error,
+                )
 
             # Clear reference to avoid holding memory
             self.last_chunk = None
         except Exception as e:
-            logger.debug(f"Error finalizing async stream: {e}")
+            _debug_safely(
+                "Error finalizing LiteLLM async stream: %s",
+                e,
+                exc_info=True,
+            )
 
     def get_output_messages(self) -> list[OutputMessage]:
         return self._accumulator.get_output_messages()

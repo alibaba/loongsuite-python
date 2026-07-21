@@ -73,7 +73,6 @@ def get_test_job_datas(
     python_version_alias = {
         "pypy3": "pypy-3.9",
         "pypy310": "pypy-3.10",
-        "py38": "3.8",
         "py39": "3.9",
         "py310": "3.10",
         "py311": "3.11",

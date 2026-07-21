@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import asyncio
 from unittest.mock import patch
 
 import pytest
 
-from opentelemetry.instrumentation.loongsuite import (
+from opentelemetry.util.genai.extended_advice import (
     async_hook_advice,
     hook_advice,
 )
@@ -30,9 +31,10 @@ def test_hook_advice_preserves_success_identity():
         return expected
 
     assert advice() is expected
+    assert advice.__name__ == "advice"
 
 
-def test_hook_advice_swallow_instrumentation_exception():
+def test_hook_advice_swallows_instrumentation_exception():
     @hook_advice("test", "failure")
     def advice():
         raise RuntimeError("instrumentation boom")
@@ -58,7 +60,7 @@ def test_hook_advice_failure_logging_is_also_isolated():
         raise RuntimeError("instrumentation boom")
 
     with patch(
-        "opentelemetry.instrumentation.loongsuite.advice._logger.debug",
+        "opentelemetry.util.genai.extended_advice._logger.debug",
         side_effect=RuntimeError("logger boom"),
     ):
         assert advice() is None
@@ -68,8 +70,28 @@ def test_hook_advice_rejects_generator_function():
     def generator():
         yield "chunk"
 
-    with pytest.raises(TypeError, match="IsolatedStream"):
+    with pytest.raises(TypeError, match="stream wrapper"):
         hook_advice("test", "stream")(generator)
+
+
+def test_hook_advice_rejects_coroutine_function():
+    async def advice():
+        return None
+
+    with pytest.raises(TypeError, match="async_hook_advice"):
+        hook_advice("test", "async")(advice)
+
+
+def test_hook_advice_does_not_swallow_base_exception():
+    expected = KeyboardInterrupt()
+
+    @hook_advice("test", "interrupt")
+    def advice():
+        raise expected
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        advice()
+    assert caught.value is expected
 
 
 @pytest.mark.asyncio
@@ -81,10 +103,11 @@ async def test_async_hook_advice_preserves_success_identity():
         return expected
 
     assert await advice() is expected
+    assert advice.__name__ == "advice"
 
 
 @pytest.mark.asyncio
-async def test_async_hook_advice_swallow_instrumentation_exception():
+async def test_async_hook_advice_swallows_instrumentation_exception():
     @async_hook_advice("test", "failure")
     async def advice():
         raise RuntimeError("instrumentation boom")
@@ -92,9 +115,43 @@ async def test_async_hook_advice_swallow_instrumentation_exception():
     assert await advice() is None
 
 
+@pytest.mark.asyncio
+async def test_async_hook_advice_strict_mode_preserves_exception():
+    expected = RuntimeError("instrumentation boom")
+
+    @async_hook_advice("test", "failure", throw_exception=True)
+    async def advice():
+        raise expected
+
+    with pytest.raises(RuntimeError) as caught:
+        await advice()
+    assert caught.value is expected
+
+
 def test_async_hook_advice_rejects_async_generator_function():
     async def generator():
         yield "chunk"
 
-    with pytest.raises(TypeError, match="IsolatedAsyncStream"):
+    with pytest.raises(TypeError, match="stream wrapper"):
         async_hook_advice("test", "stream")(generator)
+
+
+def test_async_hook_advice_rejects_sync_function():
+    def advice():
+        return None
+
+    with pytest.raises(TypeError, match="hook_advice"):
+        async_hook_advice("test", "sync")(advice)
+
+
+@pytest.mark.asyncio
+async def test_async_hook_advice_does_not_swallow_cancellation():
+    expected = asyncio.CancelledError()
+
+    @async_hook_advice("test", "cancel")
+    async def advice():
+        raise expected
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await advice()
+    assert caught.value is expected

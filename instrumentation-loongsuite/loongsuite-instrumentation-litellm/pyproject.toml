@@ -30,7 +30,6 @@ dependencies = [
   "opentelemetry-semantic-conventions >= 0.60b0",
   "wrapt >= 1.0.0, < 2.0.0",
   "opentelemetry-util-genai",
-  "loongsuite-instrumentation-common >= 0.1.0.dev0",
 ]
 
 [project.optional-dependencies]
