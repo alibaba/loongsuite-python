@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Dict
 
 from opentelemetry._logs import Logger, LogRecord
 from opentelemetry.context import get_current
@@ -392,7 +392,7 @@ def _get_prompt_variables_attributes(
     return {
         f"{GEN_AI_PROMPT_VARIABLE_PREFIX}{name}": value
         for name, value in invocation.prompt_variables.items()
-        if name and value is not None
+        if name and value is not None  # pyright: ignore[reportUnnecessaryComparison]
     }
 
 
@@ -440,7 +440,9 @@ def _get_llm_response_attributes(
         ),
     )
 
-    result = {key: value for key, value in optional_attrs if value is not None}
+    result: Dict[str, Any] = {
+        key: value for key, value in optional_attrs if value is not None
+    }
 
     # LoongSuite Extension: Calculate total_tokens as sum of input and output tokens when both are available
     total_tokens = 0
