@@ -15,11 +15,14 @@ through ``opentelemetry-util-genai`` before spans are ended:
   recording. This ensures exporter snapshots include
   ``gen_ai.span.kind``, ``gen_ai.operation.name``, normalized provider names,
   token usage, finish reasons, and streaming TTFT where MAF exposes enough
-  data.
+  data. Non-streaming spans remain current for the wrapped call, and nested
+  Robin provider instrumentation is suppressed when its optional context key
+  is available.
 * ``MAFSemanticProcessor`` remains as a compatibility layer for MAF workflow,
-  MCP, private-prefix attribute normalization, and the in-process ARMS gauges.
-  Successful spans keep the OpenTelemetry default ``UNSET`` status; failed
-  spans keep MAF's ``ERROR`` status.
+  MCP, and private-prefix attribute normalization. Metrics come from MAF's
+  native counter and histogram instruments; this package does not export
+  process-cumulative ObservableGauges. Successful spans keep the OpenTelemetry
+  default ``UNSET`` status; failed spans keep MAF's ``ERROR`` status.
 * ``react_step_patch`` (opt-in via ``ARMS_MAF_REACT_STEP_ENABLED=true``)
   wraps ``FunctionInvocationLayer.get_response`` so that each LLM round-trip
   inside the ReAct loop emits one ``react step`` span via
@@ -56,6 +59,4 @@ Env                                     Default     Description
 ``ARMS_MAF_INSTRUMENTATION_ENABLED``    ``true``    Master switch; ``false`` disables instrumentation.
 ``ARMS_MAF_SENSITIVE_DATA_ENABLED``     ``false``   Capture inputs/outputs (linked to MAF's sensitive-data option).
 ``ARMS_MAF_REACT_STEP_ENABLED``         ``false``   Emit ``react step`` spans for non-streaming ReAct tool loops.
-``ARMS_MAF_METRICS_ENABLED``            ``true``    Aggregate ARMS GenAI gauges in-process.
-``ARMS_MAF_SLOW_THRESHOLD_MS``          ``1000``    Slow-call threshold in ms.
 ======================================  ==========  ==============================================================
