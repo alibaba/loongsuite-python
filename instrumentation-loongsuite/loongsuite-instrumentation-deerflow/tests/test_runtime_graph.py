@@ -142,6 +142,10 @@ class _ProviderCallbackRecorder:
         # LangGraph recognizes LangSmith tracers by type and reads this map.
         self.run_map: dict[str, Any] = {}
 
+    def copy_with_metadata_defaults(self, **_kwargs: Any):
+        """Keep provider callback copies local and network-free in tests."""
+        return self
+
     def _record(self, event: str, kwargs: dict[str, Any]) -> None:
         metadata = kwargs.get("metadata")
         self.events.append(
