@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `hook_advice` and `async_hook_advice` fail-open decorators for
   instrumentation-only logic, with explicit rejection of deferred generator
   lifecycles.
+- Add shared response ID extraction and provider-first fallback helpers for
+  GenAI instrumentations that receive both provider and framework responses.
 
 ## Version 0.7.0 (2026-07-03)
 

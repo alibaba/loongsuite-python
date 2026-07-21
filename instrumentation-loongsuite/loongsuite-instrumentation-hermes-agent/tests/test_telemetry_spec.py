@@ -523,60 +523,20 @@ def test_streaming_request_id_from_usage_trailer_is_preserved(
     assert llm_span.attributes["gen_ai.response.id"] == "dashscope-request-456"
 
 
-def test_streaming_retry_uses_successful_provider_attempt_id(
+@pytest.mark.parametrize(
+    ("retry_response_id", "expected_response_id"),
+    [
+        ("chatcmpl-successful-attempt", "chatcmpl-successful-attempt"),
+        (None, "stream-retry-framework-fallback"),
+    ],
+)
+def test_streaming_retry_uses_only_final_provider_attempt(
     instrumentation_module,
     tracer_provider,
     meter_provider,
     span_exporter,
-):
-    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
-    agent = _FakeAgent(session_id="session-provider-retry")
-    wrappers_module = importlib.import_module(
-        "opentelemetry.instrumentation.hermes_agent.wrappers"
-    )
-    provider_client_wrapper = wrappers_module.ProviderClientWrapper()
-    client = _provider_client(
-        [
-            iter([_stream_chunk("chatcmpl-failed-attempt")]),
-            iter([_stream_chunk("chatcmpl-successful-attempt")]),
-        ]
-    )
-
-    def streaming_call(_api_kwargs, *, on_first_delta):
-        request_client = provider_client_wrapper(
-            lambda: client,
-            agent,
-            (),
-            {},
-        )
-        for _chunk in request_client.chat.completions.create(stream=True):
-            on_first_delta()
-        for _chunk in request_client.chat.completions.create(stream=True):
-            on_first_delta()
-        return _response(
-            content="恢复成功",
-            response_id="stream-retry-framework-id",
-        )
-
-    runtime.streaming_llm_wrapper(
-        streaming_call,
-        agent,
-        ({"model": agent.model, "messages": []},),
-        {},
-    )
-
-    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
-    assert (
-        llm_span.attributes["gen_ai.response.id"]
-        == "chatcmpl-successful-attempt"
-    )
-
-
-def test_streaming_retry_does_not_reuse_failed_provider_attempt_id(
-    instrumentation_module,
-    tracer_provider,
-    meter_provider,
-    span_exporter,
+    retry_response_id,
+    expected_response_id,
 ):
     runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
     agent = _FakeAgent(session_id="session-provider-retry-fallback")
@@ -587,21 +547,39 @@ def test_streaming_retry_does_not_reuse_failed_provider_attempt_id(
     client = _provider_client(
         [
             iter([_stream_chunk("chatcmpl-failed-attempt")]),
-            iter([_stream_chunk()]),
+            iter([_stream_chunk(retry_response_id)]),
         ]
     )
 
     def streaming_call(_api_kwargs, *, on_first_delta):
-        request_client = provider_client_wrapper(
-            lambda: client,
-            agent,
-            (),
-            {},
-        )
-        for _chunk in request_client.chat.completions.create(stream=True):
-            on_first_delta()
-        for _chunk in request_client.chat.completions.create(stream=True):
-            on_first_delta()
+        errors = []
+
+        def provider_worker():
+            try:
+                request_client = provider_client_wrapper(
+                    lambda: client,
+                    agent,
+                    (),
+                    {},
+                )
+                for _chunk in request_client.chat.completions.create(
+                    stream=True
+                ):
+                    # Hermes invokes this callback once for the whole logical
+                    # call, even when it starts another provider attempt.
+                    on_first_delta()
+                for _chunk in request_client.chat.completions.create(
+                    stream=True
+                ):
+                    pass
+            except BaseException as exc:  # pragma: no cover - defensive
+                errors.append(exc)
+
+        worker = threading.Thread(target=provider_worker)
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert errors == []
         return _response(
             content="恢复成功",
             response_id="stream-retry-framework-fallback",
@@ -615,10 +593,7 @@ def test_streaming_retry_does_not_reuse_failed_provider_attempt_id(
     )
 
     llm_span = _spans_by_kind(span_exporter, "LLM")[0]
-    assert (
-        llm_span.attributes["gen_ai.response.id"]
-        == "stream-retry-framework-fallback"
-    )
+    assert llm_span.attributes["gen_ai.response.id"] == expected_response_id
 
 
 def test_streaming_without_provider_id_falls_back_to_hermes_response_id(
@@ -690,6 +665,53 @@ def test_read_only_provider_resource_falls_back_without_breaking_call(
         llm_span.attributes["gen_ai.response.id"]
         == "stream-read-only-fallback"
     )
+
+
+def test_provider_error_is_reported_without_masking_original_exception(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="session-provider-error")
+    wrappers_module = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.wrappers"
+    )
+    provider_client_wrapper = wrappers_module.ProviderClientWrapper()
+
+    class ProviderError(RuntimeError):
+        pass
+
+    class FailingResource:
+        @staticmethod
+        def create(**_kwargs):
+            raise ProviderError("provider unavailable")
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FailingResource())
+    )
+
+    def streaming_call(_api_kwargs, *, on_first_delta):
+        del on_first_delta
+        request_client = provider_client_wrapper(
+            lambda: client,
+            agent,
+            (),
+            {},
+        )
+        return request_client.chat.completions.create(stream=True)
+
+    with pytest.raises(ProviderError, match="provider unavailable"):
+        runtime.streaming_llm_wrapper(
+            streaming_call,
+            agent,
+            ({"model": agent.model, "messages": []},),
+            {},
+        )
+
+    llm_span = _spans_by_kind(span_exporter, "LLM")[0]
+    assert llm_span.status.status_code == StatusCode.ERROR
 
 
 def test_provider_attempt_from_previous_call_does_not_leak(

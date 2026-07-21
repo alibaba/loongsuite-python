@@ -26,6 +26,7 @@ from typing import Any
 
 from opentelemetry import trace as trace_api
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
+from opentelemetry.util.genai.response_id import extract_response_id
 from opentelemetry.util.genai.types import Error
 
 from .helpers import (
@@ -39,7 +40,6 @@ from .helpers import (
     push_state,
     reset_state,
     resolve_entry_platform,
-    response_identifier,
     start_step,
     state,
     step_finish_reason,
@@ -64,7 +64,8 @@ _GENAI_SPAN_NAME_PREFIXES = (
 )
 _PROVIDER_CREATE_WRAPPED = "_otel_hermes_response_id_capture_wrapped"
 _PROVIDER_ATTEMPT = threading.local()
-_MISSING_PROVIDER_ATTEMPT = object()
+_PROVIDER_CAPTURE = threading.local()
+_MISSING_THREAD_LOCAL = object()
 
 
 class _ProviderResponseAttempt:
@@ -80,7 +81,10 @@ class _ProviderResponseAttempt:
             return self._response_id
 
     def record(self, value: Any) -> None:
-        response_id = response_identifier(value)
+        response_id = extract_response_id(
+            value,
+            fields=("request_id", "id", "response_id"),
+        )
         if response_id is None:
             return
         with self._lock:
@@ -99,6 +103,10 @@ class _ProviderResponseIdCapture:
         attempt = getattr(_PROVIDER_ATTEMPT, "value", None)
         if attempt is None:
             return
+        _PROVIDER_CAPTURE.value = self
+        self.adopt(attempt)
+
+    def adopt(self, attempt: _ProviderResponseAttempt) -> None:
         with self._lock:
             self._attempt = attempt
 
@@ -143,16 +151,21 @@ class _ProviderStreamProxy:
 
 
 def _wrap_provider_create(resource: Any) -> None:
-    if resource is None or getattr(resource, _PROVIDER_CREATE_WRAPPED, False):
-        return
-    create = getattr(resource, "create", None)
-    if not callable(create):
+    create = (
+        getattr(resource, "create", None) if resource is not None else None
+    )
+    if not callable(create) or getattr(
+        create, _PROVIDER_CREATE_WRAPPED, False
+    ):
         return
 
     @functools.wraps(create)
     def _capturing_create(*args, **kwargs):
         attempt = _ProviderResponseAttempt()
         _PROVIDER_ATTEMPT.value = attempt
+        capture = getattr(_PROVIDER_CAPTURE, "value", None)
+        if capture is not None:
+            capture.adopt(attempt)
         response = create(*args, **kwargs)
         attempt.record(response)
 
@@ -164,9 +177,9 @@ def _wrap_provider_create(resource: Any) -> None:
             return _ProviderStreamProxy(response, attempt)
         return response
 
+    setattr(_capturing_create, _PROVIDER_CREATE_WRAPPED, True)
     try:
         setattr(resource, "create", _capturing_create)
-        setattr(resource, _PROVIDER_CREATE_WRAPPED, True)
     except (AttributeError, TypeError):
         # A provider resource may use slots/read-only descriptors. Telemetry
         # must never make the model call fail; the framework response remains
@@ -179,13 +192,9 @@ class ProviderClientWrapper:
 
     def __call__(self, wrapped, instance, args, kwargs):
         client = wrapped(*args, **kwargs)
-        resources = (
-            getattr(getattr(client, "chat", None), "completions", None),
-            getattr(client, "responses", None),
-            getattr(client, "completions", None),
+        _wrap_provider_create(
+            getattr(getattr(client, "chat", None), "completions", None)
         )
-        for resource in resources:
-            _wrap_provider_create(resource)
         return client
 
 
@@ -443,9 +452,15 @@ class LLMCallWrapper:
         previous_provider_attempt = getattr(
             _PROVIDER_ATTEMPT,
             "value",
-            _MISSING_PROVIDER_ATTEMPT,
+            _MISSING_THREAD_LOCAL,
+        )
+        previous_provider_capture = getattr(
+            _PROVIDER_CAPTURE,
+            "value",
+            _MISSING_THREAD_LOCAL,
         )
         _PROVIDER_ATTEMPT.value = None
+        _PROVIDER_CAPTURE.value = provider_response_capture
 
         try:
             if self._streaming:
@@ -521,11 +536,16 @@ class LLMCallWrapper:
             finish_step(instance, "error", exc=exc)
             raise
         finally:
-            if previous_provider_attempt is _MISSING_PROVIDER_ATTEMPT:
+            if previous_provider_attempt is _MISSING_THREAD_LOCAL:
                 with suppress(AttributeError):
                     del _PROVIDER_ATTEMPT.value
             else:
                 _PROVIDER_ATTEMPT.value = previous_provider_attempt
+            if previous_provider_capture is _MISSING_THREAD_LOCAL:
+                with suppress(AttributeError):
+                    del _PROVIDER_CAPTURE.value
+            else:
+                _PROVIDER_CAPTURE.value = previous_provider_capture
             current_state["active_llm_depth"] = max(
                 0, current_state["active_llm_depth"] - 1
             )
