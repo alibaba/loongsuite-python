@@ -145,6 +145,7 @@ class CreateAgentInvocation:
     # Agent-specific attributes
     agent_id: str | None = None
     agent_description: str | None = None
+    agent_version: str | None = None
     request_model: str | None = None
     # Server information
     server_address: str | None = None
@@ -180,6 +181,7 @@ class InvokeAgentInvocation:
     # Agent-specific attributes
     agent_id: str | None = None
     agent_description: str | None = None
+    agent_version: str | None = None
     conversation_id: str | None = None
     data_source_id: str | None = None
     request_model: str | None = None
@@ -233,7 +235,7 @@ class RetrievalInvocation:
     data_source_id: str | None = None
     provider: str | None = None
     request_model: str | None = None
-    top_k: float | None = None
+    top_k: int | None = None
     server_address: str | None = None
     server_port: int | None = None
     monotonic_start_s: float | None = None

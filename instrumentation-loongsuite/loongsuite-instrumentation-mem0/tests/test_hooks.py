@@ -38,11 +38,16 @@ from opentelemetry.instrumentation.mem0.internal._wrapper import (
 )
 from opentelemetry.instrumentation.mem0.types import set_memory_hooks
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace import SpanKind
 from opentelemetry.util.genai.extended_memory import MemoryInvocation
 
 
 class _DummyTelemetryHandler:
+    def __init__(self):
+        self.started = []
+
     def start_memory(self, invocation: Any) -> None:
+        self.started.append(invocation)
         return None
 
     def stop_memory(self, invocation: Any) -> None:
@@ -50,6 +55,28 @@ class _DummyTelemetryHandler:
 
     def fail_memory(self, invocation: Any, error: Any) -> None:
         return None
+
+
+@pytest.mark.parametrize(
+    ("mem0_operation", "upstream_operation"),
+    [
+        ("add", "upsert_memory"),
+        ("update", "update_memory"),
+        ("batch_update", "update_memory"),
+        ("search", "search_memory"),
+        ("get", "search_memory"),
+        ("get_all", "search_memory"),
+        ("history", "search_memory"),
+        ("delete", "delete_memory"),
+        ("batch_delete", "delete_memory"),
+        ("delete_all", "delete_memory"),
+    ],
+)
+def test_memory_operation_mapping(mem0_operation, upstream_operation):
+    assert (
+        wrapper_mod._standard_memory_operation(mem0_operation)
+        == upstream_operation
+    )
 
 
 @pytest.mark.asyncio
@@ -70,7 +97,8 @@ async def test_memory_hooks_sync_async_and_exception_paths():
             seen_exc["exc"] = exc
         calls.append(("after", hook_context))
 
-    w = MemoryOperationWrapper(_DummyTelemetryHandler())
+    dummy_handler = _DummyTelemetryHandler()
+    w = MemoryOperationWrapper(dummy_handler)
     set_memory_hooks(w, memory_before_hook=before, memory_after_hook=after)
 
     # Cover helper: _normalize_call_parameters with positional args mapping
@@ -89,20 +117,24 @@ async def test_memory_hooks_sync_async_and_exception_paths():
     MemoryOperationWrapper._apply_custom_extractor_output_to_invocation(
         inv,
         {
-            "user_id": "u1",
-            "limit": "3",
-            "threshold": "0.7",
-            "rerank": False,
+            "provider": "mem0",
+            "store_id": "store-1",
+            "record_id": "memory-1",
+            "record_count": "3",
+            "query_text": "preferences",
+            "records": [{"content": "likes apples"}],
             "server_address": "example.com",
             "server_port": "443",
             "attributes": {"k1": "v1"},
             "custom_k": "custom_v",
         },
     )
-    assert inv.user_id == "u1"
-    assert inv.limit == 3
-    assert inv.threshold == 0.7
-    assert inv.rerank is False
+    assert inv.provider == "mem0"
+    assert inv.store_id == "store-1"
+    assert inv.record_id == "memory-1"
+    assert inv.record_count == 3
+    assert inv.query_text == "preferences"
+    assert inv.records == [{"content": "likes apples"}]
     assert inv.server_address == "example.com"
     assert inv.server_port == 443
     assert inv.attributes.get("k1") == "v1"
@@ -122,6 +154,8 @@ async def test_memory_hooks_sync_async_and_exception_paths():
         is_memory_client=False,
     )
     assert res_sync == "ok"
+    assert dummy_handler.started[-1].operation == "upsert_memory"
+    assert dummy_handler.started[-1].span_kind is SpanKind.INTERNAL
 
     # cover extract_server_info exception branch (host property raises)
     class _BadHost:
@@ -138,6 +172,9 @@ async def test_memory_hooks_sync_async_and_exception_paths():
         extract_attributes_func=None,
         is_memory_client=True,
     )
+    assert dummy_handler.started[-1].operation == "search_memory"
+    assert dummy_handler.started[-1].span_kind is SpanKind.CLIENT
+    assert dummy_handler.started[-1].provider == "mem0"
 
     # cover custom extractor function path (extract_attributes_func provided)
     inv2 = MemoryInvocation(operation="add")
@@ -148,12 +185,12 @@ async def test_memory_hooks_sync_async_and_exception_paths():
         operation_name="add",
         result={"results": []},
         extract_attributes_func=lambda kwargs, result: {
-            "user_id": "u2",
+            "record_id": "memory-2",
             "attributes": {"x": 1},
         },
         is_memory_client=False,
     )
-    assert inv2.user_id == "u2"
+    assert inv2.record_id == "memory-2"
     assert inv2.attributes.get("x") == 1
 
     # async success
@@ -170,6 +207,7 @@ async def test_memory_hooks_sync_async_and_exception_paths():
         is_memory_client=False,
     )
     assert res_async == "ok2"
+    assert dummy_handler.started[-1].operation == "search_memory"
 
     # hook exceptions swallowed (both before/after)
     def before_boom(span, operation, instance, args, kwargs, hook_context):

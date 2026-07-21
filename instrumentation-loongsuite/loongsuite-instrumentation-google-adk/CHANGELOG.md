@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Capture stream request state, reasoning token usage, response IDs, and
+  independent time-to-first-chunk and time-to-first-token timestamps.
 - Capture `gen_ai.skill.*` attributes on Google ADK SkillToolset
   `load_skill` and `load_skill_resource` execute-tool spans.
 

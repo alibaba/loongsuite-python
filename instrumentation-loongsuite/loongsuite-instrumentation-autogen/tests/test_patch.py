@@ -368,6 +368,37 @@ async def test_llm_wrapper_starts_and_stops_invocation():
         ("start_llm", "qwen-plus"),
         ("stop_llm", "qwen-plus"),
     ]
+    assert handler.invocations[0].stream is None
+
+
+@pytest.mark.asyncio
+async def test_llm_wrapper_marks_streaming_call():
+    handler = Handler()
+    _set_handler(handler)
+
+    async def wrapped(*args, **kwargs):
+        yield CreateResult()
+
+    items = [
+        item
+        async for item in patch._call_llm_wrapper(
+            wrapped,
+            None,
+            (),
+            {
+                "model_client": ModelClient(),
+                "model_client_stream": True,
+                "system_messages": [],
+                "model_context": ModelContext(),
+                "workbench": [],
+                "handoff_tools": [],
+                "agent_name": "assistant",
+            },
+        )
+    ]
+
+    assert len(items) == 1
+    assert handler.invocations[0].stream is True
 
 
 @pytest.mark.asyncio

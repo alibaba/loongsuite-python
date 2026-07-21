@@ -37,6 +37,7 @@ from opentelemetry.instrumentation.agentscope.utils import (
     create_embedding_invocation,
     create_llm_invocation,
     entry_baggage_identity_attributes,
+    get_provider_name,
 )
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GEN_AI_SESSION_ID,
@@ -47,6 +48,18 @@ from opentelemetry.util.genai.types import ToolCallResponse
 
 
 class TestUtils:
+    def test_moonshot_provider_uses_upstream_value(self):
+        class MoonshotChatModel:
+            pass
+
+        assert get_provider_name(MoonshotChatModel()) == "moonshot_ai"
+
+    def test_moonshot_compatible_base_url_uses_upstream_value(self):
+        class DashScopeChatModel:
+            base_http_api_url = "https://api.moonshot.cn/v1"
+
+        assert get_provider_name(DashScopeChatModel()) == "moonshot_ai"
+
     def test_convert_msg_with_tool_result(self):
         """Test conversion of AgentScope Msg with ToolResultBlock (End-to-End)"""
         # Construct a Msg object simulating a tool execution result

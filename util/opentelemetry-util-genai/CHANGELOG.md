@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Align LLM, Retrieval, Agent, and Memory span attributes with the
+  current upstream OpenTelemetry GenAI semantic conventions while retaining the
+  existing invocation lifecycle.
+- Record `gen_ai.response.time_to_first_chunk` as double seconds independently
+  from the LoongSuite `gen_ai.response.time_to_first_token` integer nanoseconds.
+- Change Retrieval spans to client spans and emit `gen_ai.retrieval.top_k`;
+  omit the opt-in `gen_ai.retrieval.documents` attribute when content capture
+  is disabled instead of retaining document ids and scores.
+  Memory spans now use upstream operation names and Memory attributes instead
+  of legacy LoongSuite `gen_ai.memory.*` fields and the legacy Memory operation
+  event.
 - Avoid import-time warnings when optional audio dependencies for PCM16-to-WAV conversion are not installed.
 
 ## Version 0.3b0 (2026-02-20)

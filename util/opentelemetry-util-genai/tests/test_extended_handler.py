@@ -63,12 +63,14 @@ from opentelemetry.util.genai.extended_handler import (
     get_extended_telemetry_handler,
 )
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
+    GEN_AI_AGENT_VERSION,
     GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
     GEN_AI_REACT_FINISH_REASON,
     GEN_AI_REACT_ROUND,
     GEN_AI_RERANK_DOCUMENTS_COUNT,
     GEN_AI_RETRIEVAL_DOCUMENTS,
     GEN_AI_RETRIEVAL_QUERY_TEXT,
+    GEN_AI_RETRIEVAL_TOP_K,
     GEN_AI_SESSION_ID,
     GEN_AI_SKILL_DESCRIPTION,
     GEN_AI_SKILL_ID,
@@ -198,6 +200,7 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
             invocation.agent_name = "TestAgent"
             invocation.agent_id = "agent_123"
             invocation.agent_description = "A test agent"
+            invocation.agent_version = "1.2.3"
             invocation.request_model = "gpt-4"
             invocation.server_address = "api.openai.com"
             invocation.server_port = 443
@@ -217,6 +220,7 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
                 GenAI.GEN_AI_AGENT_NAME: "TestAgent",
                 GenAI.GEN_AI_AGENT_ID: "agent_123",
                 GenAI.GEN_AI_AGENT_DESCRIPTION: "A test agent",
+                GEN_AI_AGENT_VERSION: "1.2.3",
                 GenAI.GEN_AI_REQUEST_MODEL: "gpt-4",
                 ServerAttributes.SERVER_ADDRESS: "api.openai.com",
                 ServerAttributes.SERVER_PORT: 443,
@@ -557,6 +561,7 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
             invocation.agent_name = "CustomerAgent"
             invocation.agent_id = "agent_abc"
             invocation.agent_description = "Customer service agent"
+            invocation.agent_version = "2026-07-14"
             invocation.conversation_id = "conv_123"
             invocation.request_model = "gpt-4"
             invocation.temperature = 0.7
@@ -581,6 +586,7 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
                 GenAI.GEN_AI_AGENT_NAME: "CustomerAgent",
                 GenAI.GEN_AI_AGENT_ID: "agent_abc",
                 GenAI.GEN_AI_AGENT_DESCRIPTION: "Customer service agent",
+                GEN_AI_AGENT_VERSION: "2026-07-14",
                 GenAI.GEN_AI_CONVERSATION_ID: "conv_123",
                 GenAI.GEN_AI_REQUEST_MODEL: "gpt-4",
                 GenAI.GEN_AI_REQUEST_TEMPERATURE: 0.7,
@@ -1060,7 +1066,7 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
 
         span = _get_single_span(self.span_exporter)
         self.assertEqual(span.name, "retrieval")
-        self.assertEqual(span.kind, trace.SpanKind.INTERNAL)
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
         _assert_span_time_order(span)
 
         span_attrs = _get_span_attributes(span)
@@ -1153,8 +1159,8 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
         stability_mode="gen_ai_latest_experimental",
         content_capturing="NO_CONTENT",
     )
-    def test_retrieval_no_content_records_id_score_only(self):
-        """When content capture is NO_CONTENT, query is omitted; documents record id and score only."""
+    def test_retrieval_no_content_omits_opt_in_attributes(self):
+        """NO_CONTENT omits both opt-in query and document attributes."""
         documents = [
             RetrievalDocument(
                 id="doc_123",
@@ -1174,20 +1180,11 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
             span_attrs,
             "Query should NOT be captured when content capture is NO_CONTENT",
         )
-        self.assertIn(
+        self.assertNotIn(
             GEN_AI_RETRIEVAL_DOCUMENTS,
             span_attrs,
-            "Documents should be recorded with id and score only",
+            "Documents are opt-in and should be omitted when content capture is disabled",
         )
-        docs_val = span_attrs[GEN_AI_RETRIEVAL_DOCUMENTS]
-        self.assertIn("doc_123", docs_val)
-        self.assertIn("0.95", docs_val)
-        self.assertNotIn(
-            "sensitive doc content",
-            docs_val,
-            "Content should NOT be in documents when NO_CONTENT",
-        )
-        self.assertNotIn("secret", docs_val)
 
     @patch_env_vars(
         stability_mode="gen_ai_latest_experimental",
@@ -1224,7 +1221,7 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
             invocation.query = "test query"
             invocation.provider = "chroma"
             invocation.request_model = "embedding-model"
-            invocation.top_k = 5.0
+            invocation.top_k = 5
 
         span = _get_single_span(self.span_exporter)
         self.assertEqual(span.name, "retrieval H7STPQYOND")
@@ -1236,7 +1233,7 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
                 GenAI.GEN_AI_DATA_SOURCE_ID: "H7STPQYOND",
                 GenAI.GEN_AI_PROVIDER_NAME: "chroma",
                 GenAI.GEN_AI_REQUEST_MODEL: "embedding-model",
-                GenAI.GEN_AI_REQUEST_TOP_K: 5.0,
+                GEN_AI_RETRIEVAL_TOP_K: 5,
                 GEN_AI_RETRIEVAL_QUERY_TEXT: "test query",
             },
         )

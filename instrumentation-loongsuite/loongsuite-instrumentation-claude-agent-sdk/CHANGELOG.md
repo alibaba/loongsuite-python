@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Use the upstream `moonshot_ai` provider name.
 - Capture Claude Agent SDK default model names from stream metadata when the
   client options and environment do not provide an explicit model.
 - Fail open LLM spans when Claude Agent SDK streams raise exceptions, preserving

@@ -463,6 +463,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             invocation = LLMInvocation(
                 request_model=model_name,
                 provider=self._extractors._extract_provider_name(model_name),
+                stream=(
+                    True if getattr(llm_request, "stream", False) else None
+                ),
             )
 
             # Extract input messages
@@ -484,6 +487,9 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
                 top_p = self._get_real_attr(config, "top_p")
                 if top_p is not None:
                     invocation.top_p = top_p
+                top_k = self._get_real_attr(config, "top_k")
+                if isinstance(top_k, int):
+                    invocation.top_k = top_k
 
             # Extract conversation_id and user_id
             session_id = self._session_id_from_callback_context(
@@ -541,10 +547,15 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
                     )
 
                     if self._is_streaming_partial_response(llm_response):
-                        if llm_invocation.monotonic_first_token_s is None:
-                            llm_invocation.monotonic_first_token_s = (
-                                timeit.default_timer()
-                            )
+                        now = timeit.default_timer()
+                        llm_invocation.stream = True
+                        if llm_invocation.monotonic_first_chunk_s is None:
+                            llm_invocation.monotonic_first_chunk_s = now
+                        if (
+                            llm_invocation.monotonic_first_token_s is None
+                            and self._llm_response_has_token(llm_response)
+                        ):
+                            llm_invocation.monotonic_first_token_s = now
                         _logger.debug(
                             "Captured partial LLM response for %s",
                             request_key,
@@ -1013,6 +1024,12 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
         if response_model:
             invocation.response_model_name = response_model
 
+        for attr_name in ("response_id", "responseId"):
+            response_id = self._get_real_attr(llm_response, attr_name)
+            if response_id:
+                invocation.response_id = str(response_id)
+                break
+
         usage = getattr(llm_response, "usage_metadata", None)
         if self._is_mock_placeholder(
             usage
@@ -1031,6 +1048,15 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             )
             if output_tokens is not None:
                 invocation.output_tokens = output_tokens
+
+            reasoning_tokens = self._get_real_attr(
+                usage, "thoughts_token_count"
+            )
+            if isinstance(reasoning_tokens, int):
+                invocation.reasoning_output_tokens = reasoning_tokens
+                invocation.output_tokens = (
+                    output_tokens if isinstance(output_tokens, int) else 0
+                ) + reasoning_tokens
 
         finish_reason = self._get_real_attr(llm_response, "finish_reason")
         if finish_reason:
@@ -1121,6 +1147,15 @@ class GoogleAdkObservabilityPlugin(BasePlugin):
             return self._extract_text_from_content(text)
 
         return ""
+
+    def _llm_response_has_token(self, llm_response: LlmResponse) -> bool:
+        if self._extract_text_from_llm_response(llm_response):
+            return True
+        content = self._get_real_attr(llm_response, "content")
+        for part in self._get_real_attr(content, "parts") or []:
+            if self._get_real_attr(part, "function_call"):
+                return True
+        return False
 
     def _convert_text_to_output_messages(
         self, text: str, llm_response: LlmResponse

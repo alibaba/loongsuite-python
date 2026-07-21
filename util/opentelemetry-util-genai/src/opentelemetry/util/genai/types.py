@@ -214,6 +214,10 @@ def _new_str_any_dict() -> dict[str, Any]:
     return {}
 
 
+def _new_str_str_dict() -> dict[str, str]:
+    return {}
+
+
 # LoongSuite Extension
 
 
@@ -280,12 +284,26 @@ class LLMInvocation(GenAIInvocation):
     server_port: int | None = None
     conversation_id: str | None = None  # LoongSuite Extension
     """``gen_ai.conversation.id``."""
+    conversation_compacted: bool | None = None
+    """``gen_ai.conversation.compacted``; only ``True`` is emitted."""
+    prompt_name: str | None = None
+    """``gen_ai.prompt.name``."""
+    prompt_version: str | None = None
+    """``gen_ai.prompt.version``."""
+    prompt_variables: dict[str, str] = field(default_factory=_new_str_str_dict)
+    """Opt-in ``gen_ai.prompt.variable.<name>`` attributes."""
+    stream: bool | None = None
+    """``gen_ai.request.stream``; only streaming requests emit ``True``."""
+    reasoning_level: str | None = None
+    """``gen_ai.request.reasoning.level``."""
     output_type: str | None = None  # LoongSuite Extension
     """``gen_ai.output.type`` (e.g. text, json, image)."""
     choice_count: int | None = None  # LoongSuite Extension
     """``gen_ai.request.choice.count`` (omit on span when ``1``)."""
-    top_k: float | None = None  # LoongSuite Extension
+    top_k: int | None = None  # LoongSuite Extension
     """``gen_ai.request.top_k``."""
+    reasoning_output_tokens: int | None = None
+    """``gen_ai.usage.reasoning.output_tokens``."""
     usage_cache_creation_input_tokens: int | None = (
         None  # LoongSuite Extension
     )
@@ -315,6 +333,12 @@ class LLMInvocation(GenAIInvocation):
     when processing streaming responses. The gen_ai.response.time_to_first_token
     attribute is calculated as (monotonic_first_token_s - monotonic_start_s) * 1e9
     and stored in nanoseconds.
+    """
+    monotonic_first_chunk_s: float | None = None
+    """
+    Monotonic time when the first response chunk was received. The
+    ``gen_ai.response.time_to_first_chunk`` attribute is calculated in seconds.
+    This timestamp is independent from ``monotonic_first_token_s``.
     """
 
 

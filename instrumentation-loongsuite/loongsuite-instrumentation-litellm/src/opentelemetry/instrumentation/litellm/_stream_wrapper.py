@@ -43,6 +43,13 @@ class _StreamAccumulator:
         self._choice_states: dict[int, dict[str, Any]] = {}
 
     def record_chunk(self, chunk: Any) -> None:
+        if self.invocation is not None:
+            self.invocation.stream = True
+            if self.invocation.monotonic_first_chunk_s is None:
+                self.invocation.monotonic_first_chunk_s = (
+                    timeit.default_timer()
+                )
+
         choices = get_litellm_value(chunk, "choices") or []
         if not choices:
             return
