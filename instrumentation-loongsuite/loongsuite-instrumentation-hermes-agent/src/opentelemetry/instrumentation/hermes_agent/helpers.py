@@ -35,6 +35,7 @@ from opentelemetry.util.genai.extended_types import (
     InvokeAgentInvocation,
     ReactStepInvocation,
 )
+from opentelemetry.util.genai.response_id import resolve_response_id
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -67,38 +68,6 @@ def obj_get(value: Any, field: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(field, default)
     return getattr(value, field, default)
-
-
-def response_identifier(
-    value: Any,
-    *,
-    fields: tuple[str, ...] = (
-        "id",
-        "request_id",
-        "response_id",
-        "_request_id",
-    ),
-) -> str | None:
-    """Return a normalized provider/framework response identifier.
-
-    OpenAI-compatible providers expose ``id`` while native DashScope-style
-    responses commonly call the same correlation value ``request_id``.  Keep
-    the extraction intentionally narrow so unrelated object identifiers are
-    never promoted to ``gen_ai.response.id``.
-    """
-
-    if isinstance(value, str):
-        normalized_value = value.strip()
-        return normalized_value or None
-
-    for field in fields:
-        candidate = obj_get(value, field)
-        if not isinstance(candidate, (str, int)):
-            continue
-        normalized = str(candidate).strip()
-        if normalized:
-            return normalized
-    return None
 
 
 def _normalize_platform(value: Any) -> str:
@@ -715,17 +684,10 @@ def update_llm_invocation_from_response(
     else:
         invocation.response_model_name = invocation.request_model
 
-    # Prefer the ID captured from the provider SDK stream. Hermes currently
-    # synthesizes ``stream-*`` IDs while aggregating OpenAI-compatible chunks,
-    # so the final framework response is only a fallback. Native-style
-    # ``request_id`` fields are checked before the framework ``id`` for the
-    # same reason.
-    response_id = response_identifier(
+    response_id = resolve_response_id(
         provider_response_id,
-        fields=("id",),
-    ) or response_identifier(
         response,
-        fields=("request_id", "id", "response_id", "_request_id"),
+        framework_fields=("request_id", "id", "response_id"),
     )
     if response_id:
         invocation.response_id = response_id
