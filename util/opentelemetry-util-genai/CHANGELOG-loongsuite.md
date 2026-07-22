@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add multimodal runtime config snapshot and generation-aware uploader hot-reload
+  (`MultimodalRuntimeConfig`, `update_multimodal_runtime_config`,
+  `get_or_rebuild_uploader_pair`).
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Added
