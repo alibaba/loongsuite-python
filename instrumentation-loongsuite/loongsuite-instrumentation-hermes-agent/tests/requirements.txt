@@ -19,11 +19,11 @@ pyyaml>=6.0
 openai>=1.0.0
 wrapt>=1.0.0,<2.0.0
 
-opentelemetry-api>=1.37.0,<1.40
-opentelemetry-sdk>=1.37.0,<1.40
-opentelemetry-instrumentation>=0.60b1,<0.61
-opentelemetry-instrumentation-threading>=0.60b1,<0.61
-opentelemetry-semantic-conventions>=0.60b1,<0.61
+opentelemetry-api==1.39.1
+opentelemetry-sdk==1.39.1
+opentelemetry-instrumentation==0.60b1
+opentelemetry-instrumentation-threading==0.60b1
+opentelemetry-semantic-conventions==0.60b1
 
 -e util/opentelemetry-util-genai
 -e instrumentation-loongsuite/loongsuite-instrumentation-hermes-agent

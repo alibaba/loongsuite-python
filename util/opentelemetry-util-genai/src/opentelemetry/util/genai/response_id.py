@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 
 def _normalize_response_id(value: Any) -> str | None:
@@ -46,11 +46,11 @@ def extract_response_id(
 
     for field in fields:
         try:
-            candidate = (
-                response.get(field)
-                if isinstance(response, Mapping)
-                else getattr(response, field, None)
-            )
+            if isinstance(response, Mapping):
+                mapping_response = cast(Mapping[str, Any], response)
+                candidate = mapping_response.get(field)
+            else:
+                candidate = getattr(response, field, None)
         except Exception:  # pylint: disable=broad-exception-caught
             # Provider SDK properties may raise arbitrary lazy-load errors;
             # response-ID telemetry must never break the model call.
