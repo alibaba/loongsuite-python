@@ -15,7 +15,6 @@
 import json
 import logging
 import os
-import re  # LoongSuite Extension
 from base64 import b64encode
 from functools import partial
 from typing import Any, List, Optional
@@ -30,15 +29,8 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 from opentelemetry.util.genai.extended_environment_variables import (  # pylint: disable=no-name-in-module
-    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS,  # LoongSuite Extension
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_AUDIO_CONVERSION_ENABLED,  # LoongSuite Extension
-    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED,  # LoongSuite Extension
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_SSL_VERIFY,  # LoongSuite Extension
-    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED,  # LoongSuite Extension
-    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER,  # LoongSuite Extension
-    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH,  # LoongSuite Extension
-    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE,  # LoongSuite Extension
-    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER,  # LoongSuite Extension
 )
 from opentelemetry.util.genai.types import ContentCapturingMode
 
@@ -143,10 +135,16 @@ def _parse_env_bool(value: Optional[str], default: bool) -> bool:
     return value.lower() in ("true", "1", "yes")
 
 
+def _get_multimodal_snapshot():
+    from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+        get_multimodal_config_snapshot,
+    )
+
+    return get_multimodal_config_snapshot()
+
+
 def get_multimodal_upload_mode() -> str:
-    return os.getenv(
-        OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE, "none"
-    ).lower()
+    return _get_multimodal_snapshot().upload_mode
 
 
 def should_process_multimodal_input() -> bool:
@@ -158,10 +156,7 @@ def should_process_multimodal_output() -> bool:
 
 
 def is_multimodal_download_enabled() -> bool:
-    return _parse_env_bool(
-        os.getenv(OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED),
-        default=False,
-    )
+    return _get_multimodal_snapshot().download_enabled
 
 
 def should_verify_multimodal_download_ssl() -> bool:
@@ -174,10 +169,7 @@ def should_verify_multimodal_download_ssl() -> bool:
 
 
 def is_multimodal_local_file_enabled() -> bool:
-    return _parse_env_bool(
-        os.getenv(OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED),
-        default=False,
-    )
+    return _get_multimodal_snapshot().local_file_enabled
 
 
 def is_multimodal_audio_conversion_enabled() -> bool:
@@ -190,33 +182,22 @@ def is_multimodal_audio_conversion_enabled() -> bool:
 
 
 def get_multimodal_allowed_root_paths() -> List[str]:
-    allowed_roots_str = os.getenv(
-        OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS,
-        "",
-    )
-    if not allowed_roots_str:
-        return []
-
-    paths = [
-        p.strip() for p in re.split(r"[,]", allowed_roots_str) if p.strip()
-    ]
-    return [os.path.abspath(p) for p in paths]
+    return list(_get_multimodal_snapshot().allowed_root_paths)
 
 
 def get_multimodal_uploader_hook_name() -> Optional[str]:
-    hook_name = os.getenv(OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER, "fs")
+    hook_name = _get_multimodal_snapshot().uploader_hook_name
     return hook_name or None
 
 
 def get_multimodal_pre_uploader_hook_name() -> Optional[str]:
-    hook_name = os.getenv(
-        OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER, "fs"
-    )
+    hook_name = _get_multimodal_snapshot().pre_uploader_hook_name
     return hook_name or None
 
 
 def get_multimodal_storage_base_path() -> Optional[str]:
-    return os.getenv(OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH)
+    snapshot = _get_multimodal_snapshot()
+    return snapshot.effective_storage_base_path or snapshot.storage_base_path
 
 
 class _GenAiJsonEncoder(json.JSONEncoder):

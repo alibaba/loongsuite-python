@@ -39,6 +39,8 @@ from opentelemetry.util.genai._multimodal_upload.pre_uploader import (
 )
 from opentelemetry.util.genai.types import Base64Blob, Blob, InputMessage, Uri
 
+from .multimodal_test_helpers import reset_multimodal_runtime_state_for_test
+
 # Test audio file directory for integration tests
 TEST_AUDIO_DIR = Path(__file__).parent / "test_audio_samples"
 
@@ -52,6 +54,7 @@ def _default_upload_mode_enabled_for_tests():
             "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED": "true",
         },
     ):
+        reset_multimodal_runtime_state_for_test()
         yield
 
 
@@ -854,6 +857,7 @@ class TestMultimodalUploadSwitch:
             "os.environ",
             {"OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE": "none"},
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = MultimodalPreUploader("/tmp/test")
             assert pre_uploader._process_input is False
             assert pre_uploader._process_output is False
@@ -881,6 +885,7 @@ class TestMultimodalUploadSwitch:
             "os.environ",
             {"OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE": "input"},
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = MultimodalPreUploader("/tmp/test")
             assert pre_uploader._process_input is True
             assert pre_uploader._process_output is False
@@ -892,6 +897,7 @@ class TestMultimodalUploadSwitch:
             "os.environ",
             {"OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE": "output"},
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = MultimodalPreUploader("/tmp/test")
             assert pre_uploader._process_input is False
             assert pre_uploader._process_output is True
@@ -905,6 +911,7 @@ class TestMultimodalUploadSwitch:
                 "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED": "false"
             },
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = MultimodalPreUploader("/tmp/test")
             assert pre_uploader._download_enabled is False
 
@@ -960,6 +967,7 @@ class TestMultimodalUploadSwitch:
                 "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED": "true",
             },
         ):
+            reset_multimodal_runtime_state_for_test()
             mock_fetch.return_value = {}
             pre_uploader = MultimodalPreUploader("/tmp/test")
 
@@ -1110,6 +1118,7 @@ class TestPreUploadLocalFile:
                 ),
             },
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = pre_uploader_factory()
             part = Uri(modality="image", mime_type="image/png", uri=file_uri)
             message = InputMessage(role="user", parts=[part])
@@ -1143,8 +1152,8 @@ class TestPreUploadLocalFile:
         # OR we try to pass a relative path if we can force os.getcwd() to match.
         relative_path = test_file.name
 
-        with (
-            patch.dict(
+        # Aliyun Python Agent Extension: for compatibility with Python 3.8
+        with patch.dict(
                 os.environ,
                 {
                     "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED": "true",
@@ -1152,9 +1161,9 @@ class TestPreUploadLocalFile:
                         test_dir
                     ),
                 },
-            ),
-            patch("os.getcwd", return_value=str(test_dir)),
-        ):
+            ), \
+            patch("os.getcwd", return_value=str(test_dir)):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = pre_uploader_factory()
             # Test with simple filename (relative path)
             part = Uri(
@@ -1207,6 +1216,7 @@ class TestPreUploadLocalFile:
                 "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS": allowed_root,
             },
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = pre_uploader_factory()
             file_uri = f"file://{test_file}"
             part = Uri(modality="image", mime_type="image/png", uri=file_uri)
@@ -1254,6 +1264,7 @@ class TestPreUploadLocalFile:
                 ),
             },
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = pre_uploader_factory()
             part = Uri(modality="image", mime_type="image/png", uri=file_uri)
             message = InputMessage(role="user", parts=[part])
@@ -1280,6 +1291,7 @@ class TestPreUploadLocalFile:
                 # No ALLOWED_ROOT_PATHS
             },
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = pre_uploader_factory()
             file_uri = f"file://{test_file}"
             part = Uri(modality="image", mime_type="image/png", uri=file_uri)

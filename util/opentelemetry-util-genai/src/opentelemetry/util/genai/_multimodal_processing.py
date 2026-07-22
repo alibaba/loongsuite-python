@@ -80,7 +80,6 @@ from opentelemetry.util.genai.types import (
 from opentelemetry.util.genai.utils import (  # pylint: disable=no-name-in-module
     gen_ai_json_dumps,
     get_content_capturing_mode,
-    get_multimodal_upload_mode,
     is_experimental_mode,
 )
 
@@ -140,30 +139,7 @@ class MultimodalProcessingMixin:
 
     def _init_multimodal(self) -> None:
         """Initialize multimodal-related instance attributes, called in subclass __init__"""
-        self._multimodal_enabled = False
-
-        if get_multimodal_upload_mode() == "none":
-            return
-
-        try:
-            capture_enabled = (
-                is_experimental_mode()
-                and get_content_capturing_mode()
-                in (
-                    ContentCapturingMode.SPAN_ONLY,
-                    ContentCapturingMode.SPAN_AND_EVENT,
-                )
-            )
-        except ValueError:
-            # get_content_capturing_mode raises ValueError when GEN_AI stability mode is DEFAULT
-            capture_enabled = False
-
-        if not capture_enabled:
-            return
-
-        uploader, pre_uploader = self._get_uploader_and_pre_uploader()
-        if uploader is not None and pre_uploader is not None:
-            self._multimodal_enabled = True
+        self._multimodal_enabled = True
 
     # ==================== Public Methods ====================
 
@@ -370,19 +346,42 @@ class MultimodalProcessingMixin:
 
     # ==================== Internal Methods ====================
 
-    def _should_async_process(self, invocation: _MultimodalInvocation) -> bool:
-        """Determine whether async processing is needed
+    @staticmethod
+    def _content_capture_supports_multimodal() -> bool:
+        try:
+            return is_experimental_mode() and get_content_capturing_mode() in (
+                ContentCapturingMode.SPAN_ONLY,
+                ContentCapturingMode.SPAN_AND_EVENT,
+            )
+        except Exception:  # pylint: disable=broad-except
+            return False
 
-        Condition: Has multimodal data and multimodal upload switch is not 'none'
-        """
+    def _should_async_process(self, invocation: _MultimodalInvocation) -> bool:
+        """Determine whether async processing is needed."""
         if not self._multimodal_enabled:
             return False
 
-        return MultimodalProcessingMixin._quick_has_multimodal(invocation)
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+            get_multimodal_config_snapshot,
+        )
+
+        snapshot = get_multimodal_config_snapshot()
+        if snapshot.upload_mode == "none":
+            return False
+        if not self._content_capture_supports_multimodal():
+            return False
+        if not self._quick_has_multimodal_for_mode(invocation, snapshot):
+            return False
+        return True
 
     @staticmethod
-    def _quick_has_multimodal(invocation: _MultimodalInvocation) -> bool:
-        """Quick detection of multimodal data (O(n), no network)"""
+    def _quick_has_multimodal_for_mode(
+        invocation: _MultimodalInvocation,
+        snapshot: Any,
+    ) -> bool:
+        """Quick detection of multimodal data respecting upload_mode."""
+        check_input = snapshot.process_input
+        check_output = snapshot.process_output
 
         def _check_messages(
             messages: Optional[List[InputMessage] | List[OutputMessage]],
@@ -397,8 +396,22 @@ class MultimodalProcessingMixin:
                         return True
             return False
 
-        return _check_messages(invocation.input_messages) or _check_messages(
-            invocation.output_messages
+        if check_input and _check_messages(invocation.input_messages):
+            return True
+        if check_output and _check_messages(invocation.output_messages):
+            return True
+        return False
+
+    @staticmethod
+    def _quick_has_multimodal(invocation: _MultimodalInvocation) -> bool:
+        """Quick detection of multimodal data (O(n), no network)"""
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+            get_multimodal_config_snapshot,
+        )
+
+        return MultimodalProcessingMixin._quick_has_multimodal_for_mode(
+            invocation,
+            get_multimodal_config_snapshot(),
         )
 
     @classmethod
@@ -751,10 +764,14 @@ class MultimodalProcessingMixin:
         """
         try:
             from opentelemetry.util.genai._multimodal_upload import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
-                get_or_load_uploader_pair,
+                get_or_rebuild_uploader_pair,
+            )
+            from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+                get_multimodal_config_snapshot,
             )
 
-            return get_or_load_uploader_pair()
+            snapshot = get_multimodal_config_snapshot()
+            return get_or_rebuild_uploader_pair(snapshot)
         except ImportError:
             return None, None
 
@@ -766,7 +783,14 @@ class MultimodalProcessingMixin:
         pre_uploader: "PreUploader",
     ) -> None:
         """Upload multimodal data and set metadata attributes on span"""
-        self._separate_and_upload(span, invocation, uploader, pre_uploader)
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+            get_multimodal_config_snapshot,
+        )
+
+        snapshot = get_multimodal_config_snapshot()
+        self._separate_and_upload(
+            span, invocation, uploader, pre_uploader, snapshot
+        )
 
         input_metadata, output_metadata = (
             MultimodalProcessingMixin._extract_multimodal_metadata(
@@ -790,6 +814,7 @@ class MultimodalProcessingMixin:
         invocation: _MultimodalInvocation,
         uploader: "Uploader",
         pre_uploader: "PreUploader",
+        config_snapshot: Any,
     ) -> None:
         """Separate multimodal data and submit for upload"""
         try:
@@ -803,6 +828,7 @@ class MultimodalProcessingMixin:
                 start_time_ns,
                 invocation.input_messages,
                 invocation.output_messages,
+                config_snapshot=config_snapshot,
             )
 
             for item in upload_items:

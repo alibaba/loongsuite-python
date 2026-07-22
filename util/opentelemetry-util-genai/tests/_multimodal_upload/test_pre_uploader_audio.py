@@ -33,6 +33,8 @@ from opentelemetry.util.genai._multimodal_upload.pre_uploader import (
 )
 from opentelemetry.util.genai.types import Blob, InputMessage
 
+from .multimodal_test_helpers import reset_multimodal_runtime_state_for_test
+
 # Test audio file directory
 TEST_AUDIO_DIR = Path(__file__).parent / "test_audio_samples"
 
@@ -47,6 +49,7 @@ def _default_upload_mode_enabled_for_tests():
             "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_AUDIO_CONVERSION_ENABLED": "true",
         },
     ):
+        reset_multimodal_runtime_state_for_test()
         yield
 
 
@@ -232,19 +235,15 @@ class TestAudioFormatDetection:
         caplog,
     ):
         """Missing optional audio libs should only log the actual conversion skip."""
-        with (
-            patch(
-                "opentelemetry.util.genai._multimodal_upload.pre_uploader._audio_libs_available",
-                False,
-            ),
-            patch(
-                "opentelemetry.util.genai._multimodal_upload.pre_uploader.np",
-                None,
-            ),
-            patch(
-                "opentelemetry.util.genai._multimodal_upload.pre_uploader.sf",
-                None,
-            ),
+        with patch(
+            "opentelemetry.util.genai._multimodal_upload.pre_uploader._audio_libs_available",
+            False,
+        ), patch(
+            "opentelemetry.util.genai._multimodal_upload.pre_uploader.np",
+            None,
+        ), patch(
+            "opentelemetry.util.genai._multimodal_upload.pre_uploader.sf",
+            None,
         ):
             pre_uploader = MultimodalPreUploader(base_path="/tmp/test_upload")
             part = Blob(
@@ -285,6 +284,7 @@ class TestAudioFormatDetection:
             },
             clear=True,
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = MultimodalPreUploader(base_path="/tmp/test_upload")
             pcm_data = b"\x00\x01" * 1000
             part = Blob(
