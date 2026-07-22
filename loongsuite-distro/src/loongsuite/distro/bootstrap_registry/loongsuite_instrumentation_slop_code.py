@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-slop-code",
-    "instrumentation": "loongsuite-instrumentation-slop-code==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-slop-code==0.7.0.dev",
     "libraries": [
         "slop-code-bench >= 0.1",
     ],

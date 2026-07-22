@@ -19,9 +19,10 @@ from uuid import uuid4
 import pytest
 
 from opentelemetry import baggage, context
-from opentelemetry.instrumentation.langchain.internal._agent_flavor import (
-    AGENT_FLAVOR_METADATA_KEY,
-    DEERFLOW_AGENT_FLAVOR,
+from opentelemetry.instrumentation.langchain.internal._agent_semantics import (
+    AGENT_FRAMEWORK_METADATA_KEY,
+    AGENT_STEP_NODE_METADATA_KEY,
+    DEERFLOW_FRAMEWORK,
 )
 from opentelemetry.instrumentation.langchain.internal._tracer import (
     LoongsuiteTracer,
@@ -171,7 +172,7 @@ def test_agent_context_colors_child_llm_and_tool_spans(
     assert tool_span.attributes[GenAI.GEN_AI_AGENT_NAME] == "AgentExecutor"
 
 
-def test_deerflow_agent_flavor_sets_framework_attribute(
+def test_deerflow_agent_semantics_sets_framework_attribute(
     tracer_provider, span_exporter
 ):
     handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
@@ -180,7 +181,10 @@ def test_deerflow_agent_flavor_sets_framework_attribute(
         tracer_provider=tracer_provider,
     )
     agent_run = _FakeRun("lead-agent", inputs={"input": "research"})
-    agent_run.metadata = {AGENT_FLAVOR_METADATA_KEY: DEERFLOW_AGENT_FLAVOR}
+    agent_run.metadata = {
+        AGENT_FRAMEWORK_METADATA_KEY: DEERFLOW_FRAMEWORK,
+        AGENT_STEP_NODE_METADATA_KEY: "model",
+    }
 
     tracer._start_agent(agent_run)
     agent_run.outputs = {"output": "done"}
@@ -232,7 +236,8 @@ def test_deerflow_agent_name_resolution(
     )
     run = _FakeRun(name)
     run.metadata = {
-        AGENT_FLAVOR_METADATA_KEY: DEERFLOW_AGENT_FLAVOR,
+        AGENT_FRAMEWORK_METADATA_KEY: DEERFLOW_FRAMEWORK,
+        AGENT_STEP_NODE_METADATA_KEY: "model",
         **metadata,
     }
     run.tags = tags
@@ -246,7 +251,10 @@ def test_deerflow_agent_name_falls_back_to_entry_baggage(tracer_provider):
         tracer_provider=tracer_provider,
     )
     run = _FakeRun("LangGraph")
-    run.metadata = {AGENT_FLAVOR_METADATA_KEY: DEERFLOW_AGENT_FLAVOR}
+    run.metadata = {
+        AGENT_FRAMEWORK_METADATA_KEY: DEERFLOW_FRAMEWORK,
+        AGENT_STEP_NODE_METADATA_KEY: "model",
+    }
     run.tags = []
     ctx = baggage.set_baggage("gen_ai.agent.name", "embedded-agent")
     token = context.attach(ctx)

@@ -294,7 +294,8 @@ def test_direct_sdk_sync_operations_have_agent_step_without_entry(
             graph.stream({"messages": [{"role": "user", "content": "hello"}]})
         )
 
-    assert getattr(graph, "_loongsuite_agent_flavor") == "deerflow"
+    assert getattr(graph, "_loongsuite_agent_framework") == "deerflow"
+    assert getattr(graph, "_loongsuite_agent_step_node") == "model"
     _assert_direct_sdk_tree(
         span_exporter.get_finished_spans(),
         model_decisions=1,
@@ -336,7 +337,8 @@ def test_langsmith_and_langfuse_callbacks_keep_user_config(
 
     assert config["callbacks"] is callbacks
     assert config["metadata"] is metadata
-    assert "_loongsuite_agent_flavor" not in metadata
+    assert "_loongsuite_agent_framework" not in metadata
+    assert "_loongsuite_agent_step_node" not in metadata
     for callback in callbacks:
         assert callback.events
         assert any(

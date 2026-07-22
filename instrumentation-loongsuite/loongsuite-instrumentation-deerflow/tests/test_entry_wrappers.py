@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -588,6 +589,72 @@ def test_client_stream_generates_and_isolates_correlation_id(
     assert observed["inner_trace_id"] == generated_trace_id
     assert entry.attributes["deerflow.trace.id"] == generated_trace_id
     assert current_trace_id.get() is None
+
+
+@pytest.mark.parametrize("failure", ["resolve", "bind", "reset"])
+def test_client_trace_correlation_failure_does_not_break_stream(
+    failure,
+    handler,
+    span_exporter,
+    monkeypatch,
+    caplog,
+):
+    caplog.set_level(
+        logging.DEBUG,
+        logger="opentelemetry.instrumentation.deerflow.internal.patch",
+    )
+
+    def fail() -> None:
+        raise RuntimeError(f"{failure} failed")
+
+    trace_context_module = ModuleType("deerflow.trace_context")
+    trace_context_module.get_current_trace_id = lambda: None
+    trace_context_module.generate_trace_id = (
+        fail if failure == "resolve" else lambda: "correlation-id"
+    )
+    trace_context_module.set_current_trace_id = (
+        (lambda _trace_id: fail())
+        if failure == "bind"
+        else lambda _trace_id: object()
+    )
+    trace_context_module.reset_current_trace_id = (
+        (lambda _token: fail()) if failure == "reset" else lambda _token: None
+    )
+    app_config_module = ModuleType("deerflow.config.app_config")
+    app_config_module.is_trace_correlation_enabled = lambda _config: True
+    monkeypatch.setitem(
+        sys.modules,
+        "deerflow.trace_context",
+        trace_context_module,
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "deerflow.config.app_config",
+        app_config_module,
+    )
+
+    def stream(_message, *, thread_id=None):
+        del thread_id
+        yield _Event("end", {})
+
+    client = SimpleNamespace(
+        _agent_name="research-agent",
+        _app_config=object(),
+    )
+    list(_ClientStreamWrapper(handler)(stream, client, ("q",), {}))
+
+    entry = _entry_spans(span_exporter)[0]
+    assert entry.status.status_code is StatusCode.UNSET
+    if failure == "resolve":
+        assert "deerflow.trace.id" not in entry.attributes
+    else:
+        assert entry.attributes["deerflow.trace.id"] == "correlation-id"
+    expected_log = {
+        "resolve": "Failed to resolve DeerFlow trace correlation id",
+        "bind": "Failed to bind DeerFlow trace correlation id",
+        "reset": "Failed to reset DeerFlow trace context",
+    }[failure]
+    assert expected_log in caplog.messages
 
 
 @pytest.mark.asyncio

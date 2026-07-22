@@ -39,10 +39,12 @@ from opentelemetry.util.genai.extended_types import EntryInvocation
 from opentelemetry.util.genai.types import Error
 
 from .constants import (
-    AGENT_FLAVOR_ATTR,
+    AGENT_FRAMEWORK_ATTR,
+    AGENT_STEP_NODE_ATTR,
     CLIENT_STREAM,
     CREATE_AGENT_ALIASES,
-    DEERFLOW_AGENT_FLAVOR,
+    DEERFLOW_AGENT_FRAMEWORK,
+    DEERFLOW_AGENT_STEP_NODE,
     DEERFLOW_RUN_STATUS,
     GATEWAY_LOADED_RUN_AGENT_ALIASES,
     GATEWAY_RUN_AGENT_ALIASES,
@@ -101,13 +103,18 @@ def _track_graph(graph: Any, original_markers: dict[str, Any]) -> None:
 
 
 def mark_deerflow_graph(graph: Any) -> Any:
-    """Mark a graph with the DeerFlow flavor and no legacy ReAct flags."""
-    marker_attrs = (AGENT_FLAVOR_ATTR, *_LEGACY_GRAPH_ATTRS)
+    """Mark a graph with DeerFlow semantics and no legacy ReAct flags."""
+    marker_attrs = (
+        AGENT_FRAMEWORK_ATTR,
+        AGENT_STEP_NODE_ATTR,
+        *_LEGACY_GRAPH_ATTRS,
+    )
     original_markers = {
         name: getattr(graph, name, _MISSING) for name in marker_attrs
     }
     try:
-        setattr(graph, AGENT_FLAVOR_ATTR, DEERFLOW_AGENT_FLAVOR)
+        setattr(graph, AGENT_FRAMEWORK_ATTR, DEERFLOW_AGENT_FRAMEWORK)
+        setattr(graph, AGENT_STEP_NODE_ATTR, DEERFLOW_AGENT_STEP_NODE)
         for legacy_attr in _LEGACY_GRAPH_ATTRS:
             if hasattr(graph, legacy_attr):
                 delattr(graph, legacy_attr)
@@ -173,8 +180,11 @@ def _client_trace_id(instance: Any) -> str | None:
             getattr(instance, "_app_config", None)
         ):
             return generate_trace_id()
-    except (ImportError, ModuleNotFoundError):
-        pass
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "Failed to resolve DeerFlow trace correlation id",
+            exc_info=True,
+        )
     return None
 
 
@@ -187,7 +197,11 @@ def _bind_deerflow_trace_id(trace_id: str | None) -> Any:
         )
 
         return set_current_trace_id(trace_id)
-    except (ImportError, ModuleNotFoundError):
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "Failed to bind DeerFlow trace correlation id",
+            exc_info=True,
+        )
         return None
 
 
@@ -200,7 +214,7 @@ def _reset_deerflow_trace_id(token: Any) -> None:
         )
 
         reset_current_trace_id(token)
-    except (ImportError, ModuleNotFoundError, RuntimeError, ValueError):
+    except Exception:  # noqa: BLE001
         logger.debug("Failed to reset DeerFlow trace context", exc_info=True)
 
 
@@ -338,8 +352,11 @@ class _GatewayRunAgentWrapper:
             return await wrapped(*args, **kwargs)
 
         record = _call_arg(args, kwargs, 2, "record")
-        graph_input = _call_arg(args, kwargs, 5, "graph_input")
-        config = _call_arg(args, kwargs, 6, "config", {})
+        # DeerFlow 2.x declares these as keyword-only arguments. Reading them
+        # by name keeps this wrapper aligned with the supported API instead of
+        # relying on impossible positional offsets.
+        graph_input = kwargs.get("graph_input")
+        config = kwargs.get("config", {})
         if record is None:
             return await wrapped(*args, **kwargs)
 
@@ -620,6 +637,8 @@ def _patch_location(
     target: str,
     wrapper: Any,
 ) -> bool:
+    if (module_name, target) in _patched_locations:
+        return False
     try:
         importlib.import_module(module_name)
         wrap_function_wrapper(module_name, target, wrapper)
@@ -736,7 +755,13 @@ def _restore_late_gateway_aliases() -> None:
 
 
 def remove_owned_langchain_alias_wrappers() -> None:
-    """Remove cached LangChain wrappers after DeerFlow-owned teardown."""
+    """Remove alias wrappers installed by a DeerFlow-owned dependency.
+
+    ``LangChainInstrumentor.uninstrument()`` restores its canonical module
+    targets, but DeerFlow modules may have cached the wrapped ``create_agent``
+    callable during import. Those cached aliases are not instrumentor state;
+    remove only the matching LangChain wrapper from those locations.
+    """
     for module_name, target in CREATE_AGENT_ALIASES:
         try:
             owner, attribute = _resolve_patch_owner(module_name, target)

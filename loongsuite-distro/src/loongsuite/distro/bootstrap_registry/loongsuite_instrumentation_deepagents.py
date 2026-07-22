@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-deepagents",
-    "instrumentation": "loongsuite-instrumentation-deepagents==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-deepagents==0.7.0.dev",
     "libraries": [
         "deepagents >= 0.6.0, < 0.7.0",
     ],

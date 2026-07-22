@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-hermes-agent",
-    "instrumentation": "loongsuite-instrumentation-hermes-agent==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-hermes-agent==0.7.0.dev",
     "libraries": [
         "openai >= 1.0.0",
     ],

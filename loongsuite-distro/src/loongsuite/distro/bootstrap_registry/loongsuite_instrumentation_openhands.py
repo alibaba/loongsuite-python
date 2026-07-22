@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-openhands",
-    "instrumentation": "loongsuite-instrumentation-openhands==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-openhands==0.7.0.dev",
     "libraries": [],
     "default": True,
 }

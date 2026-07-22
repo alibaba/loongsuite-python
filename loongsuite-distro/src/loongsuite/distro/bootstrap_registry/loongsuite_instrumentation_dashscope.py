@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-dashscope",
-    "instrumentation": "loongsuite-instrumentation-dashscope==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-dashscope==0.7.0.dev",
     "libraries": [
         "dashscope >= 1.0.0",
     ],

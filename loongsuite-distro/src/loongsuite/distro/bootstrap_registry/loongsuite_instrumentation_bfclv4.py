@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-bfclv4",
-    "instrumentation": "loongsuite-instrumentation-bfclv4==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-bfclv4==0.7.0.dev",
     "libraries": [
         "bfcl-eval >= 4.0.0",
     ],

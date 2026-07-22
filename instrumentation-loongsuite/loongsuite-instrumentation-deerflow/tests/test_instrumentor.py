@@ -36,7 +36,8 @@ from opentelemetry.instrumentation.deerflow import (
     _deerflow_runtime_supported,
 )
 from opentelemetry.instrumentation.deerflow.internal.constants import (
-    AGENT_FLAVOR_ATTR,
+    AGENT_FRAMEWORK_ATTR,
+    AGENT_STEP_NODE_ATTR,
     GATEWAY_RUN_AGENT_ALIASES,
 )
 from opentelemetry.instrumentation.deerflow.internal.patch import (
@@ -50,6 +51,17 @@ from opentelemetry.instrumentation.deerflow.package import _instruments
 
 class _Graph:
     pass
+
+
+def _wrapper_modules(value):
+    modules = []
+    seen = set()
+    while hasattr(value, "__wrapped__") and id(value) not in seen:
+        seen.add(id(value))
+        wrapper = getattr(value, "_self_wrapper", None)
+        modules.append(getattr(wrapper, "__module__", None))
+        value = value.__wrapped__
+    return modules
 
 
 def test_has_no_pypi_target_library_dependency():
@@ -255,7 +267,74 @@ def test_instrument_rolls_back_started_dependency_on_setup_error(monkeypatch):
     assert instrumentor._deerflow_patched is False
 
 
-def test_create_agent_alias_marks_only_new_flavor():
+def test_uninstrument_cleans_owned_dependencies_and_aliases(monkeypatch):
+    events = []
+
+    langchain_dependency_type = type(
+        "LangChainInstrumentor",
+        (),
+        {
+            "__module__": "opentelemetry.instrumentation.langchain",
+            "uninstrument": lambda self: events.append("langchain"),
+        },
+    )
+    other_dependency_type = type(
+        "OtherInstrumentor",
+        (),
+        {"uninstrument": lambda self: events.append("other")},
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow.uninstrument_deerflow",
+        lambda: events.append("deerflow"),
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow.remove_owned_langchain_alias_wrappers",
+        lambda: events.append("aliases"),
+    )
+    instrumentor = DeerFlowInstrumentor()
+    instrumentor._deerflow_patched = True
+    instrumentor._dependency_instrumentors = [
+        langchain_dependency_type(),
+        other_dependency_type(),
+    ]
+
+    instrumentor._uninstrument()
+
+    assert events == ["deerflow", "other", "langchain", "aliases"]
+    assert instrumentor._deerflow_patched is False
+    assert instrumentor._dependency_instrumentors == []
+
+
+def test_uninstrument_continues_when_dependency_cleanup_fails(monkeypatch):
+    events = []
+
+    class FailingDependency:
+        def uninstrument(self):
+            events.append("failing")
+            raise RuntimeError("cleanup failed")
+
+    class HealthyDependency:
+        def uninstrument(self):
+            events.append("healthy")
+
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.deerflow.uninstrument_deerflow",
+        lambda: events.append("deerflow"),
+    )
+    instrumentor = DeerFlowInstrumentor()
+    instrumentor._deerflow_patched = True
+    instrumentor._dependency_instrumentors = [
+        HealthyDependency(),
+        FailingDependency(),
+    ]
+
+    instrumentor._uninstrument()
+
+    assert events == ["deerflow", "failing", "healthy"]
+    assert instrumentor._dependency_instrumentors == []
+
+
+def test_create_agent_alias_marks_only_deerflow_semantics():
     graph = _Graph()
     graph._loongsuite_react_agent = True
     result = _create_agent_alias_wrapper(
@@ -266,24 +345,29 @@ def test_create_agent_alias_marks_only_new_flavor():
     )
 
     assert result is graph
-    assert getattr(graph, AGENT_FLAVOR_ATTR) == "deerflow"
+    assert getattr(graph, AGENT_FRAMEWORK_ATTR) == "deerflow"
+    assert getattr(graph, AGENT_STEP_NODE_ATTR) == "model"
     assert not hasattr(graph, "_loongsuite_react_agent")
     assert not hasattr(graph, "_loongsuite_deepagents_agent")
 
     uninstrument_deerflow()
-    assert not hasattr(graph, AGENT_FLAVOR_ATTR)
+    assert not hasattr(graph, AGENT_FRAMEWORK_ATTR)
+    assert not hasattr(graph, AGENT_STEP_NODE_ATTR)
     assert graph._loongsuite_react_agent is True
 
 
-def test_uninstrument_restores_previous_graph_flavor():
+def test_uninstrument_restores_previous_graph_semantics():
     graph = _Graph()
-    setattr(graph, AGENT_FLAVOR_ATTR, "langchain-create-agent")
+    setattr(graph, AGENT_FRAMEWORK_ATTR, "custom-framework")
+    setattr(graph, AGENT_STEP_NODE_ATTR, "custom-step")
 
     mark_deerflow_graph(graph)
-    assert getattr(graph, AGENT_FLAVOR_ATTR) == "deerflow"
+    assert getattr(graph, AGENT_FRAMEWORK_ATTR) == "deerflow"
+    assert getattr(graph, AGENT_STEP_NODE_ATTR) == "model"
 
     uninstrument_deerflow()
-    assert getattr(graph, AGENT_FLAVOR_ATTR) == "langchain-create-agent"
+    assert getattr(graph, AGENT_FRAMEWORK_ATTR) == "custom-framework"
+    assert getattr(graph, AGENT_STEP_NODE_ATTR) == "custom-step"
 
 
 def test_gateway_aliases_are_wrapped_and_restored(
@@ -329,6 +413,28 @@ def test_gateway_aliases_are_wrapped_and_restored(
     for module, target, original in real_aliases:
         assert getattr(module, target) is original
     assert services_module.run_agent is service_run_agent
+
+
+def test_direct_instrumentation_is_idempotent(handler):
+    module = importlib.import_module("deerflow.agents.factory")
+    target = "create_agent"
+
+    try:
+        assert instrument_deerflow(handler) is True
+        first_modules = _wrapper_modules(getattr(module, target))
+
+        assert instrument_deerflow(handler) is False
+        second_modules = _wrapper_modules(getattr(module, target))
+
+        assert first_modules == second_modules
+        assert (
+            second_modules.count(
+                "opentelemetry.instrumentation.deerflow.internal.patch"
+            )
+            == 1
+        )
+    finally:
+        uninstrument_deerflow()
 
 
 def test_late_loaded_gateway_alias_is_restored(handler, monkeypatch):

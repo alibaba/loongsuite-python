@@ -14,8 +14,10 @@
 
 """Constants shared by DeerFlow patch helpers."""
 
-AGENT_FLAVOR_ATTR = "_loongsuite_agent_flavor"
-DEERFLOW_AGENT_FLAVOR = "deerflow"
+AGENT_FRAMEWORK_ATTR = "_loongsuite_agent_framework"
+AGENT_STEP_NODE_ATTR = "_loongsuite_agent_step_node"
+DEERFLOW_AGENT_FRAMEWORK = "deerflow"
+DEERFLOW_AGENT_STEP_NODE = "model"
 
 GEN_AI_AGENT_NAME = "gen_ai.agent.name"
 GEN_AI_FRAMEWORK = "gen_ai.framework"

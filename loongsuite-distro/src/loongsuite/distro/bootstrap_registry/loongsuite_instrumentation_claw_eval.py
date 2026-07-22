@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-claw-eval",
-    "instrumentation": "loongsuite-instrumentation-claw-eval==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-claw-eval==0.7.0.dev",
     "libraries": [
         "claw-eval >= 0.1.0",
     ],

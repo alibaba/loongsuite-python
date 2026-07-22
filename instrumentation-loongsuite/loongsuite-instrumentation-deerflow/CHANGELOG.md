@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Treat user cancellation, early stream closure, and DeerFlow interrupted runs
   as non-error entry completions while retaining their interrupted status.
 - Clarify the initial sandbox, skill, and memory observability boundaries.
+- Document verified local, daemon, Docker, and embedded integration paths,
+  including DeerFlow's exact `uv sync` behavior.
+- Keep DeerFlow trace-correlation helper failures from interrupting embedded
+  client streams.
 
 ## Version 0.8.0 (2026-07-14)
 

@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-minisweagent",
-    "instrumentation": "loongsuite-instrumentation-minisweagent==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-minisweagent==0.7.0.dev",
     "libraries": [
         "mini-swe-agent >= 2.2.0",
     ],
