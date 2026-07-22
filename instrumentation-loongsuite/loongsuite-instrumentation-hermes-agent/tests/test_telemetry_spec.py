@@ -512,7 +512,7 @@ def test_streaming_request_id_from_usage_trailer_is_preserved(
         [
             iter(
                 [
-                    _stream_chunk(),
+                    _stream_chunk("chatcmpl-chunk-456"),
                     _stream_chunk(request_id="dashscope-request-456"),
                 ]
             )

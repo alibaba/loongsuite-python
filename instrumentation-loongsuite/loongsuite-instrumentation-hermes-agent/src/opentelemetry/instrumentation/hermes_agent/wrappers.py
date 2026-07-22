@@ -74,6 +74,7 @@ class _ProviderResponseAttempt:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._response_id: str | None = None
+        self._response_id_priority = 0
 
     @property
     def response_id(self) -> str | None:
@@ -81,15 +82,22 @@ class _ProviderResponseAttempt:
             return self._response_id
 
     def record(self, value: Any) -> None:
-        response_id = extract_response_id(
-            value,
-            fields=("request_id", "id", "response_id"),
-        )
+        # DashScope exposes its provider correlation ID as ``request_id`` even
+        # when an OpenAI-compatible completion ``id`` is also present.
+        response_id = extract_response_id(value, fields=("request_id",))
+        priority = 2
+        if response_id is None:
+            response_id = extract_response_id(
+                value,
+                fields=("id", "response_id"),
+            )
+            priority = 1
         if response_id is None:
             return
         with self._lock:
-            if self._response_id is None:
+            if priority > self._response_id_priority:
                 self._response_id = response_id
+                self._response_id_priority = priority
 
 
 class _ProviderResponseIdCapture:
