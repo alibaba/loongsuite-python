@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-mem0",
-    "instrumentation": "loongsuite-instrumentation-mem0==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-mem0==0.7.0.dev",
     "libraries": [
         "mem0ai >= 1.0.0, < 2.0.0",
     ],

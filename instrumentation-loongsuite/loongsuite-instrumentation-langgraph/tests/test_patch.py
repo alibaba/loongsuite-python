@@ -26,10 +26,12 @@ from langchain_core.tools import tool
 
 from opentelemetry.instrumentation.langgraph import LangGraphInstrumentor
 from opentelemetry.instrumentation.langgraph.internal.patch import (
-    AGENT_FLAVOR_METADATA_KEY,
-    LANGGRAPH_PREBUILT_AGENT_FLAVOR,
-    _get_graph_agent_flavor,
-    _inject_agent_metadata,
+    AGENT_FRAMEWORK_METADATA_KEY,
+    AGENT_STEP_NODE_METADATA_KEY,
+    REACT_AGENT_METADATA_KEY,
+    _get_graph_agent_semantics,
+    _inject_agent_semantics,
+    _inject_react_metadata,
 )
 
 # ---------------------------------------------------------------------------
@@ -78,10 +80,6 @@ class TestCreateReactAgentPatch:
         """The compiled graph has ``_loongsuite_react_agent = True``."""
         graph = _build_react_agent()
         assert getattr(graph, "_loongsuite_react_agent", False) is True
-        assert (
-            getattr(graph, AGENT_FLAVOR_METADATA_KEY)
-            == LANGGRAPH_PREBUILT_AGENT_FLAVOR
-        )
 
     def test_patch_does_not_override_default_name(self, instrument):
         """The original graph name is preserved when no explicit name
@@ -96,10 +94,6 @@ class TestCreateReactAgentPatch:
         graph = _build_react_agent(name="my_custom_agent")
         assert graph.name == "my_custom_agent"
         assert getattr(graph, "_loongsuite_react_agent", False) is True
-        assert (
-            getattr(graph, AGENT_FLAVOR_METADATA_KEY)
-            == LANGGRAPH_PREBUILT_AGENT_FLAVOR
-        )
 
     def test_uninstrument_restores_original(self):
         """After ``uninstrument()``, ``create_react_agent`` returns an
@@ -111,7 +105,6 @@ class TestCreateReactAgentPatch:
 
         graph = _build_react_agent()
         assert not getattr(graph, "_loongsuite_react_agent", False)
-        assert not hasattr(graph, AGENT_FLAVOR_METADATA_KEY)
 
     def test_double_instrument_is_safe(self):
         """Calling ``instrument()`` twice does not break the wrapper."""
@@ -178,9 +171,7 @@ class TestPregelStreamPatch:
             "metadata": {"customer": "kept"},
         }
 
-        rewritten = _inject_agent_metadata(
-            original, LANGGRAPH_PREBUILT_AGENT_FLAVOR
-        )
+        rewritten = _inject_react_metadata(original)
 
         assert rewritten is not original
         assert rewritten["metadata"] is not original["metadata"]
@@ -190,16 +181,36 @@ class TestPregelStreamPatch:
         }
         assert rewritten["callbacks"] == [callback]
         assert rewritten["metadata"]["customer"] == "kept"
-        assert (
-            rewritten["metadata"][AGENT_FLAVOR_METADATA_KEY]
-            == LANGGRAPH_PREBUILT_AGENT_FLAVOR
+        assert rewritten["metadata"][REACT_AGENT_METADATA_KEY] is True
+
+    def test_opt_in_semantics_do_not_require_legacy_marker(self):
+        graph = type("Graph", (), {})()
+        setattr(graph, AGENT_FRAMEWORK_METADATA_KEY, "deerflow")
+        setattr(graph, AGENT_STEP_NODE_METADATA_KEY, "model")
+
+        assert _get_graph_agent_semantics(graph) == ("deerflow", "model")
+
+    def test_agent_semantics_injection_is_copy_on_write(self):
+        callback = object()
+        original = {
+            "callbacks": [callback],
+            "metadata": {"customer": "kept"},
+        }
+
+        rewritten = _inject_agent_semantics(
+            original,
+            ("deerflow", "model"),
         )
 
-    def test_explicit_flavor_does_not_require_legacy_marker(self):
-        graph = type("Graph", (), {})()
-        setattr(graph, AGENT_FLAVOR_METADATA_KEY, "deerflow")
-
-        assert _get_graph_agent_flavor(graph) == "deerflow"
+        assert rewritten is not original
+        assert rewritten["metadata"] is not original["metadata"]
+        assert original["metadata"] == {"customer": "kept"}
+        assert rewritten["callbacks"] == [callback]
+        assert rewritten["metadata"]["customer"] == "kept"
+        assert (
+            rewritten["metadata"][AGENT_FRAMEWORK_METADATA_KEY] == "deerflow"
+        )
+        assert rewritten["metadata"][AGENT_STEP_NODE_METADATA_KEY] == "model"
 
     def test_uninstrument_restores_stream(self):
         """After uninstrument, Pregel.stream is no longer a wrapt wrapper."""

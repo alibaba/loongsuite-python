@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-google-adk",
-    "instrumentation": "loongsuite-instrumentation-google-adk==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-google-adk==0.7.0.dev",
     "libraries": [
         "google-adk >= 0.1.0",
     ],

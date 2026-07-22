@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-mcp",
-    "instrumentation": "loongsuite-instrumentation-mcp==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-mcp==0.7.0.dev",
     "libraries": [
         "mcp >= 1.3.0, <= 1.25.0",
     ],

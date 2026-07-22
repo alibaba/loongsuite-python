@@ -51,12 +51,13 @@ from langchain_core.tracers.schemas import Run
 from opentelemetry import baggage
 from opentelemetry import context as otel_context
 from opentelemetry.context import Context
-from opentelemetry.instrumentation.langchain.internal._agent_flavor import (
-    AGENT_FLAVOR_STEP_NODES,
-    DEERFLOW_AGENT_FLAVOR,
-    get_agent_flavor,
+from opentelemetry.instrumentation.langchain.internal._agent_semantics import (
+    DEERFLOW_FRAMEWORK,
+    get_agent_semantics,
 )
 from opentelemetry.instrumentation.langchain.internal._utils import (
+    DEEPAGENTS_REACT_STEP_NODE,
+    LANGGRAPH_REACT_STEP_NODE,
     _documents_to_retrieval_documents,
     _extract_finish_reasons,
     _extract_invocation_params,
@@ -68,6 +69,7 @@ from opentelemetry.instrumentation.langchain.internal._utils import (
     _extract_token_usage,
     _extract_tool_definitions,
     _has_deepagents_metadata,
+    _has_langgraph_react_metadata,
     _is_agent_run,
     _safe_json,
 )
@@ -126,8 +128,14 @@ class _RunData:
     react_round: int = 0
     active_step: "_RunData | None" = None
     original_context: Context | None = None
-    agent_flavor: str | None = None
-    inside_agent_flavor: str | None = None
+    is_langgraph_react: bool = False
+    inside_langgraph_react: bool = False
+    is_deepagents_react: bool = False
+    inside_deepagents_react: bool = False
+    agent_framework: str | None = None
+    agent_step_node: str | None = None
+    inside_agent_framework: str | None = None
+    inside_agent_step_node: str | None = None
     deepagents_skills_by_path: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )
@@ -355,20 +363,42 @@ class LoongsuiteTracer(BaseTracer):
         try:
             if _is_agent_run(run):
                 self._start_agent(run)
-            elif get_agent_flavor(run) is not None:
-                self._handle_agent_chain_start(run)
+            elif get_agent_semantics(run) is not None:
+                self._handle_semantic_agent_chain_start(run)
+            elif _has_langgraph_react_metadata(
+                run
+            ) or _has_deepagents_metadata(run):
+                self._handle_react_chain_start(run)
             else:
                 self._start_chain(run)
         except Exception:
             logger.debug("Failed to start Chain/Agent span", exc_info=True)
 
-    def _handle_agent_chain_start(self, run: Run) -> None:
-        """Route a chain start that carries LoongSuite agent flavor metadata.
+    def _handle_semantic_agent_chain_start(self, run: Run) -> None:
+        """Route an opt-in graph carrying explicit agent semantics."""
+
+        parent_id = getattr(run, "parent_run_id", None)
+        with self._lock:
+            parent_rd = self._runs.get(parent_id) if parent_id else None
+
+        inside = parent_rd is not None and (
+            parent_rd.agent_framework is not None
+            or parent_rd.inside_agent_framework is not None
+        )
+        if inside:
+            if parent_rd is not None and parent_rd.agent_framework is not None:
+                self._maybe_enter_semantic_agent_step(run)
+            self._start_chain(run)
+        else:
+            self._start_agent(run)
+
+    def _handle_react_chain_start(self, run: Run) -> None:
+        """Route a chain start that carries LoongSuite ReAct metadata.
 
         Because ``config["metadata"]`` propagates to child callbacks,
         both the graph-level run and its child nodes carry the flag.
         We disambiguate by checking whether any ancestor is a marked
-        flavored agent or inside one:
+        ReAct-style agent or inside one:
 
         * **Inside marked agent** → child node (chain span, with possible
           ReAct step transition).
@@ -379,19 +409,23 @@ class LoongsuiteTracer(BaseTracer):
             parent_rd = self._runs.get(parent_id) if parent_id else None
 
         inside = parent_rd is not None and (
-            parent_rd.agent_flavor is not None
-            or parent_rd.inside_agent_flavor is not None
+            parent_rd.is_langgraph_react
+            or parent_rd.inside_langgraph_react
+            or parent_rd.is_deepagents_react
+            or parent_rd.inside_deepagents_react
         )
 
         if inside:
-            if parent_rd is not None and parent_rd.agent_flavor is not None:
-                self._maybe_enter_agent_step(run, parent_rd.agent_flavor)
+            if parent_rd is not None and parent_rd.is_deepagents_react:
+                self._maybe_enter_deepagents_react_step(run)
+            elif parent_rd is not None and parent_rd.is_langgraph_react:
+                self._maybe_enter_langgraph_react_step(run)
             self._start_chain(run)
         else:
             self._start_agent(run)
 
     def _resolve_agent_name(self, run: Run) -> str:
-        """Pick a meaningful name for a flavored LangGraph-based agent.
+        """Pick a meaningful name for a LangGraph-based agent.
 
         When the inner graph uses the default name ``"LangGraph"`` and is
         invoked as a node inside an outer graph, the parent node's name
@@ -399,8 +433,11 @@ class LoongsuiteTracer(BaseTracer):
         over the generic default.
         """
         name = run.name or ""
-        agent_flavor = get_agent_flavor(run)
-        if agent_flavor == DEERFLOW_AGENT_FLAVOR:
+        agent_semantics = get_agent_semantics(run)
+        if (
+            agent_semantics is not None
+            and agent_semantics[0] == DEERFLOW_FRAMEWORK
+        ):
             if name not in {"", "LangGraph", "default"}:
                 return "lead-agent" if name == "lead_agent" else name
 
@@ -424,7 +461,7 @@ class LoongsuiteTracer(BaseTracer):
                 return baggage_name.strip()
             return "lead-agent"
 
-        if agent_flavor is None or name != "LangGraph":
+        if not _has_langgraph_react_metadata(run) or name != "LangGraph":
             return name
 
         parent_id = getattr(run, "parent_run_id", None)
@@ -473,16 +510,19 @@ class LoongsuiteTracer(BaseTracer):
             agent_name=agent_name,
             input_messages=input_messages,
         )
-        agent_flavor = get_agent_flavor(run)
-        if agent_flavor == DEERFLOW_AGENT_FLAVOR:
-            invocation.attributes["gen_ai.framework"] = "deerflow"
+        agent_semantics = get_agent_semantics(run)
+        if agent_semantics is not None:
+            invocation.attributes["gen_ai.framework"] = agent_semantics[0]
         self._handler.start_invoke_agent(invocation, context=parent_ctx)
         rd = _RunData(
             run_kind="agent",
             span=invocation.span,
             context=otel_context.get_current() if invocation.span else None,
             invocation=invocation,
-            agent_flavor=agent_flavor,
+            is_langgraph_react=_has_langgraph_react_metadata(run),
+            is_deepagents_react=_has_deepagents_metadata(run),
+            agent_framework=(agent_semantics[0] if agent_semantics else None),
+            agent_step_node=(agent_semantics[1] if agent_semantics else None),
         )
         with self._lock:
             self._runs[run.id] = rd
@@ -510,16 +550,28 @@ class LoongsuiteTracer(BaseTracer):
         ctx = set_span_in_context(span, current_context)
         token = otel_context.attach(ctx)
 
-        # Propagate the agent flavor from parent so that
+        # Propagate framework-specific agent context from parent so that
         # grandchildren of the graph are also recognised as internal.
-        inside_agent_flavor = None
+        inside_lg = False
+        inside_deepagents = False
+        inside_agent_framework = None
+        inside_agent_step_node = None
         deepagents_skills_by_path: dict[str, dict[str, Any]] = {}
         parent_id = getattr(run, "parent_run_id", None)
         if parent_id:
             with self._lock:
                 p = self._runs.get(parent_id)
             if p is not None:
-                inside_agent_flavor = p.agent_flavor or p.inside_agent_flavor
+                inside_lg = p.is_langgraph_react or p.inside_langgraph_react
+                inside_deepagents = (
+                    p.is_deepagents_react or p.inside_deepagents_react
+                )
+                inside_agent_framework = (
+                    p.agent_framework or p.inside_agent_framework
+                )
+                inside_agent_step_node = (
+                    p.agent_step_node or p.inside_agent_step_node
+                )
                 deepagents_skills_by_path = dict(p.deepagents_skills_by_path)
 
         rd = _RunData(
@@ -527,7 +579,10 @@ class LoongsuiteTracer(BaseTracer):
             span=span,
             context=ctx,
             context_token=token,
-            inside_agent_flavor=inside_agent_flavor,
+            inside_langgraph_react=inside_lg,
+            inside_deepagents_react=inside_deepagents,
+            inside_agent_framework=inside_agent_framework,
+            inside_agent_step_node=inside_agent_step_node,
             deepagents_skills_by_path=deepagents_skills_by_path,
         )
         with self._lock:
@@ -751,8 +806,8 @@ class LoongsuiteTracer(BaseTracer):
     # Agent STEP — callback-based detection
     # ------------------------------------------------------------------
 
-    def _maybe_enter_agent_step(self, run: Run, agent_flavor: str) -> None:
-        """Start a STEP for a direct model decision node of a flavored agent.
+    def _maybe_enter_semantic_agent_step(self, run: Run) -> None:
+        """Start a STEP for the opt-in graph's direct decision node.
 
         Must be called **before** ``_start_chain`` so that the chain span
         is parented under the step span.
@@ -763,15 +818,54 @@ class LoongsuiteTracer(BaseTracer):
 
         with self._lock:
             parent_rd = self._runs.get(parent_id)
-        if parent_rd is None or parent_rd.agent_flavor != agent_flavor:
+        if parent_rd is None or parent_rd.agent_framework is None:
             return
 
-        step_node = AGENT_FLAVOR_STEP_NODES.get(agent_flavor)
         chain_name = getattr(run, "name", "") or ""
-        if step_node is None or chain_name != step_node:
+        if chain_name != parent_rd.agent_step_node:
             return
 
         # End previous step (it had tool_calls since another round started)
+        if parent_rd.active_step is not None:
+            self._exit_react_step(parent_id, "tool_calls")
+
+        self._enter_react_step(parent_id)
+
+    def _maybe_enter_langgraph_react_step(self, run: Run) -> None:
+        """Start a ReAct STEP for a direct LangGraph ``agent`` node."""
+        parent_id = getattr(run, "parent_run_id", None)
+        if not parent_id:
+            return
+
+        with self._lock:
+            parent_rd = self._runs.get(parent_id)
+        if parent_rd is None or not parent_rd.is_langgraph_react:
+            return
+
+        chain_name = getattr(run, "name", "") or ""
+        if chain_name != LANGGRAPH_REACT_STEP_NODE:
+            return
+
+        if parent_rd.active_step is not None:
+            self._exit_react_step(parent_id, "tool_calls")
+
+        self._enter_react_step(parent_id)
+
+    def _maybe_enter_deepagents_react_step(self, run: Run) -> None:
+        """Start a ReAct STEP for a direct DeepAgents ``model`` node."""
+        parent_id = getattr(run, "parent_run_id", None)
+        if not parent_id:
+            return
+
+        with self._lock:
+            parent_rd = self._runs.get(parent_id)
+        if parent_rd is None or not parent_rd.is_deepagents_react:
+            return
+
+        chain_name = getattr(run, "name", "") or ""
+        if chain_name != DEEPAGENTS_REACT_STEP_NODE:
+            return
+
         if parent_rd.active_step is not None:
             self._exit_react_step(parent_id, "tool_calls")
 

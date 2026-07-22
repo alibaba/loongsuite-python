@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-langgraph",
-    "instrumentation": "loongsuite-instrumentation-langgraph==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-langgraph==0.7.0.dev",
     "libraries": [
         "langgraph >= 0.2",
     ],

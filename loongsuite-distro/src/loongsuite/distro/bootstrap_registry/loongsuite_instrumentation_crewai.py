@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-crewai",
-    "instrumentation": "loongsuite-instrumentation-crewai==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-crewai==0.7.0.dev",
     "libraries": [
         "crewai >= 0.80.0",
     ],

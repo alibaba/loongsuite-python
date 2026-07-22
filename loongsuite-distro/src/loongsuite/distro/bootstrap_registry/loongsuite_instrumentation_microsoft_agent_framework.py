@@ -22,7 +22,7 @@
 REGISTRY = {
     "source": "loongsuite",
     "package": "loongsuite-instrumentation-microsoft-agent-framework",
-    "instrumentation": "loongsuite-instrumentation-microsoft-agent-framework==0.8.0.dev",
+    "instrumentation": "loongsuite-instrumentation-microsoft-agent-framework==0.7.0.dev",
     "libraries": [
         "agent-framework-core >= 1.0.0",
     ],
