@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Recognize opt-in framework and decision-node metadata from LangGraph-based
+  agent harnesses, allowing adapters such as DeerFlow to define their `STEP`
+  boundary without changing existing LangGraph or DeepAgents detection.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Added
