@@ -36,14 +36,6 @@ from opentelemetry.util.genai.types import (
 logger = logging.getLogger(__name__)
 
 
-def _debug_safely(message: str, *args: Any, exc_info: bool = False) -> None:
-    """Keep diagnostic logging out of the application failure path."""
-    try:
-        logger.debug(message, *args, exc_info=exc_info)
-    except Exception:  # pragma: no cover - custom logging handlers vary
-        pass
-
-
 @hook_advice("litellm", "stream_chunk")
 def _record_stream_chunk(accumulator: Any, chunk: Any) -> None:
     """Record probe-owned chunk state without affecting stream delivery."""
@@ -260,7 +252,7 @@ class StreamWrapper:
             raise
         except Exception as e:
             # Error during streaming
-            _debug_safely("Error during streaming: %s", e, exc_info=True)
+            logger.debug("Error during streaming: %s", e, exc_info=True)
             self._finalize(error=e)
             raise
 
@@ -296,12 +288,8 @@ class StreamWrapper:
 
         try:
             self._finalize()
-        except Exception as exc:
-            _debug_safely(
-                "Error finalizing unclosed LiteLLM stream: %s",
-                exc,
-                exc_info=True,
-            )
+        except Exception:
+            pass
 
     def _close_stream(self) -> None:
         if self._stream_closed:
@@ -315,7 +303,7 @@ class StreamWrapper:
         try:
             close()
         except Exception as exc:
-            _debug_safely(
+            logger.debug(
                 "Error closing LiteLLM stream: %s", exc, exc_info=True
             )
 
@@ -344,7 +332,7 @@ class StreamWrapper:
                 # Clear reference to avoid holding memory
                 self.last_chunk = None
             except Exception as e:
-                _debug_safely(
+                logger.debug(
                     "Error finalizing LiteLLM stream: %s",
                     e,
                     exc_info=True,
@@ -411,13 +399,13 @@ class AsyncStreamWrapper:
                 yield chunk
 
             # Stream exhausted normally
-            _debug_safely(
+            logger.debug(
                 "AsyncStreamWrapper: Stream completed (chunks: %s)",
                 self.chunk_count,
             )
         except Exception as e:
             # Error during streaming
-            _debug_safely(
+            logger.debug(
                 "AsyncStreamWrapper: Error during streaming: %s",
                 e,
                 exc_info=True,
@@ -476,7 +464,7 @@ class AsyncStreamWrapper:
         try:
             close()
         except Exception as exc:
-            _debug_safely(
+            logger.debug(
                 "Error closing LiteLLM async stream: %s",
                 exc,
                 exc_info=True,
@@ -493,7 +481,7 @@ class AsyncStreamWrapper:
             try:
                 await aclose()
             except Exception as exc:
-                _debug_safely(
+                logger.debug(
                     "Error closing LiteLLM async stream: %s",
                     exc,
                     exc_info=True,
@@ -526,7 +514,7 @@ class AsyncStreamWrapper:
             # Clear reference to avoid holding memory
             self.last_chunk = None
         except Exception as e:
-            _debug_safely(
+            logger.debug(
                 "Error finalizing LiteLLM async stream: %s",
                 e,
                 exc_info=True,
