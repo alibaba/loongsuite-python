@@ -13,6 +13,7 @@
 | [loongsuite-instrumentation-deepagents](./loongsuite-instrumentation-deepagents) | deepagents >= 0.6.0, < 0.7.0 | No | development
 | [loongsuite-instrumentation-dify](./loongsuite-instrumentation-dify) | dify | No | development
 | [loongsuite-instrumentation-google-adk](./loongsuite-instrumentation-google-adk) | google-adk >= 0.1.0 | No | development
+| [loongsuite-instrumentation-google-genai](./loongsuite-instrumentation-google-genai) | google-genai >= 1.32.0, < 3 | Yes | development
 | [loongsuite-instrumentation-hermes-agent](./loongsuite-instrumentation-hermes-agent) | openai >= 1.0.0 | No | development
 | [loongsuite-instrumentation-langchain](./loongsuite-instrumentation-langchain) | langchain_core >= 0.1.0 | No | development
 | [loongsuite-instrumentation-langgraph](./loongsuite-instrumentation-langgraph) | langgraph >= 0.2 | No | development
