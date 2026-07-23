@@ -16,11 +16,11 @@ import asyncio
 
 import pytest
 
-from opentelemetry.instrumentation.litellm import _stream_wrapper
 from opentelemetry.instrumentation.litellm._stream_wrapper import (
     AsyncStreamWrapper,
     StreamWrapper,
 )
+from opentelemetry.util.genai import extended_advice
 
 
 def test_stream_chunk_advice_failure_preserves_chunk(monkeypatch):
@@ -60,7 +60,7 @@ def test_stream_chunk_logging_failure_also_preserves_chunk(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        _stream_wrapper.logger,
+        extended_advice._logger,
         "debug",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             RuntimeError("logger boom")
@@ -108,6 +108,34 @@ def test_stream_callback_failure_does_not_escape_or_repeat():
     assert list(stream) == []
     stream.close()
     assert calls == [True]
+
+
+def test_stream_close_base_exception_still_finalizes():
+    calls = []
+    expected = KeyboardInterrupt("business interruption")
+
+    class Source:
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise StopIteration
+
+        def close(self):
+            raise expected
+
+    stream = StreamWrapper(
+        stream=Source(),
+        span=None,
+        callback=lambda *_args: calls.append(_args),
+    )
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        stream.close()
+
+    assert caught.value is expected
+    assert len(calls) == 1
+    assert stream._finalized is True
 
 
 @pytest.mark.asyncio
@@ -207,6 +235,29 @@ async def test_async_stream_cancellation_during_close_still_finalizes():
 
     assert len(calls) == 1
     assert stream._finalized is True
+
+
+@pytest.mark.asyncio
+async def test_async_only_stream_can_aclose_after_sync_close():
+    close_calls = []
+
+    class Source:
+        async def aclose(self):
+            close_calls.append(True)
+
+    stream = AsyncStreamWrapper(
+        stream=Source(),
+        span=None,
+        callback=lambda *_args: None,
+    )
+
+    stream.close()
+    assert close_calls == []
+    assert stream._stream_closed is False
+
+    await stream.aclose()
+    assert close_calls == [True]
+    assert stream._stream_closed is True
 
 
 def test_async_stream_sync_close_base_exception_still_finalizes():

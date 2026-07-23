@@ -55,6 +55,9 @@ def hook_advice(
 ) -> Callable[[_F], _F]:
     """Decorate synchronous instrumentation-only work with fail-open semantics.
 
+    Suppressed failures return ``None``, so callers must not depend on advice
+    return values unless ``throw_exception`` is enabled.
+
     Generator functions are rejected because their bodies execute during later
     iteration, after this decorator has returned the generator object. Stream
     iteration must instead be isolated by the owning instrumentation wrapper.
@@ -99,6 +102,9 @@ def async_hook_advice(
     throw_exception: bool = False,
 ) -> Callable[[_F], _F]:
     """Decorate asynchronous instrumentation-only work with fail-open semantics.
+
+    Suppressed failures return ``None``, so callers must not depend on advice
+    return values unless ``throw_exception`` is enabled.
 
     Async generators are rejected because their bodies execute during later
     iteration. The owning instrumentation wrapper must isolate that lifecycle.

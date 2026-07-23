@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Isolate streamed chunk accumulation and finalization callback failures so
-  instrumentation errors do not interrupt application stream consumption.
+- Route streamed chunk accumulation and finalization callbacks through shared
+  fail-open advice while keeping stream iteration and lifecycle handling in the
+  LiteLLM wrapper.
 
 ## Version 0.7.0 (2026-07-03)
 
