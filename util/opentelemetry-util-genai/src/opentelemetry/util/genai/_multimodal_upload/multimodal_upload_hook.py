@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 from importlib import metadata
@@ -74,9 +75,12 @@ def _call_hook(
     snapshot: MultimodalConfigSnapshot,
 ) -> Optional[object]:
     try:
+        params = inspect.signature(hook).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if params:
         return hook(snapshot)
-    except TypeError:
-        return hook()
+    return hook()
 
 
 def _load_by_name(
@@ -211,6 +215,60 @@ def _load_pair_from_snapshot(
     return uploader, pre_uploader
 
 
+def _resolve_cached_uploader_pair(
+    generation: int,
+) -> tuple[bool, tuple[Optional[Uploader], Optional[PreUploader]]]:
+    """Return (resolved, pair). When resolved is True, pair is the final result."""
+    global _building_generation  # pylint: disable=global-statement
+
+    with _uploader_pair_lock:
+        if _failed_generation == generation:
+            return True, (None, None)
+        if (
+            _uploader_generation == generation
+            and _uploader is not None
+            and _pre_uploader is not None
+        ):
+            return True, (_uploader, _pre_uploader)
+        if _building_generation == generation:
+            return True, (None, None)
+        _building_generation = generation
+    return False, (None, None)
+
+
+def _commit_uploader_pair(
+    generation: int,
+    new_pair: tuple[Optional[Uploader], Optional[PreUploader]],
+) -> tuple[Optional[Uploader], Optional[PreUploader]]:
+    global _uploader  # pylint: disable=global-statement
+    global _pre_uploader  # pylint: disable=global-statement
+    global _uploader_generation  # pylint: disable=global-statement
+    global _failed_generation  # pylint: disable=global-statement
+    global _building_generation  # pylint: disable=global-statement
+
+    with _uploader_pair_lock:
+        _building_generation = -1
+
+        if get_multimodal_config_snapshot().uploader_generation != generation:
+            _schedule_retired_pair_shutdown(new_pair)
+            return None, None
+
+        if not _is_complete_pair(new_pair):
+            _failed_generation = generation
+            _logger.warning(
+                "Multimodal uploader pair build failed for generation %s; "
+                "uploads disabled until generation changes",
+                generation,
+            )
+            return None, None
+
+        old_pair = (_uploader, _pre_uploader)
+        _uploader, _pre_uploader = new_pair
+        _uploader_generation = generation
+        _schedule_retired_pair_shutdown(old_pair)
+        return _uploader, _pre_uploader
+
+
 def get_or_rebuild_uploader_pair(
     snapshot: Optional[MultimodalConfigSnapshot] = None,
 ) -> tuple[Optional[Uploader], Optional[PreUploader]]:
@@ -223,49 +281,17 @@ def get_or_rebuild_uploader_pair(
     - stale build: if generation advanced during load, discard the new pair
     - failed generation: remember load failure and skip retry for that generation
     """
-    global _uploader  # pylint: disable=global-statement
-    global _pre_uploader  # pylint: disable=global-statement
-    global _uploader_generation  # pylint: disable=global-statement
-    global _failed_generation  # pylint: disable=global-statement
-    global _building_generation  # pylint: disable=global-statement
-
     cfg = snapshot or get_multimodal_config_snapshot()
     if cfg.upload_mode == _UPLOAD_MODE_NONE:
         return None, None
 
     generation = cfg.uploader_generation
-
-    with _uploader_pair_lock:
-        if _failed_generation == generation:
-            return None, None
-        if (
-            _uploader_generation == generation
-            and _uploader is not None
-            and _pre_uploader is not None
-        ):
-            return _uploader, _pre_uploader
-        if _building_generation == generation:
-            return None, None
-        _building_generation = generation
+    resolved, pair = _resolve_cached_uploader_pair(generation)
+    if resolved:
+        return pair
 
     new_pair = _load_pair_from_snapshot(cfg)
-
-    with _uploader_pair_lock:
-        _building_generation = -1
-
-        if get_multimodal_config_snapshot().uploader_generation != generation:
-            _schedule_retired_pair_shutdown(new_pair)
-            return None, None
-
-        if not _is_complete_pair(new_pair):
-            _failed_generation = generation
-            return None, None
-
-        old_pair = (_uploader, _pre_uploader)
-        _uploader, _pre_uploader = new_pair
-        _uploader_generation = generation
-        _schedule_retired_pair_shutdown(old_pair)
-        return _uploader, _pre_uploader
+    return _commit_uploader_pair(generation, new_pair)
 
 
 def get_or_load_uploader_pair(

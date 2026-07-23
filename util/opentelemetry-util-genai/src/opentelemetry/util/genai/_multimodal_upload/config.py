@@ -71,6 +71,18 @@ UPLOADER_GENERATION_FIELDS = frozenset(
     }
 )
 
+# SLS connection/credential fields are env-only for security: runtime updates must
+# not rotate credentials or endpoints through update_multimodal_runtime_config().
+_READ_ONLY_RUNTIME_FIELDS = frozenset(
+    {
+        "sls_endpoint",
+        "sls_auth_type",
+        "sls_access_key_id",
+        "sls_access_key_secret",
+        "sls_sts_token",
+    }
+)
+
 
 @dataclass(frozen=True)
 class MultimodalConfigSnapshot:
@@ -256,7 +268,16 @@ def _normalize_and_validate(
     }
 
     for key, value in fields.items():
-        if value is None or key not in merged:
+        if value is None:
+            continue
+        if key in _READ_ONLY_RUNTIME_FIELDS:
+            _logger.warning(
+                "Ignoring runtime update for read-only multimodal field %r "
+                "(SLS credentials/endpoint must come from environment)",
+                key,
+            )
+            continue
+        if key not in merged:
             continue
         if key == "upload_mode":
             merged[key] = _normalize_upload_mode(value)

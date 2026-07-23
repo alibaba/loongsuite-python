@@ -56,7 +56,6 @@ from opentelemetry.util.genai.extended_environment_variables import (
 from opentelemetry.util.genai.types import Base64Blob, Blob, Modality, Uri
 from opentelemetry.util.genai.utils import (  # pylint: disable=no-name-in-module
     get_multimodal_allowed_root_paths,
-    get_multimodal_storage_base_path,
     is_multimodal_audio_conversion_enabled,
     is_multimodal_download_enabled,
     is_multimodal_local_file_enabled,
@@ -67,8 +66,8 @@ from opentelemetry.util.genai.utils import (  # pylint: disable=no-name-in-modul
 
 # Try importing audio processing libraries (optional dependencies)
 try:
-    import numpy as np  # pyright: ignore[reportMissingImports]
-    import soundfile as sf  # pyright: ignore[reportMissingImports]
+    import numpy as np
+    import soundfile as sf
 
     _audio_libs_available = True
 except ImportError:
@@ -592,7 +591,7 @@ class MultimodalPreUploader(PreUploader):
 
         try:
             # Convert PCM16 byte data to numpy int16 array
-            audio_np = np.frombuffer(pcm_data, dtype=np.int16)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
+            audio_np = np.frombuffer(pcm_data, dtype=np.int16)  # pyright: ignore[reportUnknownMemberType]
 
             # Write WAV data to memory buffer
             buffer = io.BytesIO()

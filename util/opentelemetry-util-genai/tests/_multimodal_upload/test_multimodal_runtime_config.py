@@ -22,6 +22,12 @@ from typing import Any, Callable, List, Optional
 from unittest.mock import patch
 
 from opentelemetry.trace import SpanContext
+from opentelemetry.util.genai._multimodal_upload._base import (  # pylint: disable=no-name-in-module
+    PreUploader,
+    PreUploadItem,
+    Uploader,
+    UploadItem,
+)
 from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
     DEFAULT_SLS_LOGSTORE,
     UPLOADER_GENERATION_FIELDS,
@@ -227,13 +233,6 @@ class TestMultimodalRuntimeConfig(unittest.TestCase):
             clear=False,
         ):
             module = reload_multimodal_upload_hook_module()
-
-            from opentelemetry.util.genai._multimodal_upload._base import (  # pylint: disable=no-name-in-module
-                PreUploader,
-                PreUploadItem,
-                Uploader,
-                UploadItem,
-            )
 
             class FakeUploader(Uploader):
                 def upload(

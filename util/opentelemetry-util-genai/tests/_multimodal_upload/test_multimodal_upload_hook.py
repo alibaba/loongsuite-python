@@ -38,7 +38,11 @@ from opentelemetry.util.genai.extended_environment_variables import (  # pylint:
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER,
 )
 
-from .multimodal_test_helpers import reload_multimodal_upload_hook_module
+from .multimodal_test_helpers import (
+    get_default_pre_uploader_hook_name,
+    get_default_uploader_hook_name,
+    reload_multimodal_upload_hook_module,
+)
 
 
 class FakeUploader(Uploader):
@@ -148,11 +152,6 @@ class TestMultimodalUploadHook(TestCase):
         clear=True,
     )
     def test_load_uploader_and_pre_uploader_use_configured_defaults(self):
-        from .multimodal_test_helpers import (
-            get_default_pre_uploader_hook_name,
-            get_default_uploader_hook_name,
-        )
-
         module = reload_multimodal_upload_hook_module()
         default_uploader = get_default_uploader_hook_name()
         default_pre_uploader = get_default_pre_uploader_hook_name()
@@ -278,11 +277,14 @@ class TestUploaderPairHotReload(TestCase):
             created_uploaders.append(uploader)
             return uploader
 
+        def pre_uploader_factory() -> FakePreUploader:
+            return FakePreUploader()
+
         with patch.object(
             module,
             "_iter_entry_points",
             side_effect=_fake_fs_entry_points(
-                uploader_factory, lambda: FakePreUploader()
+                uploader_factory, pre_uploader_factory
             ),
         ):
             first_uploader, _ = module.get_or_rebuild_uploader_pair()

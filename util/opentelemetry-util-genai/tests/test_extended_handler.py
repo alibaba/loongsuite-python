@@ -54,6 +54,13 @@ from opentelemetry.util.genai._multimodal_processing import (
     MultimodalProcessingMixin,
     _MultimodalAsyncTask,
 )
+from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
+    update_multimodal_runtime_config,
+)
+
+from ._multimodal_upload.multimodal_test_helpers import (
+    reset_multimodal_runtime_state_for_test,
+)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
@@ -1585,10 +1592,12 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         # Reset class-level state before each test
         MultimodalProcessingMixin._async_queue = None
         MultimodalProcessingMixin._async_worker = None
+        reset_multimodal_runtime_state_for_test()
 
     def tearDown(self):
         MultimodalProcessingMixin._async_queue = None
         MultimodalProcessingMixin._async_worker = None
+        reset_multimodal_runtime_state_for_test()
 
     @staticmethod
     def _create_mock_handler(enabled=True):
@@ -1633,6 +1642,8 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
 
     def test_quick_has_multimodal_orthogonal_cases(self):
         """Test _quick_has_multimodal with all multimodal types and edge cases."""
+        # Detection respects upload_mode; enable both sides for this case matrix.
+        update_multimodal_runtime_config(upload_mode="both")
         mixin = MultimodalProcessingMixin
 
         # No multimodal: Text only
@@ -1785,8 +1796,9 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         os.environ,
         {"OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE": "none"},
     )
-    def test_init_multimodal_disabled_when_mode_none(self):
-        """Test _init_multimodal with mode=none."""
+    def test_init_multimodal_mode_none_gated_at_process_time(self):
+        """_init_multimodal stays enabled; upload_mode=none gates at process time."""
+        reset_multimodal_runtime_state_for_test()
 
         class Handler(MultimodalProcessingMixin):
             def _get_uploader_and_pre_uploader(self):
@@ -1794,31 +1806,93 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
 
         handler = Handler()
         handler._init_multimodal()
-        self.assertFalse(handler._multimodal_enabled)
+        self.assertTrue(handler._multimodal_enabled)
+
+        inv = self._create_invocation_with_multimodal(with_context=True)
+        self.assertFalse(
+            handler.process_multimodal_stop(inv, method="stop_llm")  # pylint: disable=unexpected-keyword-arg
+        )
 
     @patch_env_vars(
         "gen_ai_latest_experimental",
         content_capturing="SPAN_ONLY",
         OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE="both",
     )
-    def test_init_multimodal_enabled_or_disabled_by_uploader(self):
-        """Test _init_multimodal enabled when uploader available, disabled when None."""
+    def test_init_multimodal_always_enabled(self):
+        """_init_multimodal always enables; uploader availability is resolved later."""
+        reset_multimodal_runtime_state_for_test()
 
         class HandlerWithUploader(MultimodalProcessingMixin):
+            def __init__(self):
+                self._logger = MagicMock()
+
             def _get_uploader_and_pre_uploader(self):
                 return MagicMock(), MagicMock()
+
+            def _record_llm_metrics(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
 
         h1 = HandlerWithUploader()
         h1._init_multimodal()
         self.assertTrue(h1._multimodal_enabled)
 
         class HandlerWithoutUploader(MultimodalProcessingMixin):
+            def __init__(self):
+                self._logger = MagicMock()
+
             def _get_uploader_and_pre_uploader(self):
                 return None, None
 
+            def _record_llm_metrics(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
         h2 = HandlerWithoutUploader()
         h2._init_multimodal()
-        self.assertFalse(h2._multimodal_enabled)
+        self.assertTrue(h2._multimodal_enabled)
+
+        # Runtime entry is not gated by uploader availability.
+        inv = self._create_invocation_with_multimodal(with_context=True)
+        self.assertTrue(h1._should_async_process(inv))
+        self.assertTrue(h2._should_async_process(inv))
+
+        # Runtime async path: with uploader pair → upload; without → skip
+        # upload but still finish the span.
+        mock_span = MagicMock()
+        mock_span._start_time = 1000000000
+        async_inv = LLMInvocation(request_model="gpt-4")
+        async_inv.span = mock_span
+        async_inv.input_messages = inv.input_messages
+
+        with patch.object(
+            h1, "_upload_and_set_metadata"
+        ) as mock_upload, patch(
+            "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
+        ), patch(
+            "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+        ):
+            h1._async_stop_llm(
+                _MultimodalAsyncTask(
+                    invocation=async_inv, method="stop_llm", handler=h1
+                )
+            )
+            mock_upload.assert_called_once()
+            mock_span.end.assert_called_once()
+
+        mock_span.reset_mock()
+        with patch.object(
+            h2, "_upload_and_set_metadata"
+        ) as mock_upload2, patch(
+            "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
+        ), patch(
+            "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+        ):
+            h2._async_stop_llm(
+                _MultimodalAsyncTask(
+                    invocation=async_inv, method="stop_llm", handler=h2
+                )
+            )
+            mock_upload2.assert_not_called()
+            mock_span.end.assert_called_once()
 
     # ==================== process_multimodal_stop/fail Tests ====================
 
@@ -1871,6 +1945,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
     )
     def test_process_multimodal_fallback_on_queue_issues(self):
         """Test process_multimodal_stop/fail uses fallback when queue is None or full."""
+        reset_multimodal_runtime_state_for_test()
         handler = self._create_mock_handler()
         inv = self._create_invocation_with_multimodal(with_context=True)
         error = Error(message="err", type=RuntimeError)
@@ -1915,6 +1990,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
     )
     def test_process_multimodal_enqueues_task(self):
         """Test process_multimodal_stop/fail enqueues tasks correctly."""
+        reset_multimodal_runtime_state_for_test()
         handler = self._create_mock_handler()
         error = Error(message="err", type=RuntimeError)
 
@@ -2351,7 +2427,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         inv = LLMInvocation(request_model="gpt-4")
 
         handler._separate_and_upload(
-            mock_span, inv, mock_uploader, mock_pre_uploader
+            mock_span, inv, mock_uploader, mock_pre_uploader, None
         )
         mock_pre_uploader.pre_upload.assert_called_once()
         self.assertEqual(mock_uploader.upload.call_count, 2)
@@ -2360,7 +2436,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         mock_span2 = MagicMock()
         mock_span2.get_span_context.side_effect = RuntimeError("err")
         handler._separate_and_upload(
-            mock_span2, inv, mock_uploader, mock_pre_uploader
+            mock_span2, inv, mock_uploader, mock_pre_uploader, None
         )  # Should not raise
 
 
