@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Add optional `MultimodalUsageRecorder` hooks for `FsUploader` upload
+  success/error recording. Default is no-op.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Added

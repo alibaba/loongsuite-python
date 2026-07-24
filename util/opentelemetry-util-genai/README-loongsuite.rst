@@ -414,6 +414,8 @@ Framework 探针若已声明对本包的依赖，会随探针一并安装；单�
 
 **自定义上传实现**：通过 ``pyproject.toml`` 中的 entry point ``opentelemetry_genai_multimodal_uploader``、``opentelemetry_genai_multimodal_pre_uploader`` 注册实现；本仓库默认提供 ``fs`` hook（见包内 ``pyproject.toml``）。
 
+**可选上传记录**：``FsUploader`` 终态成功/失败时会调用全局 ``MultimodalUsageRecorder``（默认 no-op）。需要时可通过 ``set_multimodal_usage_recorder()`` 注册自定义实现。
+
 ------------------------------------------------------------------------
 5. 补充说明
 ------------------------------------------------------------------------
