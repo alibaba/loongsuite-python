@@ -206,15 +206,24 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
 
         Principle: Never block the user application.
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             return invocation
 
         # Record actual end time
         invocation.monotonic_end_s = timeit.default_timer()
 
         # Try async multimodal processing
-        if self.process_multimodal_stop(invocation, method="stop_llm"):  # pylint: disable=unexpected-keyword-arg
+        invocation._lifecycle_finalized = True
+        try:
+            handled = self.process_multimodal_stop(
+                invocation, method="stop_llm"
+            )
+        except BaseException:
+            invocation._lifecycle_finalized = False
+            raise
+        if handled:
             return invocation
+        invocation._lifecycle_finalized = False
 
         # No multimodal: use parent's sync path
         return super().stop_llm(invocation)
@@ -227,14 +236,23 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         Similar to stop_llm but includes error handling.
         Principle: Never block the user application.
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             return invocation
 
         invocation.monotonic_end_s = timeit.default_timer()
 
         # Try async multimodal processing
-        if self.process_multimodal_fail(invocation, error, method="fail_llm"):  # pylint: disable=unexpected-keyword-arg
+        invocation._lifecycle_finalized = True
+        try:
+            handled = self.process_multimodal_fail(
+                invocation, error, method="fail_llm"
+            )
+        except BaseException:
+            invocation._lifecycle_finalized = False
+            raise
+        if handled:
             return invocation
+        invocation._lifecycle_finalized = False
 
         # No multimodal: use parent's sync path
         return super().fail_llm(invocation, error)

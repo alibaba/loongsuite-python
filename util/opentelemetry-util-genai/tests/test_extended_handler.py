@@ -1822,23 +1822,42 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
 
     # ==================== process_multimodal_stop/fail Tests ====================
 
-    def test_process_multimodal_returns_false_on_precondition_failure(self):
-        """Test process_multimodal_stop/fail returns False when preconditions not met."""
+    def test_process_multimodal_preconditions(self):
+        """Test detached streams remain eligible for multimodal processing."""
         handler = self._create_mock_handler(enabled=True)
         error = Error(message="err", type=RuntimeError)
 
-        # context_token is None
+        # Streaming instrumentation detaches before transferring iteration to
+        # another context. A recording span without a token is still valid.
         inv1 = self._create_invocation_with_multimodal()
         inv1.context_token = None
         inv1.span = MagicMock()
-        self.assertFalse(
-            handler.process_multimodal_stop(inv1, method="stop_llm")  # pylint: disable=unexpected-keyword-arg
-        )
-        self.assertFalse(
-            handler.process_multimodal_fail(inv1, error, method="fail_llm")  # pylint: disable=unexpected-keyword-arg
-        )
+        with (
+            patch.object(handler, "_ensure_async_worker"),
+            patch.object(handler, "_fallback_stop") as fallback_stop,
+        ):
+            MultimodalProcessingMixin._async_queue = None
+            self.assertTrue(
+                handler.process_multimodal_stop(inv1, method="stop_llm")  # pylint: disable=unexpected-keyword-arg
+            )
+            fallback_stop.assert_called_once()
 
-        # span is None
+        inv1_fail = self._create_invocation_with_multimodal()
+        inv1_fail.context_token = None
+        inv1_fail.span = MagicMock()
+        with (
+            patch.object(handler, "_ensure_async_worker"),
+            patch.object(handler, "_fallback_fail") as fallback_fail,
+        ):
+            MultimodalProcessingMixin._async_queue = None
+            self.assertTrue(
+                handler.process_multimodal_fail(  # pylint: disable=unexpected-keyword-arg
+                    inv1_fail, error, method="fail_llm"
+                )
+            )
+            fallback_fail.assert_called_once()
+
+        # A missing span still fails the lifecycle precondition.
         inv2 = self._create_invocation_with_multimodal()
         inv2.context_token = MagicMock()
         inv2.span = None

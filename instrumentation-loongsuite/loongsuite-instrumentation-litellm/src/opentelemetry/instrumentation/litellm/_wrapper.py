@@ -12,12 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Wrapper functions for LiteLLM completion instrumentation.
-"""
+"""Wrapper functions for LiteLLM completion instrumentation."""
 
-import logging
 import os
+from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, Callable, Optional
 
 from opentelemetry import context
@@ -32,12 +31,28 @@ from opentelemetry.instrumentation.litellm._utils import (
     extract_finish_reasons_from_litellm_response,
     normalize_litellm_completion_kwargs,
 )
+from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.types import Error
-
-logger = logging.getLogger(__name__)
 
 # Environment variable to control instrumentation
 ENABLE_LITELLM_INSTRUMENTOR = "ENABLE_LITELLM_INSTRUMENTOR"
+
+
+@dataclass
+class _CompletionAdviceState:
+    invocation: Any
+    is_stream: bool
+    finalized: bool = False
+    finalize_lock: Any = field(default_factory=Lock, repr=False)
+
+
+def _claim_finalization(state: _CompletionAdviceState) -> bool:
+    """Claim one terminal advice path across concurrent stream consumers."""
+    with state.finalize_lock:
+        if state.finalized:
+            return False
+        state.finalized = True
+        return True
 
 
 def _is_instrumentation_enabled() -> bool:
@@ -46,249 +61,249 @@ def _is_instrumentation_enabled() -> bool:
     return enabled != "false"
 
 
-class CompletionWrapper:
-    """Wrapper for litellm.completion()"""
-
-    def __init__(self, handler, original_func: Callable):
-        self._handler = handler
-        self.original_func = original_func
-
-    def __call__(self, *args, **kwargs):
-        """Wrap litellm.completion()"""
-        # Check if instrumentation is enabled
-        if not _is_instrumentation_enabled():
-            return self.original_func(*args, **kwargs)
-
-        # Check suppression context
-        if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return self.original_func(*args, **kwargs)
-
+@hook_advice("litellm", "prepare")
+def _prepare_advice(
+    handler: Any,
+    original_func: Callable,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> _CompletionAdviceState:
+    """Prepare probe state without owning the application call."""
+    invocation = None
+    added_stream_options = False
+    try:
         request_kwargs = normalize_litellm_completion_kwargs(
-            self.original_func, args, kwargs
+            original_func, args, kwargs
         )
         is_stream = request_kwargs.get("stream", False)
 
-        # For streaming, enable usage tracking if not explicitly disabled
-        # This ensures we get token usage information in the final chunk
         if is_stream and "stream_options" not in request_kwargs:
             kwargs["stream_options"] = {"include_usage": True}
             request_kwargs["stream_options"] = kwargs["stream_options"]
+            added_stream_options = True
 
-        # For streaming, we need special handling
-        if is_stream:
-            # Create invocation object
-            invocation = create_llm_invocation_from_litellm(**request_kwargs)
+        invocation = create_llm_invocation_from_litellm(**request_kwargs)
+        handler.start_llm(invocation)
+        return _CompletionAdviceState(invocation, is_stream)
+    except Exception:
+        if added_stream_options:
+            kwargs.pop("stream_options", None)
+        if invocation is not None:
+            handler.abandon_llm(invocation)
+        raise
 
-            # Start LLM invocation
-            self._handler.start_llm(invocation)
 
-            try:
-                # Call original function
-                response = self.original_func(*args, **kwargs)
+@hook_advice("litellm", "detach_stream_context")
+def _detach_stream_context_advice(
+    handler: Any, state: _CompletionAdviceState
+) -> bool:
+    """Detach in the creation context before stream ownership is transferred."""
+    handler.detach_llm_context(state.invocation)
+    return True
 
-                # Wrap the streaming response
-                # We pass invocation and handler so the callback can fill data and call stop_llm
-                stream_wrapper = StreamWrapper(
-                    stream=response,
-                    span=invocation.span,  # For TTFT tracking
-                    callback=None,
-                    invocation=invocation,
-                )
-                stream_wrapper.callback = lambda span, last_chunk, error: (
-                    self._handle_stream_end_with_handler(
-                        invocation, last_chunk, error, stream_wrapper
-                    )
-                )
-                response = stream_wrapper
 
-                return response
-            except Exception as e:
-                # Fail LLM invocation
-                self._handler.fail_llm(
-                    invocation, Error(message=str(e), type=type(e))
-                )
-                raise
+@hook_advice("litellm", "success")
+def _success_advice(
+    handler: Any,
+    state: _CompletionAdviceState,
+    response: Any,
+) -> None:
+    """Map a non-streaming response and finalize its telemetry."""
+    if not _claim_finalization(state):
+        return
+    try:
+        apply_litellm_llm_response_to_invocation(state.invocation, response)
+        handler.stop_llm(state.invocation)
+    except Exception:
+        handler.abandon_llm(state.invocation)
+        raise
 
-        else:
-            # Create invocation object
-            invocation = create_llm_invocation_from_litellm(**request_kwargs)
 
-            # Start LLM invocation (handler creates and manages span)
-            self._handler.start_llm(invocation)
+@hook_advice("litellm", "error")
+def _error_advice(
+    handler: Any,
+    state: _CompletionAdviceState,
+    error: BaseException,
+) -> None:
+    """Record an application failure without replacing that failure."""
+    if not _claim_finalization(state):
+        return
+    try:
+        handler.fail_llm(
+            state.invocation,
+            Error(message=str(error), type=type(error)),
+        )
+    except Exception:
+        handler.abandon_llm(state.invocation)
+        raise
 
-            try:
-                # Call original function
-                response = self.original_func(*args, **kwargs)
 
-                apply_litellm_llm_response_to_invocation(invocation, response)
+@hook_advice("litellm", "stream_success")
+def _stream_success_advice(
+    handler: Any,
+    state: _CompletionAdviceState,
+    last_chunk: Optional[Any],
+    stream_wrapper: Any,
+) -> None:
+    """Map accumulated stream data and finalize its telemetry."""
+    if not _claim_finalization(state):
+        return
+    try:
+        output_messages = stream_wrapper.get_output_messages()
+        if output_messages:
+            state.invocation.output_messages = output_messages
 
-                # End LLM invocation successfully (handler ends span and records metrics)
-                self._handler.stop_llm(invocation)
+        if last_chunk:
+            apply_litellm_llm_response_to_invocation(
+                state.invocation,
+                last_chunk,
+                include_output_messages=False,
+            )
 
-                return response
+        finish_reasons = stream_wrapper.finish_reasons()
+        if not finish_reasons:
+            finish_reasons = extract_finish_reasons_from_litellm_response(
+                last_chunk
+            )
+        if finish_reasons:
+            state.invocation.finish_reasons = finish_reasons
 
-            except Exception as e:
-                # Fail LLM invocation (handler marks span as error)
-                self._handler.fail_llm(
-                    invocation, Error(message=str(e), type=type(e))
-                )
-                raise
+        handler.stop_llm(state.invocation)
+    except Exception:
+        handler.abandon_llm(state.invocation)
+        raise
 
-    def _handle_stream_end_with_handler(
-        self,
-        invocation,
+
+@hook_advice("litellm", "stream_wrap")
+def _wrap_stream_advice(
+    handler: Any,
+    state: _CompletionAdviceState,
+    response: Any,
+    *,
+    asynchronous: bool,
+) -> Any:
+    """Wrap a business stream while keeping iteration outside advice."""
+    wrapper_type = AsyncStreamWrapper if asynchronous else StreamWrapper
+    stream_wrapper = wrapper_type(
+        stream=response,
+        span=state.invocation.span,
+        callback=None,
+        invocation=state.invocation,
+    )
+
+    def finalize(
+        _span: Any,
         last_chunk: Optional[Any],
-        error: Optional[Exception],
-        stream_wrapper: Optional[Any] = None,
-    ):
-        """Handle the end of a streaming response using Handler pattern."""
+        error: Optional[BaseException],
+    ) -> None:
+        if error is not None:
+            _error_advice(handler, state, error)
+        else:
+            _stream_success_advice(handler, state, last_chunk, stream_wrapper)
+
+    stream_wrapper.callback = finalize
+    return stream_wrapper
+
+
+@hook_advice("litellm", "abandon")
+def _abandon_advice(handler: Any, state: _CompletionAdviceState) -> None:
+    """End telemetry when a business result cannot be instrumented."""
+    if not _claim_finalization(state):
+        return
+    handler.abandon_llm(state.invocation)
+
+
+class CompletionWrapper:
+    """Wrapper for ``litellm.completion()``."""
+
+    def __init__(self, handler: Any, original_func: Callable):
+        self._handler = handler
+        self.original_func = original_func
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if not _is_instrumentation_enabled() or context.get_value(
+            _SUPPRESS_INSTRUMENTATION_KEY
+        ):
+            return self.original_func(*args, **kwargs)
+
+        state = _prepare_advice(
+            self._handler, self.original_func, args, kwargs
+        )
 
         try:
-            if error:
-                # Fail LLM invocation
-                self._handler.fail_llm(
-                    invocation, Error(message=str(error), type=type(error))
-                )
-                return
+            response = self.original_func(*args, **kwargs)
+        except BaseException as error:
+            if state is not None:
+                _error_advice(self._handler, state, error)
+            raise
 
-            if stream_wrapper and hasattr(
-                stream_wrapper, "get_output_messages"
-            ):
-                output_messages = stream_wrapper.get_output_messages()
-                if output_messages:
-                    invocation.output_messages = output_messages
+        if state is None:
+            return response
 
-            if last_chunk:
-                apply_litellm_llm_response_to_invocation(
-                    invocation,
-                    last_chunk,
-                    include_output_messages=False,
-                )
+        if not state.is_stream:
+            _success_advice(self._handler, state, response)
+            return response
 
-            if stream_wrapper and hasattr(stream_wrapper, "finish_reasons"):
-                finish_reasons = stream_wrapper.finish_reasons()
-            else:
-                finish_reasons = extract_finish_reasons_from_litellm_response(
-                    last_chunk
-                )
-            if finish_reasons:
-                invocation.finish_reasons = finish_reasons
+        if not _detach_stream_context_advice(self._handler, state):
+            _abandon_advice(self._handler, state)
+            return response
 
-            # End LLM invocation successfully
-            self._handler.stop_llm(invocation)
+        stream_wrapper = _wrap_stream_advice(
+            self._handler,
+            state,
+            response,
+            asynchronous=False,
+        )
+        if stream_wrapper is None:
+            _abandon_advice(self._handler, state)
+            return response
 
-        except Exception as e:
-            logger.debug(f"Error handling stream end with handler: {e}")
-            # Try to fail gracefully
-            try:
-                self._handler.fail_llm(
-                    invocation, Error(message=str(e), type=type(e))
-                )
-            except Exception as handler_error:
-                # Swallow exceptions from telemetry failure reporting, but log them for diagnostics.
-                logger.debug(
-                    "Error while reporting LLM failure in _handle_stream_end_with_handler: %s",
-                    handler_error,
-                )
+        return stream_wrapper
 
 
 class AsyncCompletionWrapper:
-    """Wrapper for litellm.acompletion()"""
+    """Wrapper for ``litellm.acompletion()``."""
 
-    def __init__(self, handler, original_func: Callable):
+    def __init__(self, handler: Any, original_func: Callable):
         self._handler = handler
         self.original_func = original_func
 
-    async def __call__(self, *args, **kwargs):
-        """Wrap litellm.acompletion()"""
-        # Check if instrumentation is enabled
-        if not _is_instrumentation_enabled():
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if not _is_instrumentation_enabled() or context.get_value(
+            _SUPPRESS_INSTRUMENTATION_KEY
+        ):
             return await self.original_func(*args, **kwargs)
 
-        # Check suppression context
-        if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
-            return await self.original_func(*args, **kwargs)
-
-        request_kwargs = normalize_litellm_completion_kwargs(
-            self.original_func, args, kwargs
+        state = _prepare_advice(
+            self._handler, self.original_func, args, kwargs
         )
-        is_stream = request_kwargs.get("stream", False)
 
-        # For streaming, enable usage tracking if not explicitly disabled
-        if is_stream and "stream_options" not in request_kwargs:
-            kwargs["stream_options"] = {"include_usage": True}
-            request_kwargs["stream_options"] = kwargs["stream_options"]
+        try:
+            response = await self.original_func(*args, **kwargs)
+        except BaseException as error:
+            if state is not None:
+                _error_advice(self._handler, state, error)
+            raise
 
-        # For streaming, we need special handling
-        if is_stream:
-            # Create invocation object
-            invocation = create_llm_invocation_from_litellm(**request_kwargs)
+        if state is None:
+            return response
 
-            # Start LLM invocation
-            self._handler.start_llm(invocation)
+        if not state.is_stream:
+            _success_advice(self._handler, state, response)
+            return response
 
-            try:
-                # Call original function
-                response = await self.original_func(*args, **kwargs)
+        if not _detach_stream_context_advice(self._handler, state):
+            _abandon_advice(self._handler, state)
+            return response
 
-                # Wrap the async streaming response
-                stream_wrapper = AsyncStreamWrapper(
-                    stream=response,
-                    span=invocation.span,  # For TTFT tracking
-                    callback=None,
-                    invocation=invocation,
-                )
-                stream_wrapper.callback = lambda span, last_chunk, error: (
-                    self._handle_stream_end_with_handler(
-                        invocation, last_chunk, error, stream_wrapper
-                    )
-                )
-                response = stream_wrapper
-
-                return response
-            except Exception as e:
-                # Fail LLM invocation
-                self._handler.fail_llm(
-                    invocation, Error(message=str(e), type=type(e))
-                )
-                raise
-
-        else:
-            # Non-streaming: use Handler pattern
-            # Create invocation object
-            invocation = create_llm_invocation_from_litellm(**request_kwargs)
-
-            # Start LLM invocation
-            self._handler.start_llm(invocation)
-
-            try:
-                # Call original function
-                response = await self.original_func(*args, **kwargs)
-
-                apply_litellm_llm_response_to_invocation(invocation, response)
-
-                # End LLM invocation successfully
-                self._handler.stop_llm(invocation)
-
-                return response
-
-            except Exception as e:
-                # Fail LLM invocation
-                self._handler.fail_llm(
-                    invocation, Error(message=str(e), type=type(e))
-                )
-                raise
-
-    def _handle_stream_end_with_handler(
-        self,
-        invocation,
-        last_chunk: Optional[Any],
-        error: Optional[Exception],
-        stream_wrapper: Optional[Any] = None,
-    ):
-        """Handle the end of an async streaming response using Handler pattern."""
-        # Reuse sync logic
-        completion_wrapper = CompletionWrapper(self._handler, None)
-        completion_wrapper._handle_stream_end_with_handler(
-            invocation, last_chunk, error, stream_wrapper
+        stream_wrapper = _wrap_stream_advice(
+            self._handler,
+            state,
+            response,
+            asynchronous=True,
         )
+        if stream_wrapper is None:
+            _abandon_advice(self._handler, state)
+            return response
+
+        return stream_wrapper

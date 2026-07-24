@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Route streamed chunk accumulation and finalization callbacks through shared
   fail-open advice while keeping stream iteration and lifecycle handling in the
   LiteLLM wrapper.
+- Isolate prepare, response mapping, success, and error advice from application
+  completion calls, and detach streaming context before cross-task consumption.
 
 ## Version 0.7.0 (2026-07-03)
 

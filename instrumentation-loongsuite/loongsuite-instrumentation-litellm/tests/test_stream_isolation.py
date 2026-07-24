@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import threading
 
 import pytest
 
@@ -110,6 +111,29 @@ def test_stream_callback_failure_does_not_escape_or_repeat():
     assert calls == [True]
 
 
+def test_stream_concurrent_finalize_invokes_callback_once():
+    calls = []
+    stream = StreamWrapper(
+        stream=iter([]),
+        span=None,
+        callback=lambda *_args: calls.append(True),
+    )
+    barrier = threading.Barrier(5)
+
+    def finalize():
+        barrier.wait()
+        stream.close()
+
+    threads = [threading.Thread(target=finalize) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    assert calls == [True]
+
+
 def test_stream_close_base_exception_still_finalizes():
     calls = []
     expected = KeyboardInterrupt("business interruption")
@@ -163,6 +187,36 @@ async def test_async_stream_chunk_advice_failure_preserves_chunk(monkeypatch):
     assert await iterator.__anext__() is expected
     await iterator.aclose()
     assert completed == [True]
+
+
+@pytest.mark.asyncio
+async def test_async_stream_generator_exit_finalizes_as_success():
+    completed = []
+    source_closed = False
+    expected = object()
+
+    async def source():
+        nonlocal source_closed
+        try:
+            yield expected
+        finally:
+            await asyncio.sleep(0)
+            source_closed = True
+
+    stream = AsyncStreamWrapper(
+        stream=source(),
+        span=None,
+        callback=lambda *_args: completed.append(_args),
+    )
+
+    iterator = stream.__aiter__()
+    assert await iterator.__anext__() is expected
+    await iterator.aclose()
+
+    assert len(completed) == 1
+    assert completed[0][2] is None
+    assert stream._finalized is True
+    assert source_closed is True
 
 
 @pytest.mark.asyncio

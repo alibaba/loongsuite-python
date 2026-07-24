@@ -226,6 +226,7 @@ class GenAIInvocation:
     context_token: ContextToken | None = None
     span: Span | None = None
     attributes: dict[str, Any] = field(default_factory=_new_str_any_dict)
+    _lifecycle_finalized: bool = field(default=False, init=False, repr=False)
 
 
 @dataclass

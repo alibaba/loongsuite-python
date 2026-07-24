@@ -181,14 +181,16 @@ class MultimodalProcessingMixin:
         Returns:
             bool: Whether handled (True = async processed, False = no multimodal)
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None:
             return False
 
         if not self._should_async_process(invocation):
             return False
 
         # 1. Detach context immediately (let user code continue)
-        _safe_detach(invocation.context_token)
+        token = invocation.context_token
+        invocation.context_token = None
+        _safe_detach(token)
 
         # 2. Ensure worker is started
         self._ensure_async_worker()
@@ -230,13 +232,15 @@ class MultimodalProcessingMixin:
         Returns:
             bool: Whether handled
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None:
             return False
 
         if not self._should_async_process(invocation):
             return False
 
-        _safe_detach(invocation.context_token)
+        token = invocation.context_token
+        invocation.context_token = None
+        _safe_detach(token)
         self._ensure_async_worker()
 
         async_queue = self.__class__._async_queue
