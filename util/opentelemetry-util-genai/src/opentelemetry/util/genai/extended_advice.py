@@ -29,25 +29,6 @@ _logger = logging.getLogger(__name__)
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
-def _log_advice_failure(
-    instrumentation_name: str,
-    advice_method: str,
-    exception: Exception,
-) -> None:
-    """Report a suppressed instrumentation failure without leaking logging errors."""
-    try:
-        _logger.debug(
-            "LoongSuite instrumentation %s advice %s failed: %s",
-            instrumentation_name,
-            advice_method,
-            exception,
-            exc_info=True,
-        )
-    except Exception:  # pylint: disable=broad-exception-caught
-        # Custom logging handlers are external callbacks and may also fail.
-        pass
-
-
 def hook_advice(
     instrumentation_name: str = "unknown",
     advice_method: str = "unknown",
@@ -82,10 +63,12 @@ def hook_advice(
             try:
                 return func(*args, **kwargs)
             except Exception as exception:  # pylint: disable=broad-exception-caught
-                _log_advice_failure(
+                _logger.debug(
+                    "LoongSuite instrumentation %s advice %s failed: %s",
                     instrumentation_name,
                     advice_method,
                     exception,
+                    exc_info=True,
                 )
                 if throw_exception:
                     raise
@@ -127,10 +110,12 @@ def async_hook_advice(
             try:
                 return await func(*args, **kwargs)
             except Exception as exception:  # pylint: disable=broad-exception-caught
-                _log_advice_failure(
+                _logger.debug(
+                    "LoongSuite instrumentation %s advice %s failed: %s",
                     instrumentation_name,
                     advice_method,
                     exception,
+                    exc_info=True,
                 )
                 if throw_exception:
                     raise

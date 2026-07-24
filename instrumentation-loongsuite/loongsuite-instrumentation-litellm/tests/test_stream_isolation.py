@@ -21,7 +21,6 @@ from opentelemetry.instrumentation.litellm._stream_wrapper import (
     AsyncStreamWrapper,
     StreamWrapper,
 )
-from opentelemetry.util.genai import extended_advice
 
 
 def test_stream_chunk_advice_failure_preserves_chunk(monkeypatch):
@@ -44,32 +43,6 @@ def test_stream_chunk_advice_failure_preserves_chunk(monkeypatch):
     stream.close()
     assert list(stream) == []
     assert completed == [True]
-
-
-def test_stream_chunk_logging_failure_also_preserves_chunk(monkeypatch):
-    expected = object()
-    stream = StreamWrapper(
-        stream=iter([expected]),
-        span=None,
-        callback=lambda *_args: None,
-    )
-    monkeypatch.setattr(
-        stream._accumulator,
-        "record_chunk",
-        lambda _chunk: (_ for _ in ()).throw(
-            RuntimeError("instrumentation boom")
-        ),
-    )
-    monkeypatch.setattr(
-        extended_advice._logger,
-        "debug",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            RuntimeError("logger boom")
-        ),
-    )
-
-    assert next(stream) is expected
-    stream.close()
 
 
 def test_stream_preserves_business_exception_identity():

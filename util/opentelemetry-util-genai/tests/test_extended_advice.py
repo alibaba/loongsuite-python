@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import asyncio
-from unittest.mock import patch
 
 import pytest
 
@@ -52,18 +51,6 @@ def test_hook_advice_strict_mode_preserves_exception():
     with pytest.raises(RuntimeError) as caught:
         advice()
     assert caught.value is expected
-
-
-def test_hook_advice_failure_logging_is_also_isolated():
-    @hook_advice("test", "failure")
-    def advice():
-        raise RuntimeError("instrumentation boom")
-
-    with patch(
-        "opentelemetry.util.genai.extended_advice._logger.debug",
-        side_effect=RuntimeError("logger boom"),
-    ):
-        assert advice() is None
 
 
 def test_hook_advice_rejects_generator_function():
