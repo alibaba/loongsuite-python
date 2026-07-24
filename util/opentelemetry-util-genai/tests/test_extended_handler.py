@@ -57,10 +57,6 @@ from opentelemetry.util.genai._multimodal_processing import (
 from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
     update_multimodal_runtime_config,
 )
-
-from ._multimodal_upload.multimodal_test_helpers import (
-    reset_multimodal_runtime_state_for_test,
-)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
@@ -109,6 +105,10 @@ from opentelemetry.util.genai.types import (
     OutputMessage,
     Text,
     Uri,
+)
+
+from ._multimodal_upload.multimodal_test_helpers import (
+    reset_multimodal_runtime_state_for_test,
 )
 
 _AGENT_NAME_BAGGAGE_KEY = "gen_ai.agent.name"
@@ -1863,12 +1863,14 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         async_inv.span = mock_span
         async_inv.input_messages = inv.input_messages
 
-        with patch.object(
-            h1, "_upload_and_set_metadata"
-        ) as mock_upload, patch(
-            "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
-        ), patch(
-            "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+        with (
+            patch.object(h1, "_upload_and_set_metadata") as mock_upload,
+            patch(
+                "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
+            ),
+            patch(
+                "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+            ),
         ):
             h1._async_stop_llm(
                 _MultimodalAsyncTask(
@@ -1879,12 +1881,14 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
             mock_span.end.assert_called_once()
 
         mock_span.reset_mock()
-        with patch.object(
-            h2, "_upload_and_set_metadata"
-        ) as mock_upload2, patch(
-            "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
-        ), patch(
-            "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+        with (
+            patch.object(h2, "_upload_and_set_metadata") as mock_upload2,
+            patch(
+                "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
+            ),
+            patch(
+                "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+            ),
         ):
             h2._async_stop_llm(
                 _MultimodalAsyncTask(

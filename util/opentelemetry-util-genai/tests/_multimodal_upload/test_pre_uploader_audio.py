@@ -235,15 +235,19 @@ class TestAudioFormatDetection:
         caplog,
     ):
         """Missing optional audio libs should only log the actual conversion skip."""
-        with patch(
-            "opentelemetry.util.genai._multimodal_upload.pre_uploader._audio_libs_available",
-            False,
-        ), patch(
-            "opentelemetry.util.genai._multimodal_upload.pre_uploader.np",
-            None,
-        ), patch(
-            "opentelemetry.util.genai._multimodal_upload.pre_uploader.sf",
-            None,
+        with (
+            patch(
+                "opentelemetry.util.genai._multimodal_upload.pre_uploader._audio_libs_available",
+                False,
+            ),
+            patch(
+                "opentelemetry.util.genai._multimodal_upload.pre_uploader.np",
+                None,
+            ),
+            patch(
+                "opentelemetry.util.genai._multimodal_upload.pre_uploader.sf",
+                None,
+            ),
         ):
             pre_uploader = MultimodalPreUploader(base_path="/tmp/test_upload")
             part = Blob(

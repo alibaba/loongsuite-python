@@ -361,7 +361,7 @@ class MultimodalProcessingMixin:
         if not self._multimodal_enabled:
             return False
 
-        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
             get_multimodal_config_snapshot,
         )
 
@@ -405,7 +405,7 @@ class MultimodalProcessingMixin:
     @staticmethod
     def _quick_has_multimodal(invocation: _MultimodalInvocation) -> bool:
         """Quick detection of multimodal data (O(n), no network)"""
-        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
             get_multimodal_config_snapshot,
         )
 
@@ -766,7 +766,7 @@ class MultimodalProcessingMixin:
             from opentelemetry.util.genai._multimodal_upload import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
                 get_or_rebuild_uploader_pair,
             )
-            from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+            from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
                 get_multimodal_config_snapshot,
             )
 
@@ -783,7 +783,7 @@ class MultimodalProcessingMixin:
         pre_uploader: "PreUploader",
     ) -> None:
         """Upload multimodal data and set metadata attributes on span"""
-        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
             get_multimodal_config_snapshot,
         )
 

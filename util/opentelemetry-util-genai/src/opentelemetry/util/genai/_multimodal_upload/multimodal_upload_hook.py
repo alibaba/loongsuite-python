@@ -121,7 +121,9 @@ def _schedule_retired_pair_shutdown(
             if pre_uploader is not None:
                 pre_uploader.shutdown()
         except Exception:  # pylint: disable=broad-except
-            _logger.debug("Failed to shutdown retired pre-uploader", exc_info=True)
+            _logger.debug(
+                "Failed to shutdown retired pre-uploader", exc_info=True
+            )
         try:
             if uploader is not None:
                 uploader.shutdown()

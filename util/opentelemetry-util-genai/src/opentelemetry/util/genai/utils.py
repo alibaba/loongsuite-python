@@ -136,7 +136,7 @@ def _parse_env_bool(value: Optional[str], default: bool) -> bool:
 
 
 def _get_multimodal_snapshot():
-    from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+    from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
         get_multimodal_config_snapshot,
     )
 

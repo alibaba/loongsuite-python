@@ -68,7 +68,8 @@ class TestMultimodalRuntimeConfig(unittest.TestCase):
             snapshot.uploader_hook_name, get_default_uploader_hook_name()
         )
         self.assertEqual(
-            snapshot.pre_uploader_hook_name, get_default_pre_uploader_hook_name()
+            snapshot.pre_uploader_hook_name,
+            get_default_pre_uploader_hook_name(),
         )
         self.assertIsNone(snapshot.effective_storage_base_path)
         self.assertFalse(snapshot.process_input)
@@ -131,9 +132,13 @@ class TestMultimodalRuntimeConfig(unittest.TestCase):
             uploader_hook_name="fs",
             pre_uploader_hook_name="fs",
         )
-        self.assertGreater(after.uploader_generation, before.uploader_generation)
+        self.assertGreater(
+            after.uploader_generation, before.uploader_generation
+        )
         self.assertEqual(after.storage_base_path, "oss://bucket/prefix")
-        self.assertEqual(after.effective_storage_base_path, "oss://bucket/prefix")
+        self.assertEqual(
+            after.effective_storage_base_path, "oss://bucket/prefix"
+        )
 
     def test_sls_project_change_bumps_uploader_generation(self) -> None:
         before = get_multimodal_config_snapshot()
@@ -143,7 +148,9 @@ class TestMultimodalRuntimeConfig(unittest.TestCase):
             sls_project="project-a",
             sls_logstore="logstore-a",
         )
-        self.assertGreater(after.uploader_generation, before.uploader_generation)
+        self.assertGreater(
+            after.uploader_generation, before.uploader_generation
+        )
         self.assertEqual(after.uploader_hook_name, "arms")
         self.assertEqual(
             after.effective_storage_base_path,
@@ -159,7 +166,9 @@ class TestMultimodalRuntimeConfig(unittest.TestCase):
         )
         before = get_multimodal_config_snapshot()
         after = update_multimodal_runtime_config(sls_logstore="l2")
-        self.assertGreater(after.uploader_generation, before.uploader_generation)
+        self.assertGreater(
+            after.uploader_generation, before.uploader_generation
+        )
         self.assertIn("sls_logstore", UPLOADER_GENERATION_FIELDS)
         self.assertEqual(after.effective_storage_base_path, "sls://p/l2")
 
@@ -185,7 +194,9 @@ class TestMultimodalRuntimeConfig(unittest.TestCase):
 
     def test_no_op_update_keeps_snapshot(self) -> None:
         before = get_multimodal_config_snapshot()
-        after = update_multimodal_runtime_config(upload_mode=before.upload_mode)
+        after = update_multimodal_runtime_config(
+            upload_mode=before.upload_mode
+        )
         self.assertEqual(after, before)
 
     def test_blank_sls_project_is_coalesced_to_none(self) -> None:

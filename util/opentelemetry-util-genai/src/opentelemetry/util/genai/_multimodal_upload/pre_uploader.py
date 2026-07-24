@@ -66,8 +66,8 @@ from opentelemetry.util.genai.utils import (  # pylint: disable=no-name-in-modul
 
 # Try importing audio processing libraries (optional dependencies)
 try:
-    import numpy as np
-    import soundfile as sf
+    import numpy as np  # pyright: ignore[reportMissingImports]
+    import soundfile as sf  # pyright: ignore[reportMissingImports]
 
     _audio_libs_available = True
 except ImportError:
@@ -591,7 +591,7 @@ class MultimodalPreUploader(PreUploader):
 
         try:
             # Convert PCM16 byte data to numpy int16 array
-            audio_np = np.frombuffer(pcm_data, dtype=np.int16)  # pyright: ignore[reportUnknownMemberType]
+            audio_np = np.frombuffer(pcm_data, dtype=np.int16)  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]
 
             # Write WAV data to memory buffer
             buffer = io.BytesIO()
@@ -1190,7 +1190,7 @@ class MultimodalPreUploader(PreUploader):
 
     @staticmethod
     def _read_applied_strategy_version() -> int:
-        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
             get_multimodal_config_snapshot,
         )
 
@@ -1198,20 +1198,13 @@ class MultimodalPreUploader(PreUploader):
 
     def _sync_strategy_from_snapshot(self, config_snapshot: Any) -> bool:
         """Apply strategy fields when snapshot strategy_version changes."""
-        if (
-            config_snapshot.strategy_version
-            != self._applied_strategy_version
-        ):
+        if config_snapshot.strategy_version != self._applied_strategy_version:
             self._process_input = config_snapshot.process_input
             self._process_output = config_snapshot.process_output
             self._download_enabled = config_snapshot.download_enabled
             self._local_file_enabled = config_snapshot.local_file_enabled
-            self._allowed_root_paths = list(
-                config_snapshot.allowed_root_paths
-            )
-            self._applied_strategy_version = (
-                config_snapshot.strategy_version
-            )
+            self._allowed_root_paths = list(config_snapshot.allowed_root_paths)
+            self._applied_strategy_version = config_snapshot.strategy_version
         return self._process_input or self._process_output
 
     def pre_upload(  # pylint: disable=too-many-branches
@@ -1241,7 +1234,7 @@ class MultimodalPreUploader(PreUploader):
         uploads: List[PreUploadItem] = []
 
         if config_snapshot is None:
-            from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+            from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
                 get_multimodal_config_snapshot,
             )
 
@@ -1266,7 +1259,6 @@ class MultimodalPreUploader(PreUploader):
         output_messages: Optional[List[Any]],
         uploads: List[PreUploadItem],
     ) -> List[PreUploadItem]:
-
         trace_id: Optional[str] = None
         span_id: Optional[str] = None
         try:
@@ -1330,13 +1322,15 @@ def fs_pre_uploader_hook(
 ) -> Optional[PreUploader]:
     """Create file-system pre-uploader from runtime snapshot."""
     if snapshot is None:
-        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
             get_multimodal_config_snapshot,
         )
 
         snapshot = get_multimodal_config_snapshot()
 
-    base_path = snapshot.effective_storage_base_path or snapshot.storage_base_path
+    base_path = (
+        snapshot.effective_storage_base_path or snapshot.storage_base_path
+    )
     if not base_path:
         _logger.warning(
             "%s is required but not set, multimodal pre-uploader disabled",

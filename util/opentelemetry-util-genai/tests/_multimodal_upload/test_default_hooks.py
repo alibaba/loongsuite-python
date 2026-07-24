@@ -24,10 +24,11 @@ from opentelemetry.util.genai._multimodal_upload.pre_uploader import (  # pylint
     MultimodalPreUploader,
     fs_pre_uploader_hook,
 )
-from .multimodal_test_helpers import reset_multimodal_runtime_state_for_test
 from opentelemetry.util.genai.extended_environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH,
 )
+
+from .multimodal_test_helpers import reset_multimodal_runtime_state_for_test
 
 
 class TestDefaultHooks(TestCase):

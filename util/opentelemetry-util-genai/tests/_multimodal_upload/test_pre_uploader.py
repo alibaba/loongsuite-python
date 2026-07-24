@@ -1153,7 +1153,8 @@ class TestPreUploadLocalFile:
         relative_path = test_file.name
 
         # Aliyun Python Agent Extension: for compatibility with Python 3.8
-        with patch.dict(
+        with (
+            patch.dict(
                 os.environ,
                 {
                     "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED": "true",
@@ -1161,8 +1162,9 @@ class TestPreUploadLocalFile:
                         test_dir
                     ),
                 },
-            ), \
-            patch("os.getcwd", return_value=str(test_dir)):
+            ),
+            patch("os.getcwd", return_value=str(test_dir)),
+        ):
             reset_multimodal_runtime_state_for_test()
             pre_uploader = pre_uploader_factory()
             # Test with simple filename (relative path)

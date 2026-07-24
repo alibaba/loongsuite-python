@@ -170,7 +170,9 @@ class TestMultimodalUploadHook(TestCase):
 
         def fake_entry_points(group: str) -> list[FakeEntryPoint]:
             if group == "opentelemetry_genai_multimodal_uploader":
-                return [FakeEntryPoint(default_uploader, load_uploader_factory)]
+                return [
+                    FakeEntryPoint(default_uploader, load_uploader_factory)
+                ]
             if group == "opentelemetry_genai_multimodal_pre_uploader":
                 return [
                     FakeEntryPoint(
@@ -370,14 +372,17 @@ class TestUploaderPairHotReload(TestCase):
             )
             return FakeUploader(), FakePreUploader()
 
-        with patch.object(
-            module,
-            "_load_pair_from_snapshot",
-            side_effect=load_pair_and_bump_generation,
-        ), patch.object(
-            module,
-            "_schedule_retired_pair_shutdown",
-            side_effect=track_shutdown,
+        with (
+            patch.object(
+                module,
+                "_load_pair_from_snapshot",
+                side_effect=load_pair_and_bump_generation,
+            ),
+            patch.object(
+                module,
+                "_schedule_retired_pair_shutdown",
+                side_effect=track_shutdown,
+            ),
         ):
             uploader, pre_uploader = module.get_or_rebuild_uploader_pair()
 

@@ -46,7 +46,9 @@ _APSARA_SLS_PROJECT_ENV = "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT"
 _APSARA_SLS_LOGSTORE_ENV = "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_LOGSTORE"
 _APSARA_SLS_ENDPOINT_ENV = "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_ENDPOINT"
 _APSARA_SLS_AUTH_TYPE_ENV = "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_AUTH_TYPE"
-_APSARA_SLS_ACCESS_KEY_ID_ENV = "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_ACCESS_KEY_ID"
+_APSARA_SLS_ACCESS_KEY_ID_ENV = (
+    "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_ACCESS_KEY_ID"
+)
 _APSARA_SLS_ACCESS_KEY_SECRET_ENV = (
     "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_ACCESS_KEY_SECRET"
 )
@@ -145,7 +147,9 @@ def _normalize_upload_mode(value: Optional[str]) -> str:
         return "none"
     mode = str(value).strip().lower()
     if mode not in _VALID_UPLOAD_MODES:
-        _logger.warning("Invalid multimodal upload_mode %r, fallback to none", value)
+        _logger.warning(
+            "Invalid multimodal upload_mode %r, fallback to none", value
+        )
         return "none"
     return mode
 
@@ -204,18 +208,24 @@ def _snapshot_from_env(*, version: int = 0) -> MultimodalConfigSnapshot:
     storage_base_path = os.getenv(
         OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH
     )
-    uploader_hook_name = normalize_multimodal_hook_name(
-        os.getenv(
-            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER,
-            DEFAULT_MULTIMODAL_UPLOADER_HOOK,
+    uploader_hook_name = (
+        normalize_multimodal_hook_name(
+            os.getenv(
+                OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER,
+                DEFAULT_MULTIMODAL_UPLOADER_HOOK,
+            )
         )
-    ) or DEFAULT_MULTIMODAL_UPLOADER_HOOK
-    pre_uploader_hook_name = normalize_multimodal_hook_name(
-        os.getenv(
-            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER,
-            DEFAULT_MULTIMODAL_PRE_UPLOADER_HOOK,
+        or DEFAULT_MULTIMODAL_UPLOADER_HOOK
+    )
+    pre_uploader_hook_name = (
+        normalize_multimodal_hook_name(
+            os.getenv(
+                OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER,
+                DEFAULT_MULTIMODAL_PRE_UPLOADER_HOOK,
+            )
         )
-    ) or DEFAULT_MULTIMODAL_PRE_UPLOADER_HOOK
+        or DEFAULT_MULTIMODAL_PRE_UPLOADER_HOOK
+    )
 
     return MultimodalConfigSnapshot(
         upload_mode=upload_mode,
@@ -373,5 +383,7 @@ def get_multimodal_config_snapshot() -> MultimodalConfigSnapshot:
     return _runtime_config.get_snapshot()
 
 
-def update_multimodal_runtime_config(**fields: Any) -> MultimodalConfigSnapshot:
+def update_multimodal_runtime_config(
+    **fields: Any,
+) -> MultimodalConfigSnapshot:
     return _runtime_config.update(**fields)
