@@ -232,7 +232,6 @@ class StreamWrapper:
         self.chunk_count = 0
         self._finalized = False
         self._finalize_lock = Lock()
-        self._stream_closed = False
 
     def __iter__(self):
         return self
@@ -298,10 +297,6 @@ class StreamWrapper:
             pass
 
     def _close_stream(self) -> None:
-        if self._stream_closed:
-            return
-
-        self._stream_closed = True
         close = getattr(self.stream, "close", None)
         if not callable(close):
             return

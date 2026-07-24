@@ -19,7 +19,6 @@ iteration belong outside the decorated function so application exceptions are
 never mistaken for instrumentation failures.
 """
 
-import inspect
 import logging
 from functools import wraps
 from typing import Any, Callable, TypeVar, cast
@@ -39,25 +38,11 @@ def hook_advice(
     Suppressed failures return ``None``, so callers must not depend on advice
     return values unless ``throw_exception`` is enabled.
 
-    Generator functions are rejected because their bodies execute during later
-    iteration, after this decorator has returned the generator object. Stream
-    iteration must instead be isolated by the owning instrumentation wrapper.
+    Do not apply this decorator to generator functions: their bodies execute
+    during later iteration, which must be isolated by the owning stream wrapper.
     """
 
     def decorator(func: _F) -> _F:
-        if inspect.isgeneratorfunction(func) or inspect.isasyncgenfunction(
-            func
-        ):
-            raise TypeError(
-                "hook_advice cannot decorate generator functions; "
-                "isolate iteration in the instrumentation stream wrapper"
-            )
-        if inspect.iscoroutinefunction(func):
-            raise TypeError(
-                "hook_advice cannot decorate coroutine functions; "
-                "use async_hook_advice"
-            )
-
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
@@ -89,22 +74,11 @@ def async_hook_advice(
     Suppressed failures return ``None``, so callers must not depend on advice
     return values unless ``throw_exception`` is enabled.
 
-    Async generators are rejected because their bodies execute during later
-    iteration. The owning instrumentation wrapper must isolate that lifecycle.
+    Do not apply this decorator to async generator functions: their bodies
+    execute during later iteration, which the owning stream wrapper must isolate.
     """
 
     def decorator(func: _F) -> _F:
-        if inspect.isasyncgenfunction(func):
-            raise TypeError(
-                "async_hook_advice cannot decorate async generator functions; "
-                "isolate iteration in the instrumentation stream wrapper"
-            )
-        if not inspect.iscoroutinefunction(func):
-            raise TypeError(
-                "async_hook_advice requires a coroutine function; "
-                "use hook_advice for synchronous advice"
-            )
-
         @wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:

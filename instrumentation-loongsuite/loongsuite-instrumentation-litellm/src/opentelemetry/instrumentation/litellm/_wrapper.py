@@ -15,8 +15,7 @@
 """Wrapper functions for LiteLLM completion instrumentation."""
 
 import os
-from dataclasses import dataclass, field
-from threading import Lock
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from opentelemetry import context
@@ -42,17 +41,6 @@ ENABLE_LITELLM_INSTRUMENTOR = "ENABLE_LITELLM_INSTRUMENTOR"
 class _CompletionAdviceState:
     invocation: Any
     is_stream: bool
-    finalized: bool = False
-    finalize_lock: Any = field(default_factory=Lock, repr=False)
-
-
-def _claim_finalization(state: _CompletionAdviceState) -> bool:
-    """Claim one terminal advice path across concurrent stream consumers."""
-    with state.finalize_lock:
-        if state.finalized:
-            return False
-        state.finalized = True
-        return True
 
 
 def _is_instrumentation_enabled() -> bool:
@@ -109,8 +97,6 @@ def _success_advice(
     response: Any,
 ) -> None:
     """Map a non-streaming response and finalize its telemetry."""
-    if not _claim_finalization(state):
-        return
     try:
         apply_litellm_llm_response_to_invocation(state.invocation, response)
         handler.stop_llm(state.invocation)
@@ -126,8 +112,6 @@ def _error_advice(
     error: BaseException,
 ) -> None:
     """Record an application failure without replacing that failure."""
-    if not _claim_finalization(state):
-        return
     try:
         handler.fail_llm(
             state.invocation,
@@ -146,8 +130,6 @@ def _stream_success_advice(
     stream_wrapper: Any,
 ) -> None:
     """Map accumulated stream data and finalize its telemetry."""
-    if not _claim_finalization(state):
-        return
     try:
         output_messages = stream_wrapper.get_output_messages()
         if output_messages:
@@ -208,8 +190,6 @@ def _wrap_stream_advice(
 @hook_advice("litellm", "abandon")
 def _abandon_advice(handler: Any, state: _CompletionAdviceState) -> None:
     """End telemetry when a business result cannot be instrumented."""
-    if not _claim_finalization(state):
-        return
     handler.abandon_llm(state.invocation)
 
 

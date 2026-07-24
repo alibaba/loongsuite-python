@@ -53,22 +53,6 @@ def test_hook_advice_strict_mode_preserves_exception():
     assert caught.value is expected
 
 
-def test_hook_advice_rejects_generator_function():
-    def generator():
-        yield "chunk"
-
-    with pytest.raises(TypeError, match="stream wrapper"):
-        hook_advice("test", "stream")(generator)
-
-
-def test_hook_advice_rejects_coroutine_function():
-    async def advice():
-        return None
-
-    with pytest.raises(TypeError, match="async_hook_advice"):
-        hook_advice("test", "async")(advice)
-
-
 def test_hook_advice_does_not_swallow_base_exception():
     expected = KeyboardInterrupt()
 
@@ -113,22 +97,6 @@ async def test_async_hook_advice_strict_mode_preserves_exception():
     with pytest.raises(RuntimeError) as caught:
         await advice()
     assert caught.value is expected
-
-
-def test_async_hook_advice_rejects_async_generator_function():
-    async def generator():
-        yield "chunk"
-
-    with pytest.raises(TypeError, match="stream wrapper"):
-        async_hook_advice("test", "stream")(generator)
-
-
-def test_async_hook_advice_rejects_sync_function():
-    def advice():
-        return None
-
-    with pytest.raises(TypeError, match="hook_advice"):
-        async_hook_advice("test", "sync")(advice)
 
 
 @pytest.mark.asyncio
