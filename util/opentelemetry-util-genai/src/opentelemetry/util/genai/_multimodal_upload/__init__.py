@@ -32,6 +32,12 @@ from opentelemetry.util.genai._multimodal_upload.multimodal_upload_hook import (
     load_pre_uploader_hook,
     load_uploader_hook,
 )
+from opentelemetry.util.genai._multimodal_upload.usage_recorder import (
+    MultimodalUsageRecorder,
+    get_multimodal_usage_recorder,
+    provider_label_from_protocol,
+    set_multimodal_usage_recorder,
+)
 
 try:
     from opentelemetry.util.genai._multimodal_upload.fs_uploader import (
@@ -52,6 +58,10 @@ __all__ = [
     "PreUploadItem",
     "Uploader",
     "PreUploader",
+    "MultimodalUsageRecorder",
+    "get_multimodal_usage_recorder",
+    "set_multimodal_usage_recorder",
+    "provider_label_from_protocol",
     "load_uploader_hook",
     "load_pre_uploader_hook",
     "get_uploader_pair",
