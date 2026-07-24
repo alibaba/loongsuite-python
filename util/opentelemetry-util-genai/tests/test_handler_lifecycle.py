@@ -22,6 +22,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
 from opentelemetry.util.genai.extended_handler import (
     ExtendedTelemetryHandler,
 )
@@ -122,39 +123,49 @@ def test_llm_finalization_is_idempotent(handler_and_exporter, method):
 
 
 @pytest.mark.parametrize("method", ["stop_llm", "fail_llm"])
-def test_multimodal_dispatch_failure_allows_finalize_retry(
-    handler_and_exporter, method
-):
-    _handler, exporter = handler_and_exporter
+def test_detached_non_recording_span_is_finalized_once(method):
+    handler = TelemetryHandler(
+        tracer_provider=TracerProvider(sampler=ALWAYS_OFF)
+    )
+    invocation = LLMInvocation(request_model="model")
+    handler.start_llm(invocation)
+    handler.detach_llm_context(invocation)
+    assert invocation.span is not None
+    assert invocation.span.is_recording() is False
+
+    with patch.object(
+        handler, "_record_llm_metrics", wraps=handler._record_llm_metrics
+    ) as record_metrics:
+        if method == "stop_llm":
+            handler.stop_llm(invocation)
+            handler.stop_llm(invocation)
+        else:
+            error = Error(message="business boom", type=RuntimeError)
+            handler.fail_llm(invocation, error)
+            handler.fail_llm(invocation, error)
+
+    assert record_metrics.call_count == 1
+
+
+@pytest.mark.parametrize("method", ["stop_llm", "fail_llm"])
+def test_detached_stream_span_can_be_finalized_by_extended_handler(method):
+    exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     handler = ExtendedTelemetryHandler(tracer_provider=provider)
     invocation = LLMInvocation(request_model="model")
     handler.start_llm(invocation)
+    handler.detach_llm_context(invocation)
 
-    process_method = (
-        "process_multimodal_stop"
-        if method == "stop_llm"
-        else "process_multimodal_fail"
-    )
-    error = Error(message="business boom", type=RuntimeError)
-    with patch.object(
-        handler,
-        process_method,
-        side_effect=[RuntimeError("probe dispatch boom"), False],
-    ) as process:
-        with pytest.raises(RuntimeError, match="probe dispatch boom"):
-            if method == "stop_llm":
-                handler.stop_llm(invocation)
-            else:
-                handler.fail_llm(invocation, error)
+    if method == "stop_llm":
+        handler.stop_llm(invocation)
+    else:
+        handler.fail_llm(
+            invocation,
+            Error(message="business boom", type=RuntimeError),
+        )
 
-        if method == "stop_llm":
-            handler.stop_llm(invocation)
-        else:
-            handler.fail_llm(invocation, error)
-
-    assert process.call_count == 2
+    assert invocation.context_token is None
     assert invocation.span is not None
     assert invocation.span.is_recording() is False
     assert len(exporter.get_finished_spans()) == 1

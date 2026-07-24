@@ -8,8 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 - Avoid import-time warnings when optional audio dependencies for PCM16-to-WAV conversion are not installed.
-- Guarantee idempotent LLM span/context cleanup when probe finalization fails
-  and allow a detached streaming span to finish in another task or context.
+- Guarantee idempotent LLM span/context cleanup when synchronous probe
+  finalization fails, and allow a detached streaming span to finish in another
+  task or context.
 
 ## Version 0.3b0 (2026-02-20)
 
