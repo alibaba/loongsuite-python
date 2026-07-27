@@ -23,7 +23,7 @@ from typing import Optional, Protocol, runtime_checkable
 _logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-_recorder: Optional["MultimodalUsageRecorder"] = None
+_recorder: Optional["_SafeMultimodalUsageRecorder"] = None
 
 
 @runtime_checkable
@@ -40,20 +40,57 @@ class MultimodalUsageRecorder(Protocol):
 
 
 class _NoOpMultimodalUsageRecorder:
-    def record_upload_success(
+    def record_upload_success(  # pylint: disable=no-self-use
         self, *, provider: str, content_bytes: int
     ) -> None:
         return
 
-    def record_upload_error(self, *, provider: str, reason: str) -> None:
+    def record_upload_error(  # pylint: disable=no-self-use
+        self, *, provider: str, reason: str
+    ) -> None:
         return
 
 
-_DEFAULT_RECORDER = _NoOpMultimodalUsageRecorder()
+class _SafeMultimodalUsageRecorder:
+    """Proxy that swallows recorder exceptions so callers are never disrupted."""
+
+    def __init__(self, inner: MultimodalUsageRecorder) -> None:
+        self._inner = inner
+
+    def record_upload_success(
+        self, *, provider: str, content_bytes: int
+    ) -> None:
+        try:
+            self._inner.record_upload_success(
+                provider=provider, content_bytes=content_bytes
+            )
+        except Exception:  # pylint: disable=broad-except
+            _logger.debug(
+                "Multimodal usage recorder record_upload_success failed",
+                exc_info=True,
+            )
+
+    def record_upload_error(self, *, provider: str, reason: str) -> None:
+        try:
+            self._inner.record_upload_error(provider=provider, reason=reason)
+        except Exception:  # pylint: disable=broad-except
+            _logger.debug(
+                "Multimodal usage recorder record_upload_error failed",
+                exc_info=True,
+            )
+
+
+_DEFAULT_RECORDER = _SafeMultimodalUsageRecorder(
+    _NoOpMultimodalUsageRecorder()
+)
 
 
 def get_multimodal_usage_recorder() -> MultimodalUsageRecorder:
-    """Return the current recorder, or the default no-op implementation."""
+    """Return the current recorder, or the default no-op implementation.
+
+    The returned recorder never propagates exceptions from the underlying
+    implementation.
+    """
     with _lock:
         if _recorder is None:
             return _DEFAULT_RECORDER
@@ -64,9 +101,12 @@ def set_multimodal_usage_recorder(
     recorder: Optional[MultimodalUsageRecorder],
 ) -> None:
     """Replace the global recorder. ``None`` resets to the default no-op."""
-    global _recorder
+    global _recorder  # pylint: disable=global-statement
     with _lock:
-        _recorder = recorder
+        if recorder is None:
+            _recorder = None
+        else:
+            _recorder = _SafeMultimodalUsageRecorder(recorder)
 
 
 def provider_label_from_protocol(protocol: str) -> str:

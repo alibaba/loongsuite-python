@@ -18,7 +18,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -36,14 +36,22 @@ class RecordingUsageRecorder:
     successes: List[tuple[str, int]] = field(default_factory=list)
     errors: List[tuple[str, str]] = field(default_factory=list)
     success_event: threading.Event = field(default_factory=threading.Event)
+    raise_on_success: bool = False
+    raise_on_error: bool = False
+    success_calls: int = 0
 
     def record_upload_success(
         self, *, provider: str, content_bytes: int
     ) -> None:
+        self.success_calls += 1
+        if self.raise_on_success:
+            raise RuntimeError("boom")
         self.successes.append((provider, content_bytes))
         self.success_event.set()
 
     def record_upload_error(self, *, provider: str, reason: str) -> None:
+        if self.raise_on_error:
+            raise RuntimeError("boom")
         self.errors.append((provider, reason))
 
 
@@ -322,3 +330,76 @@ def test_remote_uri_success_uses_downloaded_bytes():
         uploader.shutdown(timeout=1.0)
 
     assert recorder.successes == [("other", len(downloaded))]
+
+
+def test_recorder_success_exception_does_not_retry_upload():
+    base_dir = os.path.abspath(os.path.join(os.getcwd(), "upload_bytes_test"))
+    os.makedirs(base_dir, exist_ok=True)
+    recorder = RecordingUsageRecorder(raise_on_success=True)
+    set_multimodal_usage_recorder(recorder)
+
+    content = b"success-then-recorder-boom"
+    write_calls = {"count": 0}
+    uploader = FsUploader(
+        base_path=base_dir,
+        max_workers=1,
+        max_upload_retries=3,
+        upload_retry_delay=0.01,
+    )
+    original_write = uploader._write_file_with_optional_headers
+
+    def counting_write(
+        path: str,
+        content: bytes,
+        content_type: Optional[str],
+        meta: Optional[dict[str, str]],
+    ) -> bool:
+        write_calls["count"] += 1
+        return original_write(path, content, content_type, meta)
+
+    uploader._write_file_with_optional_headers = counting_write
+    dst = os.path.join(base_dir, "recorder-raise-success.bin")
+    if os.path.exists(dst):
+        os.remove(dst)
+    try:
+        assert uploader.upload(
+            UploadItem(
+                url="recorder-raise-success.bin",
+                data=content,
+                content_type="application/octet-stream",
+                meta={},
+            )
+        )
+        uploader.shutdown(timeout=5.0)
+    finally:
+        uploader.shutdown(timeout=1.0)
+
+    assert write_calls["count"] == 1
+    assert recorder.success_calls == 1
+    assert recorder.successes == []
+    assert recorder.errors == []
+    assert os.path.exists(dst)
+
+
+def test_recorder_error_exception_does_not_break_upload_api():
+    base_dir = os.path.abspath(os.path.join(os.getcwd(), "upload_queue_test"))
+    os.makedirs(base_dir, exist_ok=True)
+    recorder = RecordingUsageRecorder(raise_on_error=True)
+    set_multimodal_usage_recorder(recorder)
+
+    uploader = FsUploader(base_path=base_dir, max_workers=1)
+    try:
+        assert (
+            uploader.upload(
+                UploadItem(
+                    url="invalid.bin",
+                    content_type="application/octet-stream",
+                    meta={},
+                )
+            )
+            is False
+        )
+    finally:
+        uploader.shutdown(timeout=1.0)
+
+    assert recorder.errors == []

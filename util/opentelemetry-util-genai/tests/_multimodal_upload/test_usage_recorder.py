@@ -31,13 +31,10 @@ from opentelemetry.util.genai._multimodal_upload.usage_recorder import (
 class RecordingUsageRecorder:
     successes: List[tuple[str, int]] = field(default_factory=list)
     errors: List[tuple[str, str]] = field(default_factory=list)
-    raise_on_success: bool = False
 
     def record_upload_success(
         self, *, provider: str, content_bytes: int
     ) -> None:
-        if self.raise_on_success:
-            raise RuntimeError("boom")
         self.successes.append((provider, content_bytes))
 
     def record_upload_error(self, *, provider: str, reason: str) -> None:
@@ -64,6 +61,22 @@ def test_set_and_get_recorder() -> None:
         provider="oss", content_bytes=42
     )
     assert custom.successes == [("oss", 42)]
+
+
+def test_get_recorder_swallows_inner_exceptions() -> None:
+    class RaisingUsageRecorder:
+        def record_upload_success(
+            self, *, provider: str, content_bytes: int
+        ) -> None:
+            raise RuntimeError("boom-success")
+
+        def record_upload_error(self, *, provider: str, reason: str) -> None:
+            raise RuntimeError("boom-error")
+
+    set_multimodal_usage_recorder(RaisingUsageRecorder())
+    recorder = get_multimodal_usage_recorder()
+    recorder.record_upload_success(provider="oss", content_bytes=1)
+    recorder.record_upload_error(provider="oss", reason="queue_full")
 
 
 def test_set_recorder_thread_safe() -> None:
