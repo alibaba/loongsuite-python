@@ -65,12 +65,14 @@ def test_set_and_get_recorder() -> None:
 
 def test_get_recorder_swallows_inner_exceptions() -> None:
     class RaisingUsageRecorder:
-        def record_upload_success(
+        def record_upload_success(  # pylint: disable=no-self-use
             self, *, provider: str, content_bytes: int
         ) -> None:
             raise RuntimeError("boom-success")
 
-        def record_upload_error(self, *, provider: str, reason: str) -> None:
+        def record_upload_error(  # pylint: disable=no-self-use
+            self, *, provider: str, reason: str
+        ) -> None:
             raise RuntimeError("boom-error")
 
     set_multimodal_usage_recorder(RaisingUsageRecorder())
