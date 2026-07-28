@@ -11,7 +11,9 @@ This package follows the canonical Google GenAI instrumentation maintained in
 - Repository commit: `d168d3e6bd280ae131fd56f60a15b449626ab336`
 - Supported SDK range: `google-genai>=1.32,<3`
 - Upstream `main` snapshot audited after the tag:
-  `85fb8a6ce2c239a5009a94c71f39875cb84b7bee`
+  `e83bf7df909abb5c2e069ec6480b942638389706`
+- OpenInference Google GenAI comparison snapshot:
+  `a1392c50d2d5b20fb805c195fb6006c80d5a6106`
 
 The provider hook modules keep the upstream file layout:
 
@@ -39,7 +41,11 @@ The intentional product delta is kept small and explicit:
   `ExtendedTelemetryHandler`; the upstream 1.x GenAI util is not a runtime
   dependency of this package.
 - `_stream.py` is the upstream GenAI stream lifecycle helper with Python 3.9
-  compatibility.
+  compatibility and LoongSuite fail-open stream ownership.
+- provider-owned prepare, response mapping, failure reporting, stream wrapping,
+  chunk accumulation, finalization, embeddings, and automatic tool telemetry
+  run through `hook_advice`; the Google SDK call, SDK stream iteration, and
+  application tool callback remain outside advice and execute exactly once.
 - standard OpenTelemetry suppression is honored without adding Robin's
   commercial `_SUPPRESS_LLM_SDK_KEY`;
 - `execute_tool` remains an INTERNAL span through the extended handler;
@@ -66,6 +72,23 @@ provider fixes with regression tests:
 - embedding raw-response state is reset with a `ContextVar` token even when a
   request fails;
 - explicit `OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=false` is preserved.
+- probe failures cannot replace a Google SDK result, yielded chunk, application
+  tool result, cancellation, `GeneratorExit`, or original provider exception;
+- stream context is detached before returning the stream, finalization is
+  idempotent, and cross-thread/cross-Context consumption does not reuse the
+  creation token;
+- MCP tool metadata collection does not call application callbacks before the
+  real provider request.
+
+The upstream and OpenInference comparisons both provide useful partial
+isolation, but neither snapshot satisfies this complete contract.
+OpenInference protects many span mutation/finalization calls and falls back to
+the raw stream when wrapper construction fails, while its request extraction
+and stream chunk accumulator can still fail before or during business
+delivery. The canonical upstream snapshot still mixes response mapping and
+`invocation.stop()`/`fail()` with the provider-call `try` block. LoongSuite
+keeps this lifecycle delta until an equivalent provider-neutral contract lands
+upstream.
 
 Package metadata, release naming, bootstrap registration, local live tests,
 and sanitized VCR cassettes are LoongSuite-owned.
@@ -170,6 +193,10 @@ independent changes:
 9. Discuss a supported handler/invocation factory injection point so vendors
    can add completion hooks, upload handling, or extra metrics without copying
    provider hooks. This needs an upstream design issue before a code change.
+10. Contribute provider-neutral fail-open lifecycle patches in small steps:
+    keep the provider call outside telemetry advice, return raw streams when
+    wrapping fails, isolate chunk/final callbacks, detach stream context before
+    ownership transfer, and preserve cancellation/exception identity.
 
 Python 3.9 support, the 0.x-to-1.x compatibility facade, LoongSuite-specific
 metrics and asynchronous multimodal processing, release/bootstrap integration,

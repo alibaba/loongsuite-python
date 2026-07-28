@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 
 from google.genai._api_client import BaseApiClient
@@ -19,11 +20,15 @@ from opentelemetry.instrumentation.google_genai.client_info import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.util.genai import hook_advice
 
 from ._compat import EmbeddingInvocation, TelemetryHandler
 
 _RAW_RESPONSE_BODY: ContextVar[str | None] = ContextVar(
     "raw_response_body", default=None
+)
+_CAPTURE_RAW_RESPONSE: ContextVar[bool] = ContextVar(
+    "capture_raw_response", default=False
 )
 _EMBEDDING_DIMENSION_COUNT = getattr(
     GenAIAttributes,
@@ -92,6 +97,85 @@ def _apply_embedding_response_attributes(
             pass
 
 
+@dataclass
+class _EmbeddingAdviceState:
+    invocation: EmbeddingInvocation
+    raw_body_token: Any
+    capture_token: Any
+
+
+@hook_advice("google-genai", "prepare_embedding")
+def _prepare_embedding_advice(
+    telemetry_handler: TelemetryHandler,
+    instance: Models | AsyncModels,
+    kwargs: dict[str, Any],
+) -> _EmbeddingAdviceState:
+    raw_body_token = None
+    capture_token = None
+    invocation = None
+    try:
+        raw_body_token = _RAW_RESPONSE_BODY.set(None)
+        capture_token = _CAPTURE_RAW_RESPONSE.set(True)
+        is_vertex, server_address = _get_client_info(instance)
+        invocation = telemetry_handler.embedding(
+            provider=(
+                GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
+                if is_vertex
+                else GenAIAttributes.GenAiSystemValues.GEMINI.value
+            ),
+            request_model=kwargs.get("model"),
+            server_address=server_address,
+        )
+        return _EmbeddingAdviceState(
+            invocation=invocation,
+            raw_body_token=raw_body_token,
+            capture_token=capture_token,
+        )
+    except Exception:
+        if invocation is not None:
+            telemetry_handler.abandon_embedding(invocation)
+        if raw_body_token is not None:
+            _RAW_RESPONSE_BODY.reset(raw_body_token)
+        if capture_token is not None:
+            _CAPTURE_RAW_RESPONSE.reset(capture_token)
+        raise
+
+
+@hook_advice("google-genai", "complete_embedding")
+def _complete_embedding_advice(
+    state: _EmbeddingAdviceState,
+    response: EmbedContentResponse,
+) -> None:
+    try:
+        _apply_embedding_response_attributes(response, state.invocation)
+        state.invocation.stop()
+    finally:
+        _RAW_RESPONSE_BODY.reset(state.raw_body_token)
+        _CAPTURE_RAW_RESPONSE.reset(state.capture_token)
+
+
+@hook_advice("google-genai", "fail_embedding")
+def _fail_embedding_advice(
+    state: _EmbeddingAdviceState,
+    error: BaseException,
+) -> None:
+    try:
+        state.invocation.fail(error)
+    finally:
+        _RAW_RESPONSE_BODY.reset(state.raw_body_token)
+        _CAPTURE_RAW_RESPONSE.reset(state.capture_token)
+
+
+@hook_advice("google-genai", "capture_embedding_raw_response")
+def _capture_embedding_raw_response_advice(response: Any) -> None:
+    if (
+        _CAPTURE_RAW_RESPONSE.get()
+        and response
+        and getattr(response, "body", None)
+    ):
+        _RAW_RESPONSE_BODY.set(response.body)
+
+
 def _create_instrumented_embed_content(
     telemetry_handler: TelemetryHandler,
 ) -> Callable[
@@ -109,23 +193,20 @@ def _create_instrumented_embed_content(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> EmbedContentResponse:
-        raw_body_token = _RAW_RESPONSE_BODY.set(None)
-        is_vertex, server_address = _get_client_info(instance)
+        state = _prepare_embedding_advice(
+            telemetry_handler,
+            instance,
+            kwargs,
+        )
         try:
-            with telemetry_handler.embedding(
-                provider=(
-                    GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
-                    if is_vertex
-                    else GenAIAttributes.GenAiSystemValues.GEMINI.value
-                ),
-                request_model=kwargs.get("model"),
-                server_address=server_address,
-            ) as invocation:
-                response = wrapped(*args, **kwargs)
-                _apply_embedding_response_attributes(response, invocation)
-                return response
-        finally:
-            _RAW_RESPONSE_BODY.reset(raw_body_token)
+            response = wrapped(*args, **kwargs)
+        except BaseException as error:
+            if state is not None:
+                _fail_embedding_advice(state, error)
+            raise
+        if state is not None:
+            _complete_embedding_advice(state, response)
+        return response
 
     return instrumented_embed_content
 
@@ -147,23 +228,20 @@ def _create_instrumented_async_embed_content(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> EmbedContentResponse:
-        raw_body_token = _RAW_RESPONSE_BODY.set(None)
-        is_vertex, server_address = _get_client_info(instance)
+        state = _prepare_embedding_advice(
+            telemetry_handler,
+            instance,
+            kwargs,
+        )
         try:
-            with telemetry_handler.embedding(
-                provider=(
-                    GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
-                    if is_vertex
-                    else GenAIAttributes.GenAiSystemValues.GEMINI.value
-                ),
-                request_model=kwargs.get("model"),
-                server_address=server_address,
-            ) as invocation:
-                response = await wrapped(*args, **kwargs)
-                _apply_embedding_response_attributes(response, invocation)
-                return response
-        finally:
-            _RAW_RESPONSE_BODY.reset(raw_body_token)
+            response = await wrapped(*args, **kwargs)
+        except BaseException as error:
+            if state is not None:
+                _fail_embedding_advice(state, error)
+            raise
+        if state is not None:
+            _complete_embedding_advice(state, response)
+        return response
 
     return instrumented_embed_content
 
@@ -194,14 +272,12 @@ def instrument_embeddings(
     # Wrap BaseApiClient to capture raw responses
     def instrumented_request(wrapped, instance, args, kwargs):
         response = wrapped(*args, **kwargs)
-        if response and getattr(response, "body", None):
-            _RAW_RESPONSE_BODY.set(response.body)
+        _capture_embedding_raw_response_advice(response)
         return response
 
     async def instrumented_async_request(wrapped, instance, args, kwargs):
         response = await wrapped(*args, **kwargs)
-        if response and getattr(response, "body", None):
-            _RAW_RESPONSE_BODY.set(response.body)
+        _capture_embedding_raw_response_advice(response)
         return response
 
     wrap_function_wrapper(

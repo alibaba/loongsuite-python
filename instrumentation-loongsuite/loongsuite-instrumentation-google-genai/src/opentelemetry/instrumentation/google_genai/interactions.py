@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterable, Callable, Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 try:
@@ -81,6 +82,7 @@ from opentelemetry.instrumentation.google_genai.client_info import (
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.types import (
     InputMessage,
     OutputMessage,
@@ -271,7 +273,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
             )
         self._self_invocation.stop()
 
-    def _on_stream_error(self, error: Exception) -> None:
+    def _on_stream_error(self, error: BaseException) -> None:
         self._self_invocation.fail(error)
 
 
@@ -304,8 +306,112 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
             )
         self._self_invocation.stop()
 
-    def _on_stream_error(self, error: Exception) -> None:
+    def _on_stream_error(self, error: BaseException) -> None:
         self._self_invocation.fail(error)
+
+
+@dataclass
+class _InteractionsAdviceState:
+    invocation: InferenceInvocation
+    is_stream: bool
+
+
+@hook_advice("google-genai", "prepare_interactions")
+def _prepare_interactions_advice(
+    telemetry_handler: TelemetryHandler,
+    instance: Any,
+    kwargs: dict[str, Any],
+) -> _InteractionsAdviceState:
+    invocation = None
+    try:
+        is_vertex, server_address = _get_client_info(instance)
+        invocation = telemetry_handler.inference(
+            provider=(
+                GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
+                if is_vertex
+                else GenAIAttributes.GenAiSystemValues.GEMINI.value
+            ),
+            request_model=kwargs.get("model") or kwargs.get("agent"),
+            operation_name="interactions.create",
+            server_address=server_address,
+        )
+        if telemetry_handler.should_capture_content():
+            invocation.input_messages = _interactions_input_to_messages(
+                kwargs.get("input")
+            )
+            if system_instruction := kwargs.get("system_instruction"):
+                invocation.system_instruction = [
+                    Text(content=system_instruction)
+                ]
+        return _InteractionsAdviceState(
+            invocation=invocation,
+            is_stream=bool(kwargs.get("stream", False)),
+        )
+    except Exception:
+        if invocation is not None:
+            telemetry_handler.abandon_inference(invocation)
+        raise
+
+
+@hook_advice("google-genai", "complete_interactions")
+def _complete_interactions_advice(
+    telemetry_handler: TelemetryHandler,
+    state: _InteractionsAdviceState,
+    response: Interaction,
+) -> None:
+    try:
+        _apply_interaction_response_attributes(
+            response,
+            state.invocation,
+            telemetry_handler,
+        )
+    finally:
+        state.invocation.stop()
+
+
+@hook_advice("google-genai", "fail_interactions")
+def _fail_interactions_advice(
+    state: _InteractionsAdviceState,
+    error: BaseException,
+) -> None:
+    state.invocation.fail(error)
+
+
+@hook_advice("google-genai", "detach_interactions_stream_context")
+def _detach_interactions_stream_context_advice(
+    telemetry_handler: TelemetryHandler,
+    state: _InteractionsAdviceState,
+) -> bool:
+    telemetry_handler.detach_inference_context(state.invocation)
+    return True
+
+
+@hook_advice("google-genai", "abandon_interactions")
+def _abandon_interactions_advice(
+    telemetry_handler: TelemetryHandler,
+    state: _InteractionsAdviceState,
+) -> None:
+    telemetry_handler.abandon_inference(state.invocation)
+
+
+@hook_advice("google-genai", "wrap_interactions_stream")
+def _wrap_interactions_stream_advice(
+    stream: Any,
+    state: _InteractionsAdviceState,
+    telemetry_handler: TelemetryHandler,
+    *,
+    asynchronous: bool,
+) -> Any:
+    wrapper_type = (
+        AsyncInteractionsStreamWrapper
+        if asynchronous
+        else InteractionsStreamWrapper
+    )
+    return wrapper_type(
+        stream,
+        state.invocation,
+        telemetry_handler,
+    )
 
 
 def _create_instrumented_interactions_create(
@@ -325,48 +431,42 @@ def _create_instrumented_interactions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Interaction | InteractionsStreamWrapper:
-        # Vertex AI does not support the interactions API yet, but eventually will.
-        # SDK will raise an exception if model or agent is not passed or if input data is not passed.
-        is_vertex, server_address = _get_client_info(instance)
-        invocation = telemetry_handler.inference(
-            provider=(
-                GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
-                if is_vertex
-                else GenAIAttributes.GenAiSystemValues.GEMINI.value
-            ),
-            request_model=kwargs.get("model") or kwargs.get("agent"),
-            operation_name="interactions.create",
-            server_address=server_address,
+        state = _prepare_interactions_advice(
+            telemetry_handler,
+            instance,
+            kwargs,
         )
-
-        if telemetry_handler.should_capture_content():
-            invocation.input_messages = _interactions_input_to_messages(
-                kwargs.get("input")
-            )
-            if system_instruction := kwargs.get("system_instruction"):
-                invocation.system_instruction = [
-                    Text(content=system_instruction)
-                ]
-
-        if kwargs.get("stream", False):
-            try:
-                stream = wrapped(*args, **kwargs)
-            except BaseException as exc:
-                invocation.fail(exc)
-                raise
-            return InteractionsStreamWrapper(
-                stream, invocation, telemetry_handler
-            )
         try:
             response = wrapped(*args, **kwargs)
-            _apply_interaction_response_attributes(
-                response, invocation, telemetry_handler
-            )
-            invocation.stop()
-            return response
-        except Exception as exc:
-            invocation.fail(exc)
+        except BaseException as error:
+            if state is not None:
+                _fail_interactions_advice(state, error)
             raise
+        if state is None:
+            return response
+        if not state.is_stream:
+            _complete_interactions_advice(
+                telemetry_handler,
+                state,
+                cast(Interaction, response),
+            )
+            return response
+        if not _detach_interactions_stream_context_advice(
+            telemetry_handler,
+            state,
+        ):
+            _abandon_interactions_advice(telemetry_handler, state)
+            return response
+        stream_wrapper = _wrap_interactions_stream_advice(
+            response,
+            state,
+            telemetry_handler,
+            asynchronous=False,
+        )
+        if stream_wrapper is None:
+            _abandon_interactions_advice(telemetry_handler, state)
+            return response
+        return stream_wrapper
 
     return instrumented_interactions_create
 
@@ -388,48 +488,42 @@ def _create_instrumented_async_interactions_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> Interaction | AsyncInteractionsStreamWrapper:
-        is_vertex, server_address = _get_client_info(instance)
-        invocation = telemetry_handler.inference(
-            provider=(
-                GenAIAttributes.GenAiSystemValues.VERTEX_AI.value
-                if is_vertex
-                else GenAIAttributes.GenAiSystemValues.GEMINI.value
-            ),
-            request_model=kwargs.get("model") or kwargs.get("agent"),
-            operation_name="interactions.create",
-            server_address=server_address,
+        state = _prepare_interactions_advice(
+            telemetry_handler,
+            instance,
+            kwargs,
         )
-
-        if telemetry_handler.should_capture_content():
-            invocation.input_messages = _interactions_input_to_messages(
-                kwargs.get("input")
-            )
-            if system_instruction := kwargs.get("system_instruction"):
-                invocation.system_instruction = [
-                    Text(content=system_instruction)
-                ]
-
-        if kwargs.get("stream", False):
-            try:
-                stream = await wrapped(*args, **kwargs)
-            except BaseException as exc:
-                invocation.fail(exc)
-                raise
-            return AsyncInteractionsStreamWrapper(
-                stream,
-                invocation,
-                telemetry_handler,
-            )
         try:
-            response = cast(Interaction, await wrapped(*args, **kwargs))
-            _apply_interaction_response_attributes(
-                response, invocation, telemetry_handler
-            )
-            invocation.stop()
-            return response
-        except Exception as exc:
-            invocation.fail(exc)
+            response = await wrapped(*args, **kwargs)
+        except BaseException as error:
+            if state is not None:
+                _fail_interactions_advice(state, error)
             raise
+        if state is None:
+            return response
+        if not state.is_stream:
+            _complete_interactions_advice(
+                telemetry_handler,
+                state,
+                cast(Interaction, response),
+            )
+            return response
+        if not _detach_interactions_stream_context_advice(
+            telemetry_handler,
+            state,
+        ):
+            _abandon_interactions_advice(telemetry_handler, state)
+            return response
+        stream_wrapper = _wrap_interactions_stream_advice(
+            response,
+            state,
+            telemetry_handler,
+            asynchronous=True,
+        )
+        if stream_wrapper is None:
+            _abandon_interactions_advice(telemetry_handler, state)
+            return response
+        return stream_wrapper
 
     return instrumented_interactions_create
 

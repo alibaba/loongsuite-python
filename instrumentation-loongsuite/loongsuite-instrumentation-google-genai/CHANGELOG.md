@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audit.
 - Add local opt-in real Gemini API tests and redacted VCR coverage for public
   CI without provider credentials.
+- Apply the shared ``hook_advice`` fail-open contract to generation,
+  Interactions, embeddings, automatic tool calls, and sync/async streams so
+  probe failures cannot change SDK call count, results, chunks, cancellation,
+  ``GeneratorExit``, or original provider exceptions.
+- Detach streaming context before returning SDK streams, make finalization
+  idempotent across close/aclose/error/GC paths, and cover cross-Context and
+  one-fault-among-many isolation.
 
 ## Version 0.8.0.dev
 

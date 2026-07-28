@@ -22,13 +22,16 @@ Supported operations
 * text, reasoning, inline binary, URI, function-call, and function-response
   message parts;
 * request parameters, tool definitions, response IDs/models, token usage,
-  finish reasons, streaming TTFT, and fail-open error handling.
+  finish reasons, streaming TTFT, and ``hook_advice`` fail-open error handling;
 * opt-in Google-specific request configuration attributes through
   ``OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_INCLUDES`` and
   ``OTEL_GOOGLE_GENAI_GENERATE_CONTENT_CONFIG_EXCLUDES``.
 
 The Interactions API is available in recent ``google-genai`` 2.x releases.
 Generation and embedding remain supported from ``google-genai`` 1.32 onward.
+Instrumentation-only failures are degraded to missing telemetry: the original
+SDK call or application tool executes once, and its return object, streamed
+chunks, cancellation, ``GeneratorExit``, and exception identity are preserved.
 
 Installation
 ------------

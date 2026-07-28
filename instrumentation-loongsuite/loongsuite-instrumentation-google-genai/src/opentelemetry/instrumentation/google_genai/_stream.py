@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from abc import ABCMeta, abstractmethod
 from inspect import isawaitable
+from threading import Lock
 from types import TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -16,6 +17,8 @@ from typing import (
     Protocol,
     TypeVar,
 )
+
+from opentelemetry.util.genai import hook_advice
 
 if TYPE_CHECKING:
 
@@ -29,6 +32,21 @@ else:
 ChunkT = TypeVar("ChunkT")
 _ChunkT_co = TypeVar("_ChunkT_co", covariant=True)
 _logger = logging.getLogger(__name__)
+
+
+@hook_advice("google-genai", "stream_chunk")
+def _process_stream_chunk_advice(wrapper: object, chunk: object) -> None:
+    wrapper._process_chunk(chunk)  # type: ignore[attr-defined]
+
+
+@hook_advice("google-genai", "stream_success")
+def _finish_stream_success_advice(wrapper: object) -> None:
+    wrapper._on_stream_end()  # type: ignore[attr-defined]
+
+
+@hook_advice("google-genai", "stream_error")
+def _finish_stream_error_advice(wrapper: object, error: BaseException) -> None:
+    wrapper._on_stream_error(error)  # type: ignore[attr-defined]
 
 
 class _StreamWrapperMeta(ABCMeta, type(_ObjectProxy)):
@@ -68,6 +86,7 @@ class SyncStreamWrapper(
         self._self_stream = stream
         self._self_iterator = iter(stream)
         self._self_finalized = False
+        self._self_finalize_lock = Lock()
 
     def __enter__(self):
         return self
@@ -95,9 +114,11 @@ class SyncStreamWrapper(
     def close(self) -> None:
         try:
             self._self_stream.close()
-        except Exception as error:
-            self._finalize_failure(error)
-            raise
+        except Exception:
+            _logger.debug(
+                "Google GenAI stream close failed",
+                exc_info=True,
+            )
         self._finalize_success()
 
     def __iter__(self):
@@ -112,23 +133,36 @@ class SyncStreamWrapper(
         except StopIteration:
             self._finalize_success()
             raise
-        except Exception as error:
+        except GeneratorExit:
+            self._finalize_success()
+            raise
+        except BaseException as error:
             self._finalize_failure(error)
             raise
-        self._process_chunk(chunk)
+        _process_stream_chunk_advice(self, chunk)
         return chunk
 
     def _finalize_success(self) -> None:
-        if self._self_finalized:
-            return
-        self._self_finalized = True
-        self._on_stream_end()
+        with self._self_finalize_lock:
+            if self._self_finalized:
+                return
+            self._self_finalized = True
+        _finish_stream_success_advice(self)
 
     def _finalize_failure(self, error: BaseException) -> None:
-        if self._self_finalized:
+        with self._self_finalize_lock:
+            if self._self_finalized:
+                return
+            self._self_finalized = True
+        _finish_stream_error_advice(self, error)
+
+    def __del__(self) -> None:
+        if getattr(self, "_self_finalized", True):
             return
-        self._self_finalized = True
-        self._on_stream_error(error)
+        try:
+            self._finalize_success()
+        except Exception:
+            pass
 
     @abstractmethod
     def _process_chunk(self, chunk: ChunkT) -> None:
@@ -168,6 +202,7 @@ class AsyncStreamWrapper(
         # LoongSuite supports Python 3.9, where aiter/anext are unavailable.
         self._self_aiter = stream.__aiter__()
         self._self_finalized = False
+        self._self_finalize_lock = Lock()
 
     async def __aenter__(self):
         return self
@@ -195,13 +230,11 @@ class AsyncStreamWrapper(
     async def close(self) -> None:
         try:
             await self._close_wrapped_stream()
-        except Exception as error:
-            self._finalize_failure(error)
+        except Exception:
             _logger.debug(
-                "GenAI stream close error during close",
+                "Google GenAI async stream close failed",
                 exc_info=True,
             )
-            raise
         self._finalize_success()
 
     async def aclose(self) -> None:
@@ -231,24 +264,37 @@ class AsyncStreamWrapper(
         except StopAsyncIteration:
             self._finalize_success()
             raise
-        except Exception as error:
+        except GeneratorExit:
+            self._finalize_success()
+            raise
+        except BaseException as error:
             self._finalize_failure(error)
             raise
 
-        self._process_chunk(chunk)
+        _process_stream_chunk_advice(self, chunk)
         return chunk
 
     def _finalize_success(self) -> None:
-        if self._self_finalized:
-            return
-        self._self_finalized = True
-        self._on_stream_end()
+        with self._self_finalize_lock:
+            if self._self_finalized:
+                return
+            self._self_finalized = True
+        _finish_stream_success_advice(self)
 
     def _finalize_failure(self, error: BaseException) -> None:
-        if self._self_finalized:
+        with self._self_finalize_lock:
+            if self._self_finalized:
+                return
+            self._self_finalized = True
+        _finish_stream_error_advice(self, error)
+
+    def __del__(self) -> None:
+        if getattr(self, "_self_finalized", True):
             return
-        self._self_finalized = True
-        self._on_stream_error(error)
+        try:
+            self._finalize_success()
+        except Exception:
+            pass
 
     @abstractmethod
     def _process_chunk(self, chunk: ChunkT) -> None:

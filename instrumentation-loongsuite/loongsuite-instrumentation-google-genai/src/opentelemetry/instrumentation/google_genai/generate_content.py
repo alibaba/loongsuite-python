@@ -7,6 +7,7 @@ import json
 import os
 from collections.abc import AsyncIterable, Callable, Iterable
 from copy import copy
+from dataclasses import dataclass
 from typing import Any, Optional, Union
 
 from google.genai.models import AsyncModels, Models
@@ -26,6 +27,7 @@ from opentelemetry import context as context_api
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes,
 )
+from opentelemetry.util.genai import async_hook_advice, hook_advice
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -435,12 +437,172 @@ def _maybe_get_tool_definitions(
 async def _maybe_get_tool_definitions_async(
     config: GenerateContentConfig,
 ) -> list[ToolDefinition]:
+    # Tool discovery is telemetry-only. Do not call MCP/application callbacks
+    # before the real SDK operation; losing those definitions is preferable to
+    # adding side effects or blocking the customer's request.
     return [
         de
         for tool in config.tools or []
-        for de in await _to_tool_definition_async(tool)
+        for de in _to_tool_definition(tool)
         if de
     ]
+
+
+@dataclass
+class _GenerateContentAdviceState:
+    invocation: InferenceInvocation
+    wrapped_config: GenerateContentConfig
+    has_wrapped_tools: bool
+
+
+@hook_advice("google-genai", "prepare_generate_content")
+def _prepare_generate_content_advice(
+    telemetry_handler: TelemetryHandler,
+    generate_content_config_key_allowlist: AllowList,
+    instance: Any,
+    model: str,
+    contents: Union[ContentListUnion, ContentListUnionDict],
+    config: Optional[GenerateContentConfigOrDict],
+) -> _GenerateContentAdviceState:
+    invocation = None
+    try:
+        wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
+            telemetry_handler,
+            config,
+        )
+        _, server_address = _get_client_info(instance)
+        invocation = telemetry_handler.inference(
+            provider=_determine_genai_system(instance),
+            request_model=model,
+            operation_name="generate_content",
+            server_address=server_address,
+        )
+        _apply_request_attributes(
+            wrapped_config,
+            generate_content_config_key_allowlist,
+            invocation,
+        )
+        invocation.attributes.update(_get_extra_generate_content_attributes())
+        invocation.tool_definitions = _maybe_get_tool_definitions(
+            wrapped_config
+        )
+        if telemetry_handler.should_capture_content():
+            invocation.input_messages = to_input_messages(
+                contents=transformers.t_contents(contents)
+            )
+            if wrapped_config.system_instruction:
+                invocation.system_instruction = to_system_instructions(
+                    content=transformers.t_contents(
+                        wrapped_config.system_instruction
+                    )[0]
+                )
+        return _GenerateContentAdviceState(
+            invocation=invocation,
+            wrapped_config=wrapped_config,
+            has_wrapped_tools=has_wrapped_tools,
+        )
+    except Exception:
+        if invocation is not None:
+            telemetry_handler.abandon_inference(invocation)
+        raise
+
+
+@async_hook_advice("google-genai", "prepare_async_generate_content")
+async def _prepare_async_generate_content_advice(
+    telemetry_handler: TelemetryHandler,
+    generate_content_config_key_allowlist: AllowList,
+    instance: Any,
+    model: str,
+    contents: Union[ContentListUnion, ContentListUnionDict],
+    config: Optional[GenerateContentConfigOrDict],
+) -> _GenerateContentAdviceState:
+    invocation = None
+    try:
+        wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
+            telemetry_handler,
+            config,
+        )
+        _, server_address = _get_client_info(instance)
+        invocation = telemetry_handler.inference(
+            provider=_determine_genai_system(instance),
+            request_model=model,
+            operation_name="generate_content",
+            server_address=server_address,
+        )
+        _apply_request_attributes(
+            wrapped_config,
+            generate_content_config_key_allowlist,
+            invocation,
+        )
+        invocation.attributes.update(_get_extra_generate_content_attributes())
+        invocation.tool_definitions = await _maybe_get_tool_definitions_async(
+            wrapped_config
+        )
+        if telemetry_handler.should_capture_content():
+            invocation.input_messages = to_input_messages(
+                contents=transformers.t_contents(contents)
+            )
+            if wrapped_config.system_instruction:
+                invocation.system_instruction = to_system_instructions(
+                    content=transformers.t_contents(
+                        wrapped_config.system_instruction
+                    )[0]
+                )
+        return _GenerateContentAdviceState(
+            invocation=invocation,
+            wrapped_config=wrapped_config,
+            has_wrapped_tools=has_wrapped_tools,
+        )
+    except Exception:
+        if invocation is not None:
+            telemetry_handler.abandon_inference(invocation)
+        raise
+
+
+@hook_advice("google-genai", "complete_generate_content")
+def _complete_generate_content_advice(
+    telemetry_handler: TelemetryHandler,
+    state: _GenerateContentAdviceState,
+    response: GenerateContentResponse,
+) -> None:
+    finish_reasons: list[str] = []
+    try:
+        _apply_response_attributes(
+            response,
+            finish_reasons,
+            state.invocation,
+        )
+        if telemetry_handler.should_capture_content() and response.candidates:
+            state.invocation.output_messages = to_output_messages(
+                candidates=response.candidates
+            )
+    finally:
+        state.invocation.stop()
+
+
+@hook_advice("google-genai", "fail_generate_content")
+def _fail_generate_content_advice(
+    state: _GenerateContentAdviceState,
+    error: BaseException,
+) -> None:
+    state.invocation.fail(error)
+
+
+@hook_advice("google-genai", "detach_stream_context")
+def _detach_stream_context_advice(
+    telemetry_handler: TelemetryHandler,
+    state: _GenerateContentAdviceState,
+) -> bool:
+    telemetry_handler.detach_inference_context(state.invocation)
+    return True
+
+
+@hook_advice("google-genai", "abandon_generate_content")
+def _abandon_generate_content_advice(
+    telemetry_handler: TelemetryHandler,
+    state: _GenerateContentAdviceState,
+) -> None:
+    telemetry_handler.abandon_inference(state.invocation)
 
 
 def _create_instrumented_generate_content(
@@ -460,66 +622,38 @@ def _create_instrumented_generate_content(
             *_args,
             **_kwargs,
         ):
-            # If we are unable to parse the config, or don't modify it, we pass it through
-            # as is to the real GenerateContent. This way the real GenerateContent can deal
-            # with invalid or empty configs as it normally would.
-            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
+            state = _prepare_generate_content_advice(
                 telemetry_handler,
+                generate_content_config_key_allowlist,
+                instance,
+                model,
+                contents,
                 config,
             )
-            finish_reasons = []
-            _, server_address = _get_client_info(instance)
-            with telemetry_handler.inference(
-                provider=_determine_genai_system(instance),
-                request_model=model,
-                operation_name="generate_content",
-                server_address=server_address,
-            ) as invocation:
-                _apply_request_attributes(
-                    wrapped_config,
-                    generate_content_config_key_allowlist,
-                    invocation,
+            call_config = (
+                state.wrapped_config
+                if state is not None and state.has_wrapped_tools
+                else config
+            )
+            try:
+                response = wrapped(
+                    model=model,
+                    contents=contents,
+                    config=call_config,
+                    *_args,
+                    **_kwargs,
                 )
-                invocation.attributes.update(
-                    _get_extra_generate_content_attributes()
+            except BaseException as error:
+                if state is not None:
+                    _fail_generate_content_advice(state, error)
+                raise
+            if state is not None:
+                _complete_generate_content_advice(
+                    telemetry_handler,
+                    state,
+                    response,
                 )
-                invocation.tool_definitions = _maybe_get_tool_definitions(
-                    wrapped_config
-                )
-
-                if telemetry_handler.should_capture_content():
-                    invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
-                    )
-                    if wrapped_config.system_instruction:
-                        invocation.system_instruction = to_system_instructions(
-                            content=transformers.t_contents(
-                                wrapped_config.system_instruction
-                            )[0]
-                        )
-                candidates = []
-                try:
-                    response = wrapped(
-                        model=model,
-                        contents=contents,
-                        config=wrapped_config if has_wrapped_tools else config,
-                        *_args,
-                        **_kwargs,
-                    )
-                    _apply_response_attributes(
-                        response, finish_reasons, invocation
-                    )
-                    if response.candidates:
-                        candidates.extend(response.candidates)
-                    return response
-                finally:
-                    if (
-                        telemetry_handler.should_capture_content()
-                        and candidates
-                    ):
-                        invocation.output_messages = to_output_messages(
-                            candidates=candidates
-                        )
+            return response
 
         return _execute(*args, **kwargs)
 
@@ -604,6 +738,26 @@ class AsyncGenerateContentStreamWrapper(
         self._self_invocation.fail(error)
 
 
+@hook_advice("google-genai", "wrap_generate_content_stream")
+def _wrap_generate_content_stream_advice(
+    stream: Any,
+    state: _GenerateContentAdviceState,
+    telemetry_handler: TelemetryHandler,
+    *,
+    asynchronous: bool,
+) -> Any:
+    wrapper_type = (
+        AsyncGenerateContentStreamWrapper
+        if asynchronous
+        else GenerateContentStreamWrapper
+    )
+    return wrapper_type(
+        stream,
+        state.invocation,
+        telemetry_handler,
+    )
+
+
 def _create_instrumented_generate_content_stream(
     telemetry_handler: TelemetryHandler,
     generate_content_config_key_allowlist: AllowList,
@@ -621,58 +775,55 @@ def _create_instrumented_generate_content_stream(
             *_args,
             **_kwargs,
         ):
-            # If we are unable to parse the config, or don't modify it, we pass it through
-            # as is to the real GenerateContent. This way the real GenerateContent can deal
-            # with invalid or empty configs as it normally would.
-            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
+            state = _prepare_generate_content_advice(
                 telemetry_handler,
+                generate_content_config_key_allowlist,
+                instance,
+                model,
+                contents,
                 config,
             )
-            _, server_address = _get_client_info(instance)
-            invocation = telemetry_handler.inference(
-                provider=_determine_genai_system(instance),
-                request_model=model,
-                operation_name="generate_content",
-                server_address=server_address,
+            call_config = (
+                state.wrapped_config
+                if state is not None and state.has_wrapped_tools
+                else config
             )
-            _apply_request_attributes(
-                wrapped_config,
-                generate_content_config_key_allowlist,
-                invocation,
-            )
-            invocation.attributes.update(
-                _get_extra_generate_content_attributes()
-            )
-            invocation.tool_definitions = _maybe_get_tool_definitions(
-                wrapped_config
-            )
-
-            if telemetry_handler.should_capture_content():
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
-                )
-                if wrapped_config.system_instruction:
-                    invocation.system_instruction = to_system_instructions(
-                        content=transformers.t_contents(
-                            wrapped_config.system_instruction
-                        )[0]
-                    )
             try:
                 stream = wrapped(
                     model=model,
                     contents=contents,
-                    config=wrapped_config if has_wrapped_tools else config,
+                    config=call_config,
                     *_args,
                     **_kwargs,
                 )
-            except BaseException as exc:
-                invocation.fail(exc)
+            except BaseException as error:
+                if state is not None:
+                    _fail_generate_content_advice(state, error)
                 raise
-            return GenerateContentStreamWrapper(
-                stream,
-                invocation,
+            if state is None:
+                return stream
+            if not _detach_stream_context_advice(
                 telemetry_handler,
+                state,
+            ):
+                _abandon_generate_content_advice(
+                    telemetry_handler,
+                    state,
+                )
+                return stream
+            stream_wrapper = _wrap_generate_content_stream_advice(
+                stream,
+                state,
+                telemetry_handler,
+                asynchronous=False,
             )
+            if stream_wrapper is None:
+                _abandon_generate_content_advice(
+                    telemetry_handler,
+                    state,
+                )
+                return stream
+            return stream_wrapper
 
         return _execute(*args, **kwargs)
 
@@ -696,66 +847,38 @@ def _create_instrumented_async_generate_content(
             *_args,
             **_kwargs,
         ):
-            # If we are unable to parse the config, or don't modify it, we pass it through
-            # as is to the real GenerateContent. This way the real GenerateContent can deal
-            # with invalid or empty configs as it normally would.
-            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
+            state = await _prepare_async_generate_content_advice(
                 telemetry_handler,
+                generate_content_config_key_allowlist,
+                instance,
+                model,
+                contents,
                 config,
             )
-            finish_reasons = []
-            _, server_address = _get_client_info(instance)
-            with telemetry_handler.inference(
-                provider=_determine_genai_system(instance),
-                request_model=model,
-                operation_name="generate_content",
-                server_address=server_address,
-            ) as invocation:
-                invocation.attributes.update(
-                    _get_extra_generate_content_attributes()
+            call_config = (
+                state.wrapped_config
+                if state is not None and state.has_wrapped_tools
+                else config
+            )
+            try:
+                response = await wrapped(
+                    model=model,
+                    contents=contents,
+                    config=call_config,
+                    *_args,
+                    **_kwargs,
                 )
-                _apply_request_attributes(
-                    wrapped_config,
-                    generate_content_config_key_allowlist,
-                    invocation,
+            except BaseException as error:
+                if state is not None:
+                    _fail_generate_content_advice(state, error)
+                raise
+            if state is not None:
+                _complete_generate_content_advice(
+                    telemetry_handler,
+                    state,
+                    response,
                 )
-                invocation.tool_definitions = (
-                    await _maybe_get_tool_definitions_async(wrapped_config)
-                )
-
-                if telemetry_handler.should_capture_content():
-                    invocation.input_messages = to_input_messages(
-                        contents=transformers.t_contents(contents)
-                    )
-                    if wrapped_config.system_instruction:
-                        invocation.system_instruction = to_system_instructions(
-                            content=transformers.t_contents(
-                                wrapped_config.system_instruction
-                            )[0]
-                        )
-                candidates = []
-                try:
-                    response = await wrapped(
-                        model=model,
-                        contents=contents,
-                        config=wrapped_config if has_wrapped_tools else config,
-                        *_args,
-                        **_kwargs,
-                    )
-                    _apply_response_attributes(
-                        response, finish_reasons, invocation
-                    )
-                    if response.candidates:
-                        candidates.extend(response.candidates)
-                    return response
-                finally:
-                    if (
-                        telemetry_handler.should_capture_content()
-                        and candidates
-                    ):
-                        invocation.output_messages = to_output_messages(
-                            candidates=candidates
-                        )
+            return response
 
         return await _execute(*args, **kwargs)
 
@@ -779,58 +902,55 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
             *_args,
             **_kwargs,
         ):
-            # If we are unable to parse the config, or don't modify it, we pass it through
-            # as is to the real GenerateContent. This way the real GenerateContent can deal
-            # with invalid or empty configs as it normally would.
-            wrapped_config, has_wrapped_tools = _wrapped_config_with_tools(
+            state = await _prepare_async_generate_content_advice(
                 telemetry_handler,
+                generate_content_config_key_allowlist,
+                instance,
+                model,
+                contents,
                 config,
             )
-            _, server_address = _get_client_info(instance)
-            invocation = telemetry_handler.inference(
-                provider=_determine_genai_system(instance),
-                request_model=model,
-                operation_name="generate_content",
-                server_address=server_address,
+            call_config = (
+                state.wrapped_config
+                if state is not None and state.has_wrapped_tools
+                else config
             )
-            invocation.attributes.update(
-                _get_extra_generate_content_attributes()
-            )
-            _apply_request_attributes(
-                wrapped_config,
-                generate_content_config_key_allowlist,
-                invocation,
-            )
-            invocation.tool_definitions = (
-                await _maybe_get_tool_definitions_async(wrapped_config)
-            )
-
-            if telemetry_handler.should_capture_content():
-                invocation.input_messages = to_input_messages(
-                    contents=transformers.t_contents(contents)
-                )
-                if wrapped_config.system_instruction:
-                    invocation.system_instruction = to_system_instructions(
-                        content=transformers.t_contents(
-                            wrapped_config.system_instruction
-                        )[0]
-                    )
             try:
                 stream = await wrapped(
                     model=model,
                     contents=contents,
-                    config=wrapped_config if has_wrapped_tools else config,
+                    config=call_config,
                     *_args,
                     **_kwargs,
                 )
-            except BaseException as exc:
-                invocation.fail(exc)
+            except BaseException as error:
+                if state is not None:
+                    _fail_generate_content_advice(state, error)
                 raise
-            return AsyncGenerateContentStreamWrapper(
-                stream,
-                invocation,
+            if state is None:
+                return stream
+            if not _detach_stream_context_advice(
                 telemetry_handler,
+                state,
+            ):
+                _abandon_generate_content_advice(
+                    telemetry_handler,
+                    state,
+                )
+                return stream
+            stream_wrapper = _wrap_generate_content_stream_advice(
+                stream,
+                state,
+                telemetry_handler,
+                asynchronous=True,
             )
+            if stream_wrapper is None:
+                _abandon_generate_content_advice(
+                    telemetry_handler,
+                    state,
+                )
+                return stream
+            return stream_wrapper
 
         return await _execute(*args, **kwargs)
 

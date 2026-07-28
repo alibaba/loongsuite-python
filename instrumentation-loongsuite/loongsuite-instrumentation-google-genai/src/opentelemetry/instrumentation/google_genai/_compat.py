@@ -47,6 +47,7 @@ from opentelemetry.util.genai.extended_types import (
 from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation as LegacyToolInvocation,
 )
+from opentelemetry.util.genai.handler import _safe_detach
 from opentelemetry.util.genai.span_utils import (
     _get_llm_common_attributes,
     _get_llm_request_attributes,
@@ -234,8 +235,10 @@ class InferenceInvocation(LLMInvocation, _InvocationLifecycle):
         self._finished = True
         if self.span is None:
             return
-        self._prepare_finish()
-        self._owner._handler.stop_llm(self)
+        try:
+            self._prepare_finish()
+        finally:
+            self._owner._handler.stop_llm(self)
 
     def fail(self, error: Error | BaseException) -> None:
         if self._finished:
@@ -243,10 +246,19 @@ class InferenceInvocation(LLMInvocation, _InvocationLifecycle):
         self._finished = True
         if self.span is None:
             return
-        if not isinstance(error, Error):
-            error = Error(message=str(error), type=type(error))
-        self._prepare_finish(error)
-        self._owner._handler.fail_llm(self, error)
+        converted_error: Error | None = None
+        try:
+            converted_error = (
+                error
+                if isinstance(error, Error)
+                else Error(message=str(error), type=type(error))
+            )
+            self._prepare_finish(converted_error)
+        finally:
+            if converted_error is None:
+                self._owner._handler.abandon_llm(self)
+            else:
+                self._owner._handler.fail_llm(self, converted_error)
 
 
 class EmbeddingInvocation(LegacyEmbeddingInvocation, _InvocationLifecycle):
@@ -271,14 +283,18 @@ class EmbeddingInvocation(LegacyEmbeddingInvocation, _InvocationLifecycle):
         self._finished = False
         self.metric_attributes: dict[str, Any] = {}
         if not _is_suppressed():
-            owner._handler.start_embedding(self)
+            try:
+                owner._handler.start_embedding(self)
+            except Exception:
+                owner.abandon_embedding(self)
+                raise
 
     def stop(self) -> None:
         if self._finished:
             return
         self._finished = True
         if self.span is not None:
-            self._owner._handler.stop_embedding(self)
+            self._owner._finish_embedding(self)
 
     def fail(self, error: Error | BaseException) -> None:
         if self._finished:
@@ -286,9 +302,18 @@ class EmbeddingInvocation(LegacyEmbeddingInvocation, _InvocationLifecycle):
         self._finished = True
         if self.span is None:
             return
-        if not isinstance(error, Error):
-            error = Error(message=str(error), type=type(error))
-        self._owner._handler.fail_embedding(self, error)
+        converted_error: Error | None = None
+        try:
+            converted_error = (
+                error
+                if isinstance(error, Error)
+                else Error(message=str(error), type=type(error))
+            )
+        finally:
+            if converted_error is None:
+                self._owner.abandon_embedding(self)
+            else:
+                self._owner._fail_embedding(self, converted_error)
 
 
 class ToolInvocation(LegacyToolInvocation, _InvocationLifecycle):
@@ -314,7 +339,11 @@ class ToolInvocation(LegacyToolInvocation, _InvocationLifecycle):
         self.should_capture_content_on_span = _captures_content_on_span()
         self.metric_attributes: dict[str, Any] = {}
         if not _is_suppressed():
-            owner._handler.start_execute_tool(self)
+            try:
+                owner._handler.start_execute_tool(self)
+            except Exception:
+                owner.abandon_tool(self)
+                raise
 
     @property
     def arguments(self) -> Any:
@@ -337,7 +366,7 @@ class ToolInvocation(LegacyToolInvocation, _InvocationLifecycle):
             return
         self._finished = True
         if self.span is not None:
-            self._owner._handler.stop_execute_tool(self)
+            self._owner._finish_tool(self)
 
     def fail(self, error: Error | BaseException) -> None:
         if self._finished:
@@ -345,9 +374,18 @@ class ToolInvocation(LegacyToolInvocation, _InvocationLifecycle):
         self._finished = True
         if self.span is None:
             return
-        if not isinstance(error, Error):
-            error = Error(message=str(error), type=type(error))
-        self._owner._handler.fail_execute_tool(self, error)
+        converted_error: Error | None = None
+        try:
+            converted_error = (
+                error
+                if isinstance(error, Error)
+                else Error(message=str(error), type=type(error))
+            )
+        finally:
+            if converted_error is None:
+                self._owner.abandon_tool(self)
+            else:
+                self._owner._fail_tool(self, converted_error)
 
 
 class TelemetryHandler:
@@ -429,6 +467,72 @@ class TelemetryHandler:
 
     def should_capture_content(self) -> bool:
         return _captures_content()
+
+    def detach_inference_context(
+        self, invocation: InferenceInvocation
+    ) -> None:
+        self._handler.detach_llm_context(invocation)
+
+    def abandon_inference(self, invocation: InferenceInvocation) -> None:
+        self._handler.abandon_llm(invocation)
+
+    def abandon_embedding(self, invocation: EmbeddingInvocation) -> None:
+        self._abandon_extended(invocation)
+
+    def abandon_tool(self, invocation: ToolInvocation) -> None:
+        self._abandon_extended(invocation)
+
+    @staticmethod
+    def _abandon_extended(invocation: Any) -> None:
+        token = invocation.context_token
+        invocation.context_token = None
+        try:
+            _safe_detach(token)
+        finally:
+            span = invocation.span
+            if span is not None and span.is_recording():
+                span.end()
+
+    def _finish_embedding(self, invocation: EmbeddingInvocation) -> None:
+        self._finalize_extended(
+            invocation,
+            self._handler.stop_embedding,
+        )
+
+    def _fail_embedding(
+        self, invocation: EmbeddingInvocation, error: Error
+    ) -> None:
+        self._finalize_extended(
+            invocation,
+            lambda current: self._handler.fail_embedding(current, error),
+        )
+
+    def _finish_tool(self, invocation: ToolInvocation) -> None:
+        self._finalize_extended(
+            invocation,
+            self._handler.stop_execute_tool,
+        )
+
+    def _fail_tool(self, invocation: ToolInvocation, error: Error) -> None:
+        self._finalize_extended(
+            invocation,
+            lambda current: self._handler.fail_execute_tool(current, error),
+        )
+
+    @staticmethod
+    def _finalize_extended(invocation: Any, callback: Any) -> None:
+        completed = False
+        token = invocation.context_token
+        try:
+            callback(invocation)
+            completed = True
+        finally:
+            invocation.context_token = None
+            if not completed:
+                _safe_detach(token)
+            span = invocation.span
+            if span is not None and span.is_recording():
+                span.end()
 
     def _create_event(
         self,

@@ -4,6 +4,7 @@
 import functools
 import inspect
 import json
+from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
 from google.genai.types import (
@@ -12,9 +13,16 @@ from google.genai.types import (
     ToolOrDict,
 )
 
-from ._compat import TelemetryHandler
+from opentelemetry.util.genai import hook_advice
+
+from ._compat import TelemetryHandler, ToolInvocation
 
 ToolFunction = Callable[..., Any]
+
+
+@dataclass
+class _ToolAdviceState:
+    invocation: ToolInvocation
 
 
 def _is_primitive(value):
@@ -67,6 +75,50 @@ def _get_function_args(wrapped_function, function_args, function_kwargs):
     return function_arg_attr
 
 
+@hook_advice("google-genai", "prepare_tool")
+def _prepare_tool_advice(
+    tool_function: ToolFunction,
+    telemetry_handler: TelemetryHandler,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> _ToolAdviceState:
+    invocation = None
+    try:
+        invocation = telemetry_handler.tool(
+            tool_function.__name__,
+            tool_description=tool_function.__doc__,
+        )
+        if invocation.should_capture_content_on_span:
+            invocation.arguments = json.dumps(
+                _get_function_args(tool_function, args, kwargs)
+            )
+        return _ToolAdviceState(invocation=invocation)
+    except Exception:
+        if invocation is not None:
+            telemetry_handler.abandon_tool(invocation)
+        raise
+
+
+@hook_advice("google-genai", "complete_tool")
+def _complete_tool_advice(
+    state: _ToolAdviceState,
+    result: Any,
+) -> None:
+    try:
+        if state.invocation.should_capture_content_on_span:
+            state.invocation.tool_result = json.dumps(_to_otel_value(result))
+    finally:
+        state.invocation.stop()
+
+
+@hook_advice("google-genai", "fail_tool")
+def _fail_tool_advice(
+    state: _ToolAdviceState,
+    error: BaseException,
+) -> None:
+    state.invocation.fail(error)
+
+
 def _wrap_tool_function(
     tool_function: ToolFunction,
     telemetry_handler: TelemetryHandler,
@@ -75,42 +127,39 @@ def _wrap_tool_function(
 
         @functools.wraps(tool_function)
         async def wrapped_function(*args, **kwargs):
-            # Always json.dumps. First we convert args / result to something that we can serialize, then we serialize.
-            # The return value of _to_otel_value could be a dict, which currently cannot be a span attribute..
-            # In the future that could change (see https://github.com/open-telemetry/opentelemetry-specification/pull/4485), and we could possibly stop using json.dumps here.
-            with telemetry_handler.tool(
-                tool_function.__name__,
-                tool_description=tool_function.__doc__,
-            ) as tool_invocation:
-                # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.arguments = json.dumps(
-                        _get_function_args(tool_function, args, kwargs)
-                    )
+            state = _prepare_tool_advice(
+                tool_function,
+                telemetry_handler,
+                args,
+                kwargs,
+            )
+            try:
                 result = await tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.tool_result = json.dumps(
-                        _to_otel_value(result)
-                    )
+            except BaseException as error:
+                if state is not None:
+                    _fail_tool_advice(state, error)
+                raise
+            if state is not None:
+                _complete_tool_advice(state, result)
             return result
     else:
 
         @functools.wraps(tool_function)
         def wrapped_function(*args, **kwargs):
-            with telemetry_handler.tool(
-                tool_function.__name__,
-                tool_description=tool_function.__doc__,
-            ) as tool_invocation:
-                # Do this before calling the tool in case that crashes.
-                if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.arguments = json.dumps(
-                        _get_function_args(tool_function, args, kwargs)
-                    )
+            state = _prepare_tool_advice(
+                tool_function,
+                telemetry_handler,
+                args,
+                kwargs,
+            )
+            try:
                 result = tool_function(*args, **kwargs)
-                if tool_invocation.should_capture_content_on_span:
-                    tool_invocation.tool_result = json.dumps(
-                        _to_otel_value(result)
-                    )
+            except BaseException as error:
+                if state is not None:
+                    _fail_tool_advice(state, error)
+                raise
+            if state is not None:
+                _complete_tool_advice(state, result)
             return result
 
     return wrapped_function
