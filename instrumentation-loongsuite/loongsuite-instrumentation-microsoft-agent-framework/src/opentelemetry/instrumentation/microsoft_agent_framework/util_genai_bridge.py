@@ -33,9 +33,15 @@ import weakref
 from time import perf_counter, time_ns
 from typing import Any, AsyncGenerator, Callable, Generator, Mapping, Optional
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import Span as OtelSpan
 from opentelemetry.trace import SpanKind
+
+try:
+    from aliyun.sdk.extension.arms.semconv import _SUPPRESS_LLM_SDK_KEY
+except ImportError:
+    _SUPPRESS_LLM_SDK_KEY = None
 
 try:
     from opentelemetry.util.genai.extended_span_utils import (
@@ -104,8 +110,11 @@ _original_activate_span: Any = None
 _original_get_function_span: Any = None
 _original_create_mcp_client_span: Any = None
 _original_tools_get_function_span: Any = None
+_original_tools_get_meter: Any = None
 _original_mcp_create_mcp_client_span: Any = None
 _original_agent_trace_invocation: Any = None
+_original_get_tracer: Any = None
+_original_get_meter: Any = None
 _legacy_response_stream_originals: dict[str, Any] = {}
 
 _FINALIZED_ATTR = "_loongsuite_util_genai_finalized"
@@ -124,7 +133,11 @@ def _mark_maf_live_span(span: OtelSpan | None) -> None:
         pass
 
 
-def apply_util_genai_bridge() -> None:
+def apply_util_genai_bridge(
+    *,
+    tracer_provider: Any = None,
+    meter_provider: Any = None,
+) -> None:
     """Patch MAF span helpers so GenAI spans are finalized by util-genai."""
     global _applied
     global _original_create_mcp_client_span
@@ -134,7 +147,10 @@ def apply_util_genai_bridge() -> None:
     global _original_get_span
     global _original_start_streaming_span
     global _original_tools_get_function_span
+    global _original_tools_get_meter
     global _original_agent_trace_invocation
+    global _original_get_tracer
+    global _original_get_meter
 
     if _applied:
         return
@@ -152,6 +168,8 @@ def apply_util_genai_bridge() -> None:
         logger.warning("MAF util-genai bridge skipped: %s", exc)
         return
 
+    _original_get_tracer = getattr(observability, "get_tracer", None)
+    _original_get_meter = getattr(observability, "get_meter", None)
     _original_get_span = getattr(observability, "_get_span", None)
     _original_start_streaming_span = getattr(
         observability, "_start_streaming_span", None
@@ -189,7 +207,21 @@ def apply_util_genai_bridge() -> None:
         if _original_create_mcp_client_span is not None
         else None
     )
+    wrapped_get_tracer = (
+        _wrap_provider_get_tracer(_original_get_tracer, tracer_provider)
+        if tracer_provider is not None and _original_get_tracer is not None
+        else None
+    )
+    wrapped_get_meter = (
+        _wrap_provider_get_meter(_original_get_meter, meter_provider)
+        if meter_provider is not None and _original_get_meter is not None
+        else None
+    )
 
+    if wrapped_get_tracer is not None:
+        observability.get_tracer = wrapped_get_tracer  # type: ignore[attr-defined]
+    if wrapped_get_meter is not None:
+        observability.get_meter = wrapped_get_meter  # type: ignore[attr-defined]
     if wrapped_get_span is not None:
         observability._get_span = wrapped_get_span  # type: ignore[attr-defined]
     if _original_start_streaming_span is not None:
@@ -219,10 +251,17 @@ def apply_util_genai_bridge() -> None:
         _original_tools_get_function_span = getattr(
             tools_mod, "get_function_span", None
         )
+        _original_tools_get_meter = getattr(tools_mod, "get_meter", None)
         if wrapped_get_function_span is not None:
             tools_mod.get_function_span = wrapped_get_function_span  # type: ignore[attr-defined]
+        if (
+            wrapped_get_meter is not None
+            and _original_tools_get_meter is not None
+        ):
+            tools_mod.get_meter = wrapped_get_meter  # type: ignore[attr-defined]
     except ImportError:
         _original_tools_get_function_span = None
+        _original_tools_get_meter = None
 
     try:
         import agent_framework._mcp as mcp_mod  # type: ignore
@@ -249,13 +288,20 @@ def revert_util_genai_bridge() -> None:
     global _original_get_span
     global _original_start_streaming_span
     global _original_tools_get_function_span
+    global _original_tools_get_meter
     global _original_agent_trace_invocation
+    global _original_get_tracer
+    global _original_get_meter
 
     if not _applied:
         return
     try:
         import agent_framework.observability as observability  # type: ignore
 
+        if _original_get_tracer is not None:
+            observability.get_tracer = _original_get_tracer  # type: ignore[attr-defined]
+        if _original_get_meter is not None:
+            observability.get_meter = _original_get_meter  # type: ignore[attr-defined]
         if _original_get_span is not None:
             observability._get_span = _original_get_span  # type: ignore[attr-defined]
         if _original_start_streaming_span is not None:
@@ -285,6 +331,8 @@ def revert_util_genai_bridge() -> None:
 
         if _original_tools_get_function_span is not None:
             tools_mod.get_function_span = _original_tools_get_function_span  # type: ignore[attr-defined]
+        if _original_tools_get_meter is not None:
+            tools_mod.get_meter = _original_tools_get_meter  # type: ignore[attr-defined]
     except ImportError:
         pass
     try:
@@ -304,8 +352,11 @@ def revert_util_genai_bridge() -> None:
     _original_get_function_span = None
     _original_create_mcp_client_span = None
     _original_tools_get_function_span = None
+    _original_tools_get_meter = None
     _original_mcp_create_mcp_client_span = None
     _original_agent_trace_invocation = None
+    _original_get_tracer = None
+    _original_get_meter = None
     _restore_legacy_response_stream()
 
 
@@ -602,6 +653,29 @@ def _activate_live_span(span: OtelSpan) -> Any:
     )
 
 
+@contextlib.contextmanager
+def _activate_non_streaming_span(
+    span: OtelSpan,
+    attributes: Mapping[Any, Any],
+) -> Generator[None, Any, Any]:
+    """Keep a MAF-owned non-streaming span current for the wrapped call."""
+    context = otel_trace.set_span_in_context(span, otel_context.get_current())
+    if (
+        _SUPPRESS_LLM_SDK_KEY is not None
+        and _mapping_value(attributes, GEN_AI_SPAN_KIND) == GenAISpanKind.LLM
+    ):
+        context = otel_context.set_value(
+            _SUPPRESS_LLM_SDK_KEY,
+            True,
+            context,
+        )
+    token = otel_context.attach(context)
+    try:
+        yield
+    finally:
+        otel_context.detach(token)
+
+
 def _wrap_get_span(original: Callable[..., Any]) -> Callable[..., Any]:
     @contextlib.contextmanager
     def _get_span(
@@ -614,10 +688,11 @@ def _wrap_get_span(original: Callable[..., Any]) -> Callable[..., Any]:
         )
         with span_cm as span:
             _mark_maf_live_span(span)
-            try:
-                yield span
-            finally:
-                _finalize_with_util_genai(span)
+            with _activate_non_streaming_span(span, bridge_attrs):
+                try:
+                    yield span
+                finally:
+                    _finalize_with_util_genai(span)
 
     return _get_span
 
@@ -747,6 +822,60 @@ def _wrap_create_mcp_client_span(
             yield span
 
     return _create_mcp_client_span
+
+
+def _wrap_provider_get_tracer(
+    original: Callable[..., Any], tracer_provider: Any
+) -> Callable[..., Any]:
+    """Route MAF's global-style tracer accessor to an explicit provider."""
+    signature = inspect.signature(original)
+
+    def _get_tracer(*args: Any, **kwargs: Any) -> Any:
+        bound = signature.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        name = bound.arguments.get(
+            "instrumenting_module_name", "agent_framework"
+        )
+        version = bound.arguments.get("instrumenting_library_version")
+        schema_url = bound.arguments.get("schema_url")
+        attributes = bound.arguments.get("attributes")
+        try:
+            return tracer_provider.get_tracer(
+                name,
+                version,
+                schema_url,
+                attributes,
+            )
+        except TypeError:
+            return tracer_provider.get_tracer(name, version, schema_url)
+
+    return _get_tracer
+
+
+def _wrap_provider_get_meter(
+    original: Callable[..., Any], meter_provider: Any
+) -> Callable[..., Any]:
+    """Route MAF's native metric instruments to an explicit provider."""
+    signature = inspect.signature(original)
+
+    def _get_meter(*args: Any, **kwargs: Any) -> Any:
+        bound = signature.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+        name = bound.arguments.get("name", "agent_framework")
+        version = bound.arguments.get("version")
+        schema_url = bound.arguments.get("schema_url")
+        attributes = bound.arguments.get("attributes")
+        try:
+            return meter_provider.get_meter(
+                name,
+                version,
+                schema_url,
+                attributes,
+            )
+        except TypeError:
+            return meter_provider.get_meter(name, version, schema_url)
+
+    return _get_meter
 
 
 def _current_span_context(

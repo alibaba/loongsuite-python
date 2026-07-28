@@ -18,7 +18,8 @@ This instrumentor enables MAF's built-in OTel telemetry (``enable_instrumentatio
 with ``force=True`` so a sticky user-disable does not block us), bridges MAF's
 native span helpers through ``opentelemetry-util-genai`` finish helpers, and
 registers :class:`~.span_processor.MAFSemanticProcessor` for workflow/MCP
-normalization plus metrics aggregation.
+normalization. Microsoft Agent Framework's native counter and histogram
+instruments remain the metric source.
 
 The optional ReAct step patch (``ARMS_MAF_REACT_STEP_ENABLED=true``) wraps the
 ``FunctionInvocationLayer.get_response`` ReAct loop with
@@ -42,9 +43,7 @@ from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.trace import get_tracer_provider
 
 from .config import (
-    get_slow_threshold_ms,
     is_instrumentation_enabled,
-    is_metrics_enabled,
     is_react_step_enabled,
     is_sensitive_data_enabled,
 )
@@ -116,20 +115,19 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         #    invocation finish helpers. This keeps MAF's span lifetime and
         #    streaming cleanup behavior, but writes AGENT/LLM/TOOL semantic
         #    attributes before span.end() creates the exporter snapshot.
-        apply_util_genai_bridge()
+        apply_util_genai_bridge(
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+        )
 
         # 3) Register the semantic SpanProcessor. MAF uses the standard OTel
         #    TracerProvider (it does not have its own multi-processor), so
         #    ``add_span_processor`` is the right hook.
-        processor = MAFSemanticProcessor(
-            meter_provider=meter_provider,
-            slow_threshold_ms=get_slow_threshold_ms(),
-            metrics_enabled=is_metrics_enabled(default=True),
-            capture_sensitive_data=sensitive,
-        )
+        processor = MAFSemanticProcessor(capture_sensitive_data=sensitive)
         try:
             tracer_provider.add_span_processor(processor)
         except Exception as exc:
+            revert_util_genai_bridge()
             logger.warning("add_span_processor failed: %s", exc)
             raise
 
