@@ -1,222 +1,269 @@
 # Copyright The OpenTelemetry Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Protocol-preserving wrappers for Google GenAI streaming responses."""
+# SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
 import logging
-import timeit
-from typing import Any
+from abc import ABCMeta, abstractmethod
+from inspect import isawaitable
+from types import TracebackType
+from typing import (
+    TYPE_CHECKING,
+    AsyncIterable,
+    Generic,
+    Iterable,
+    Literal,
+    Protocol,
+    TypeVar,
+)
 
-from opentelemetry.util.genai.types import Error, LLMInvocation
+if TYPE_CHECKING:
 
-from ._utils import ResponseAccumulator, apply_response
+    class _ObjectProxy:
+        def __init__(self, wrapped: object) -> None: ...
 
+else:
+    from wrapt import ObjectProxy as _ObjectProxy
+
+
+ChunkT = TypeVar("ChunkT")
+_ChunkT_co = TypeVar("_ChunkT_co", covariant=True)
 _logger = logging.getLogger(__name__)
 
 
-class _StreamLifecycle:
-    def __init__(self, stream: Any, invocation: LLMInvocation, handler: Any):
-        self._stream = stream
-        self._invocation = invocation
-        self._handler = handler
-        self._accumulator = ResponseAccumulator()
-        self._finished = False
-
-    def _observe(self, response: Any) -> None:
-        if self._invocation.monotonic_first_token_s is None:
-            self._invocation.monotonic_first_token_s = timeit.default_timer()
-        try:
-            apply_response(self._invocation, response)
-            self._accumulator.add(response)
-        except Exception as exc:  # telemetry must not affect the stream
-            _logger.debug(
-                "Failed to process Google GenAI stream chunk: %s", exc
-            )
-
-    def _finish_success(self) -> None:
-        if self._finished:
-            return
-        self._finished = True
-        output_messages = self._accumulator.output_messages()
-        if output_messages:
-            self._invocation.output_messages = output_messages
-        try:
-            self._handler.stop_llm(self._invocation)
-        except Exception as exc:
-            _logger.debug("Failed to finalize Google GenAI stream: %s", exc)
-
-    def _finish_error(self, error: BaseException) -> None:
-        if self._finished:
-            return
-        self._finished = True
-        output_messages = self._accumulator.output_messages()
-        if output_messages:
-            self._invocation.output_messages = output_messages
-        try:
-            self._handler.fail_llm(
-                self._invocation,
-                Error(message=str(error), type=type(error)),
-            )
-        except Exception as exc:
-            _logger.debug(
-                "Failed to report Google GenAI stream error: %s", exc
-            )
+class _StreamWrapperMeta(ABCMeta, type(_ObjectProxy)):
+    """Metaclass compatible with wrapt's proxy type and ABC hooks."""
 
 
-class SyncStreamWrapper(_StreamLifecycle):
-    def _close_underlying(self) -> None:
-        close = getattr(self._stream, "close", None)
-        if close is not None:
-            close()
+class _SyncStream(Iterable[_ChunkT_co], Protocol[_ChunkT_co]):
+    """Structural type for streams accepted by ``SyncStreamWrapper``."""
 
-    def __iter__(self):
-        return self
+    def close(self) -> None: ...
 
-    def __next__(self):
-        try:
-            response = next(self._stream)
-        except StopIteration:
-            self._finish_success()
-            raise
-        except BaseException as error:
-            self._finish_error(error)
-            raise
-        self._observe(response)
-        return response
 
-    def send(self, value):
-        try:
-            response = self._stream.send(value)
-        except StopIteration:
-            self._finish_success()
-            raise
-        except BaseException as error:
-            self._finish_error(error)
-            raise
-        self._observe(response)
-        return response
+class _AsyncStream(AsyncIterable[_ChunkT_co], Protocol[_ChunkT_co]):
+    """Structural type for streams accepted by ``AsyncStreamWrapper``."""
 
-    def throw(self, *args, **kwargs):
-        try:
-            response = self._stream.throw(*args, **kwargs)
-        except StopIteration:
-            self._finish_success()
-            raise
-        except BaseException as error:
-            self._finish_error(error)
-            raise
-        self._observe(response)
-        return response
 
-    def close(self) -> None:
-        try:
-            self._close_underlying()
-        except BaseException as error:
-            if not self._finished:
-                self._finish_error(error)
-            raise
-        self._finish_success()
+class SyncStreamWrapper(
+    _ObjectProxy,
+    Generic[ChunkT],
+    metaclass=_StreamWrapperMeta,
+):
+    """Base class for synchronous instrumented stream wrappers.
+
+    Subclass this when wrapping a provider SDK stream that is consumed with
+    normal iteration. The subclass should pass the SDK stream to
+    ``super().__init__(stream)`` and implement the three telemetry hooks:
+    ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for successful
+    finalization, and ``_on_stream_error`` for failure finalization.
+
+    Users should consume subclasses as normal streams, for example with
+    ``for chunk in wrapper`` or ``with wrapper``. The hook methods are called
+    internally by the wrapper lifecycle and are not part of the public API.
+    """
+
+    def __init__(self, stream: _SyncStream[ChunkT]):
+        super().__init__(stream)
+        self._self_stream = stream
+        self._self_iterator = iter(stream)
+        self._self_finalized = False
 
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        if exc_value is not None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        if exc_val is not None:
+            self._finalize_failure(exc_val)
             try:
-                self._close_underlying()
-            except BaseException as close_error:
+                self._self_stream.close()
+            except Exception:  # pylint: disable=broad-exception-caught
                 _logger.debug(
-                    "Failed to close Google GenAI stream after error: %s",
-                    close_error,
+                    "GenAI stream close error after user exception",
+                    exc_info=True,
                 )
-            finally:
-                self._finish_error(exc_value)
             return False
+
         self.close()
         return False
 
+    def close(self) -> None:
+        try:
+            self._self_stream.close()
+        except Exception as error:
+            self._finalize_failure(error)
+            raise
+        self._finalize_success()
 
-class AsyncStreamWrapper(_StreamLifecycle):
-    async def _close_underlying(self) -> None:
-        close = getattr(self._stream, "aclose", None)
-        if close is not None:
-            await close()
-
-    def __aiter__(self):
+    def __iter__(self):
+        # Override ``ObjectProxy.__iter__`` so iteration drives ``__next__``
+        # below and runs ``_process_chunk`` per chunk; otherwise iteration
+        # would be forwarded to the wrapped stream and bypass instrumentation.
         return self
 
-    async def __anext__(self):
+    def __next__(self) -> ChunkT:
         try:
-            response = await self._stream.__anext__()
-        except StopAsyncIteration:
-            self._finish_success()
+            chunk = next(self._self_iterator)
+        except StopIteration:
+            self._finalize_success()
             raise
-        except BaseException as error:
-            self._finish_error(error)
+        except Exception as error:
+            self._finalize_failure(error)
             raise
-        self._observe(response)
-        return response
+        self._process_chunk(chunk)
+        return chunk
 
-    async def asend(self, value):
-        try:
-            response = await self._stream.asend(value)
-        except StopAsyncIteration:
-            self._finish_success()
-            raise
-        except BaseException as error:
-            self._finish_error(error)
-            raise
-        self._observe(response)
-        return response
+    def _finalize_success(self) -> None:
+        if self._self_finalized:
+            return
+        self._self_finalized = True
+        self._on_stream_end()
 
-    async def athrow(self, *args, **kwargs):
-        try:
-            response = await self._stream.athrow(*args, **kwargs)
-        except StopAsyncIteration:
-            self._finish_success()
-            raise
-        except BaseException as error:
-            self._finish_error(error)
-            raise
-        self._observe(response)
-        return response
+    def _finalize_failure(self, error: BaseException) -> None:
+        if self._self_finalized:
+            return
+        self._self_finalized = True
+        self._on_stream_error(error)
 
-    async def aclose(self) -> None:
-        try:
-            await self._close_underlying()
-        except BaseException as error:
-            if not self._finished:
-                self._finish_error(error)
-            raise
-        self._finish_success()
+    @abstractmethod
+    def _process_chunk(self, chunk: ChunkT) -> None:
+        """Process one stream chunk for telemetry."""
+
+    @abstractmethod
+    def _on_stream_end(self) -> None:
+        """Finalize the stream successfully."""
+
+    @abstractmethod
+    def _on_stream_error(self, error: BaseException) -> None:
+        """Finalize the stream with failure."""
+
+
+class AsyncStreamWrapper(
+    _ObjectProxy,
+    Generic[ChunkT],
+    metaclass=_StreamWrapperMeta,
+):
+    """Base class for asynchronous instrumented stream wrappers.
+
+    Subclass this when wrapping a provider SDK stream that is consumed with
+    async iteration. The subclass should pass the SDK stream to
+    ``super().__init__(stream)`` and implement the three telemetry hooks:
+    ``_process_chunk`` for per-chunk state, ``_on_stream_end`` for successful
+    finalization, and ``_on_stream_error`` for failure finalization.
+
+    Users should consume subclasses as normal async streams, for example with
+    ``async for chunk in wrapper`` or ``async with wrapper``. The hook methods
+    remain synchronous telemetry hooks; async stream reads and close handling
+    are owned by this base class.
+    """
+
+    def __init__(self, stream: _AsyncStream[ChunkT]):
+        super().__init__(stream)
+        self._self_stream = stream
+        # LoongSuite supports Python 3.9, where aiter/anext are unavailable.
+        self._self_aiter = stream.__aiter__()
+        self._self_finalized = False
 
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        if exc_value is not None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        if exc_val is not None:
+            self._finalize_failure(exc_val)
             try:
-                await self._close_underlying()
-            except BaseException as close_error:
+                await self._close_wrapped_stream()
+            except Exception:  # pylint: disable=broad-exception-caught
                 _logger.debug(
-                    "Failed to close Google GenAI stream after error: %s",
-                    close_error,
+                    "GenAI stream close error after user exception",
+                    exc_info=True,
                 )
-            finally:
-                self._finish_error(exc_value)
             return False
-        await self.aclose()
+
+        await self.close()
         return False
+
+    async def close(self) -> None:
+        try:
+            await self._close_wrapped_stream()
+        except Exception as error:
+            self._finalize_failure(error)
+            _logger.debug(
+                "GenAI stream close error during close",
+                exc_info=True,
+            )
+            raise
+        self._finalize_success()
+
+    async def aclose(self) -> None:
+        """Close SDKs such as Google GenAI that expose ``aclose``."""
+
+        await self.close()
+
+    async def _close_wrapped_stream(self) -> None:
+        close = getattr(self._self_stream, "aclose", None)
+        if close is None:
+            close = getattr(self._self_stream, "close", None)
+        if close is None:
+            return
+        result = close()
+        if isawaitable(result):
+            await result
+
+    def __aiter__(self):
+        # Override ``ObjectProxy.__aiter__`` so iteration drives ``__anext__``
+        # below and runs ``_process_chunk`` per chunk; otherwise iteration
+        # would be forwarded to the wrapped stream and bypass instrumentation.
+        return self
+
+    async def __anext__(self) -> ChunkT:
+        try:
+            chunk = await self._self_aiter.__anext__()
+        except StopAsyncIteration:
+            self._finalize_success()
+            raise
+        except Exception as error:
+            self._finalize_failure(error)
+            raise
+
+        self._process_chunk(chunk)
+        return chunk
+
+    def _finalize_success(self) -> None:
+        if self._self_finalized:
+            return
+        self._self_finalized = True
+        self._on_stream_end()
+
+    def _finalize_failure(self, error: BaseException) -> None:
+        if self._self_finalized:
+            return
+        self._self_finalized = True
+        self._on_stream_error(error)
+
+    @abstractmethod
+    def _process_chunk(self, chunk: ChunkT) -> None:
+        """Process one stream chunk for telemetry."""
+
+    @abstractmethod
+    def _on_stream_end(self) -> None:
+        """Finalize the stream successfully."""
+
+    @abstractmethod
+    def _on_stream_error(self, error: BaseException) -> None:
+        """Finalize the stream with failure."""
+
+
+__all__ = [
+    "AsyncStreamWrapper",
+    "SyncStreamWrapper",
+]

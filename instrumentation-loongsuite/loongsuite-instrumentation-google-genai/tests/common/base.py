@@ -1,0 +1,84 @@
+# Copyright The OpenTelemetry Authors
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+import unittest
+from unittest.mock import patch
+
+import google.genai
+
+from .auth import FakeCredentials
+from .instrumentation_context import InstrumentationContext
+from .otel_mocker import OTelMocker
+
+
+class TestCase(unittest.TestCase):
+    def setUp(self):
+        self.env_patcher = patch.dict(
+            os.environ,
+            {
+                "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "SPAN_AND_EVENT",
+            },
+        )
+        self.env_patcher.start()
+        self._otel = OTelMocker()
+        self._otel.install()
+        self._instrumentation_context = None
+        self._api_key = "test-api-key"
+        self._project = "test-project"
+        self._location = "test-location"
+        self._client = None
+        self._uses_vertex = False
+        self._credentials = FakeCredentials()
+        self._instrumentor_args = {}
+
+    def tearDown(self):
+        if self._instrumentation_context is not None:
+            self._instrumentation_context.uninstall()
+            self._instrumentation_context = None
+        self._otel.uninstall()
+        self.env_patcher.stop()
+
+    def _lazy_init(self):
+        self._instrumentation_context = InstrumentationContext(
+            **self._instrumentor_args
+        )
+        self._instrumentation_context.install()
+
+    def set_instrumentor_constructor_kwarg(self, key, value):
+        self._instrumentor_args[key] = value
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = self._create_client()
+        return self._client
+
+    @property
+    def otel(self):
+        return self._otel
+
+    def set_use_vertex(self, use_vertex):
+        self._uses_vertex = use_vertex
+
+    def reset_client(self):
+        self._client = None
+
+    def reset_instrumentation(self):
+        if self._instrumentation_context is None:
+            return
+        self._instrumentation_context.uninstall()
+        self._instrumentation_context = None
+
+    def _create_client(self):
+        self._lazy_init()
+        if self._uses_vertex:
+            os.environ["GOOGLE_API_KEY"] = self._api_key
+            return google.genai.Client(
+                vertexai=True,
+                project=self._project,
+                location=self._location,
+                credentials=self._credentials,
+            )
+        return google.genai.Client(vertexai=False, api_key=self._api_key)

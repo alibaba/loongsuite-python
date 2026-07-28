@@ -30,9 +30,11 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import SpanKind
 
 _GENERATION_MODEL = "gemini-3.5-flash-lite"
 _EMBEDDING_MODEL = "gemini-embedding-001"
+_INTERACTIONS_MODEL = _GENERATION_MODEL
 
 pytestmark = pytest.mark.skipif(
     int(version("google-genai").split(".", maxsplit=1)[0]) < 2,
@@ -90,6 +92,22 @@ def _assert_embedding_telemetry(span_exporter, metric_reader):
     # OSS extended metrics intentionally cover LLM calls only. Embedding
     # metrics remain an enterprise extension, while the OSS span is complete.
     assert metric_reader.get_metrics_data() is None
+
+
+def _assert_interactions_telemetry(
+    span_exporter, metric_reader, *, streaming=False
+):
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    span = spans[0]
+    assert span.name == f"interactions.create {_INTERACTIONS_MODEL}"
+    assert span.attributes["gen_ai.operation.name"] == "interactions.create"
+    assert span.attributes["gen_ai.response.model"] == _INTERACTIONS_MODEL
+    assert span.attributes["gen_ai.usage.input_tokens"] > 0
+    assert span.attributes["gen_ai.usage.output_tokens"] > 0
+    if streaming:
+        assert span.attributes["gen_ai.response.time_to_first_token"] > 0
+    _assert_standard_metrics(metric_reader)
 
 
 def _assert_standard_metrics(metric_reader):
@@ -168,3 +186,83 @@ async def test_async_embed_content(client, telemetry):
     )
     assert len(response.embeddings[0].values) == 8
     _assert_embedding_telemetry(*telemetry)
+
+
+@pytest.mark.vcr
+def test_sync_interactions_create(client, telemetry):
+    response = client.interactions.create(
+        model=_INTERACTIONS_MODEL,
+        input="Reply with exactly: interaction ok",
+    )
+    assert response.id
+    _assert_interactions_telemetry(*telemetry)
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr
+async def test_async_interactions_create(client, telemetry):
+    response = await client.aio.interactions.create(
+        model=_INTERACTIONS_MODEL,
+        input="Reply with exactly: async interaction ok",
+    )
+    assert response.id
+    _assert_interactions_telemetry(*telemetry)
+
+
+@pytest.mark.vcr
+def test_sync_interactions_create_stream(client, telemetry):
+    events = list(
+        client.interactions.create(
+            model=_INTERACTIONS_MODEL,
+            input="Reply with exactly: interaction stream ok",
+            stream=True,
+        )
+    )
+    assert events[-1].interaction.id
+    _assert_interactions_telemetry(*telemetry, streaming=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.vcr
+async def test_async_interactions_create_stream(client, telemetry):
+    stream = await client.aio.interactions.create(
+        model=_INTERACTIONS_MODEL,
+        input="Reply with exactly: async interaction stream ok",
+        stream=True,
+    )
+    events = [event async for event in stream]
+    assert events[-1].interaction.id
+    _assert_interactions_telemetry(*telemetry, streaming=True)
+
+
+@pytest.mark.vcr
+def test_automatic_function_call(client, telemetry):
+    def get_temperature(city: str) -> str:
+        """Return the current temperature for a city."""
+
+        assert city
+        return "17 C"
+
+    response = client.models.generate_content(
+        model=_GENERATION_MODEL,
+        contents=(
+            "You must call get_temperature for Paris, then reply with only "
+            "the returned temperature."
+        ),
+        config=types.GenerateContentConfig(tools=[get_temperature]),
+    )
+    assert "17" in response.text
+
+    spans = telemetry[0].get_finished_spans()
+    tool_spans = [
+        span for span in spans if span.name == "execute_tool get_temperature"
+    ]
+    generation_spans = [
+        span
+        for span in spans
+        if span.name == f"generate_content {_GENERATION_MODEL}"
+    ]
+    assert len(tool_spans) == 1
+    assert tool_spans[0].kind is SpanKind.INTERNAL
+    assert generation_spans
+    _assert_standard_metrics(telemetry[1])

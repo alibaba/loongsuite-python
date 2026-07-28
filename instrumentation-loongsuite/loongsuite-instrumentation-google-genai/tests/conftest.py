@@ -21,7 +21,7 @@ import pytest
 
 _CASSETTES = Path(__file__).parent / "cassettes"
 _THOUGHT_SIGNATURE = re.compile(
-    rb'("(?:thoughtSignature|thought_signature)"\s*:\s*")[^"]+(")'
+    rb'("(?:thoughtSignature|thought_signature|signature)"\s*:\s*")[^"]+(")'
 )
 
 

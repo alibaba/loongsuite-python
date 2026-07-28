@@ -30,10 +30,12 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.trace import SpanKind
 
 _LIVE_TEST_ENV = "RUN_GOOGLE_GENAI_LIVE_TESTS"
 _DEFAULT_MODEL = "gemini-3.5-flash-lite"
 _EMBEDDING_MODEL = "gemini-embedding-001"
+_INTERACTIONS_MODEL = _DEFAULT_MODEL
 
 
 @pytest.mark.skipif(
@@ -72,6 +74,32 @@ def test_live_google_genai_all_instrumented_methods():
             contents="LoongSuite live sync embedding verification",
             config=types.EmbedContentConfig(output_dimensionality=8),
         )
+        sync_interaction = client.interactions.create(
+            model=_INTERACTIONS_MODEL,
+            input="Reply with exactly: live interaction OK",
+        )
+        sync_interaction_stream = list(
+            client.interactions.create(
+                model=_INTERACTIONS_MODEL,
+                input="Reply with exactly: live interaction stream OK",
+                stream=True,
+            )
+        )
+
+        def get_temperature(city: str) -> str:
+            """Return the current temperature for a city."""
+
+            assert city
+            return "17 C"
+
+        tool_response = client.models.generate_content(
+            model=model,
+            contents=(
+                "You must call get_temperature for Paris, then reply with "
+                "only the returned temperature."
+            ),
+            config=types.GenerateContentConfig(tools=[get_temperature]),
+        )
 
         async def run_async_methods():
             try:
@@ -89,13 +117,37 @@ def test_live_google_genai_all_instrumented_methods():
                     contents="LoongSuite live async embedding verification",
                     config=types.EmbedContentConfig(output_dimensionality=8),
                 )
-                return async_response, async_stream, async_embedding
+                async_interaction = await client.aio.interactions.create(
+                    model=_INTERACTIONS_MODEL,
+                    input="Reply with exactly: live async interaction OK",
+                )
+                interaction_stream = await client.aio.interactions.create(
+                    model=_INTERACTIONS_MODEL,
+                    input=(
+                        "Reply with exactly: live async interaction stream OK"
+                    ),
+                    stream=True,
+                )
+                async_interaction_stream = [
+                    event async for event in interaction_stream
+                ]
+                return (
+                    async_response,
+                    async_stream,
+                    async_embedding,
+                    async_interaction,
+                    async_interaction_stream,
+                )
             finally:
                 await client.aio.aclose()
 
-        async_response, async_stream, async_embedding = asyncio.run(
-            run_async_methods()
-        )
+        (
+            async_response,
+            async_stream,
+            async_embedding,
+            async_interaction,
+            async_interaction_stream,
+        ) = asyncio.run(run_async_methods())
     finally:
         client.close()
         instrumentor.uninstrument()
@@ -110,17 +162,32 @@ def test_live_google_genai_all_instrumented_methods():
     assert any(chunk.text for chunk in async_stream)
     assert len(sync_embedding.embeddings[0].values) == 8
     assert len(async_embedding.embeddings[0].values) == 8
+    assert sync_interaction.id
+    assert async_interaction.id
+    assert sync_interaction_stream[-1].interaction.id
+    assert async_interaction_stream[-1].interaction.id
+    assert "17" in tool_response.text
 
     spans = span_exporter.get_finished_spans()
-    assert len(spans) == 6
     generation_spans = [
         span for span in spans if span.name == f"generate_content {model}"
     ]
     embedding_spans = [
         span for span in spans if span.name == f"embeddings {_EMBEDDING_MODEL}"
     ]
-    assert len(generation_spans) == 4
+    interaction_spans = [
+        span
+        for span in spans
+        if span.name == f"interactions.create {_INTERACTIONS_MODEL}"
+    ]
+    tool_spans = [
+        span for span in spans if span.name == "execute_tool get_temperature"
+    ]
+    assert len(generation_spans) >= 5
     assert len(embedding_spans) == 2
+    assert len(interaction_spans) == 4
+    assert len(tool_spans) == 1
+    assert tool_spans[0].kind is SpanKind.INTERNAL
     assert all(
         span.attributes["gen_ai.response.id"] for span in generation_spans
     )
@@ -135,6 +202,20 @@ def test_live_google_genai_all_instrumented_methods():
     assert all(
         span.attributes["gen_ai.embeddings.dimension.count"] == 8
         for span in embedding_spans
+    )
+    assert all(
+        span.attributes["gen_ai.response.model"] == _INTERACTIONS_MODEL
+        for span in interaction_spans
+    )
+    streaming_spans = [
+        span
+        for span in generation_spans + interaction_spans
+        if "gen_ai.response.time_to_first_token" in span.attributes
+    ]
+    assert len(streaming_spans) == 4
+    assert all(
+        span.attributes["gen_ai.response.time_to_first_token"] > 0
+        for span in streaming_spans
     )
 
     metric_names = {
