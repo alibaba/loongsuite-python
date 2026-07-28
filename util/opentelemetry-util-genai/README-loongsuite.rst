@@ -439,6 +439,8 @@ Framework 探针若已声明对本包的依赖，会随探针一并安装；单�
 ``uploader_generation``，并在下次上传前通过 ``get_or_rebuild_uploader_pair()``
 热重建 uploader/pre-uploader。
 
+**可选上传记录**：``FsUploader`` 终态成功/失败时会调用全局 ``MultimodalUsageRecorder``（默认 no-op）。需要时可通过 ``set_multimodal_usage_recorder()`` 注册自定义实现。
+
 ------------------------------------------------------------------------
 5. 补充说明
 ------------------------------------------------------------------------

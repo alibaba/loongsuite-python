@@ -42,6 +42,10 @@ from opentelemetry.util.genai._multimodal_upload._base import (
     Uploader,
     UploadItem,
 )
+from opentelemetry.util.genai._multimodal_upload.usage_recorder import (
+    get_multimodal_usage_recorder,
+    provider_label_from_protocol,
+)
 from opentelemetry.util.genai.extended_environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_SSL_VERIFY,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH,
@@ -226,13 +230,20 @@ class FsUploader(Uploader):
 
         Returns False if the queue is full or uploader is shutting down.
         """
+        provider = self._provider_label()
+        recorder = get_multimodal_usage_recorder()
+
         if self._shutdown_event.is_set():
+            recorder.record_upload_error(provider=provider, reason="shutdown")
             return False
 
         # Validate parameters
         if item.data is None and item.source_uri is None:
             _logger.error(
                 "Either data or source_uri must be provided in UploadItem"
+            )
+            recorder.record_upload_error(
+                provider=provider, reason="invalid_item"
             )
             return False
 
@@ -252,6 +263,9 @@ class FsUploader(Uploader):
             # Check queue size limit
             if self._queue_count >= self._queue_capacity:
                 _logger.warning("upload queue full, dropping: %s", full_path)
+                recorder.record_upload_error(
+                    provider=provider, reason="queue_full"
+                )
                 return False
             # Check bytes limit
             if self._max_queue_bytes > 0 and content_size > 0:
@@ -265,6 +279,9 @@ class FsUploader(Uploader):
                         content_size,
                         self._max_queue_bytes,
                         full_path,
+                    )
+                    recorder.record_upload_error(
+                        provider=provider, reason="queue_bytes_limit"
                     )
                     return False
             self._queue_count += 1
@@ -373,10 +390,33 @@ class FsUploader(Uploader):
                 # executor might be shutting down
                 self._release_task(task)
 
+    def _provider_label(self) -> str:
+        return provider_label_from_protocol(self._protocol)
+
     def _do_upload(self, task: _Task) -> None:
         attempt = 0
         max_retries = self._max_upload_retries
         retry_delay = self._upload_retry_delay
+        terminal_recorded = False
+        provider = self._provider_label()
+        recorder = get_multimodal_usage_recorder()
+
+        def record_success() -> None:
+            nonlocal terminal_recorded
+            if terminal_recorded or task.content is None:
+                return
+            terminal_recorded = True
+            recorder.record_upload_success(
+                provider=provider,
+                content_bytes=len(task.content),
+            )
+
+        def record_error(reason: str) -> None:
+            nonlocal terminal_recorded
+            if terminal_recorded:
+                return
+            terminal_recorded = True
+            recorder.record_upload_error(provider=provider, reason=reason)
 
         try:
             # Check cache at the very beginning to avoid unnecessary download and upload
@@ -392,6 +432,7 @@ class FsUploader(Uploader):
                     _logger.warning(
                         "Failed to download, skip: %s", task.source_uri
                     )
+                    record_error("download_failed")
                     return
                 task.content = content
 
@@ -408,6 +449,7 @@ class FsUploader(Uploader):
             # Ensure content exists
             if task.content is None:
                 _logger.warning("No content for task: %s", task.path)
+                record_error("storage_error")
                 return
 
             while True:
@@ -426,6 +468,7 @@ class FsUploader(Uploader):
 
                     # mark cache
                     self._mark_uploaded(task.path)
+                    record_success()
                     return  # success
                 except (OSError, IOError, RuntimeError) as exc:
                     # OSError/IOError: File system error (network storage, local disk)
@@ -437,6 +480,7 @@ class FsUploader(Uploader):
                             attempt,
                             task.path,
                         )
+                        record_error("storage_error")
                         return
                     _logger.warning(
                         "upload attempt %d failed for %s: %s, retrying in %.1fs...",

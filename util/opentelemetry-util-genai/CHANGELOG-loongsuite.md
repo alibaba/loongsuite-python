@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add multimodal runtime config snapshot and generation-aware uploader hot-reload
   (`MultimodalRuntimeConfig`, `update_multimodal_runtime_config`,
   `get_or_rebuild_uploader_pair`).
+- Add optional `MultimodalUsageRecorder` hooks for `FsUploader` upload
+  success/error recording. Default is no-op.
 - Add `hook_advice` and `async_hook_advice` fail-open decorators for
   instrumentation-only logic, with explicit rejection of deferred generator
   lifecycles.
