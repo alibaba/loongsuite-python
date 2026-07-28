@@ -19,7 +19,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 from unittest import TestCase
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from opentelemetry.util.genai._multimodal_upload._base import (
     PreUploader,
@@ -259,175 +259,7 @@ def _fake_fs_entry_points(
     return fake_entry_points
 
 
-class TestRetiredPairShutdownWorker(TestCase):
-    def _reload_module(self):
-        module = reload_multimodal_upload_hook_module()
-        self.addCleanup(module._shutdown_retired_pair_worker_for_test)
-        return module
-
-    def test_empty_pair_does_not_start_worker(self):
-        module = self._reload_module()
-
-        module._schedule_retired_pair_shutdown((None, None))
-
-        self.assertIsNone(module._retired_pair_worker)
-
-    def test_reuses_single_worker_and_does_not_block_scheduler(self):
-        module = self._reload_module()
-        shutdown_started = threading.Event()
-        release_shutdown = threading.Event()
-        first_uploader = MagicMock(spec=Uploader)
-        first_pre_uploader = MagicMock(spec=PreUploader)
-        second_uploader = MagicMock(spec=Uploader)
-        second_pre_uploader = MagicMock(spec=PreUploader)
-        shutdown_order = []
-
-        def block_first_shutdown():
-            shutdown_order.append("first-pre")
-            shutdown_started.set()
-            release_shutdown.wait(timeout=5)
-
-        first_uploader.shutdown.side_effect = lambda: shutdown_order.append(
-            "first-uploader"
-        )
-        second_pre_uploader.shutdown.side_effect = lambda: (
-            shutdown_order.append("second-pre")
-        )
-        second_uploader.shutdown.side_effect = lambda: shutdown_order.append(
-            "second-uploader"
-        )
-        first_pre_uploader.shutdown.side_effect = block_first_shutdown
-        module._schedule_retired_pair_shutdown(
-            (first_uploader, first_pre_uploader)
-        )
-        self.assertTrue(shutdown_started.wait(timeout=5))
-        worker = module._retired_pair_worker
-        self.assertIsNotNone(worker)
-
-        module._schedule_retired_pair_shutdown(
-            (second_uploader, second_pre_uploader)
-        )
-
-        self.assertIs(module._retired_pair_worker, worker)
-        assert worker is not None
-        self.assertTrue(worker.is_alive())
-        second_pre_uploader.shutdown.assert_not_called()
-
-        release_shutdown.set()
-        module._retired_pair_queue.join()
-
-        first_pre_uploader.shutdown.assert_called_once_with()
-        first_uploader.shutdown.assert_called_once_with()
-        second_pre_uploader.shutdown.assert_called_once_with()
-        second_uploader.shutdown.assert_called_once_with()
-        self.assertEqual(
-            shutdown_order,
-            [
-                "first-pre",
-                "first-uploader",
-                "second-pre",
-                "second-uploader",
-            ],
-        )
-
-    def test_shutdown_failure_does_not_stop_later_cleanup(self):
-        module = self._reload_module()
-        first_uploader = MagicMock(spec=Uploader)
-        first_pre_uploader = MagicMock(spec=PreUploader)
-        second_uploader = MagicMock(spec=Uploader)
-        second_pre_uploader = MagicMock(spec=PreUploader)
-        first_pre_uploader.shutdown.side_effect = RuntimeError("boom")
-        first_uploader.shutdown.side_effect = RuntimeError("boom")
-
-        module._schedule_retired_pair_shutdown(
-            (first_uploader, first_pre_uploader)
-        )
-        module._schedule_retired_pair_shutdown(
-            (second_uploader, second_pre_uploader)
-        )
-        module._retired_pair_queue.join()
-
-        first_pre_uploader.shutdown.assert_called_once_with()
-        first_uploader.shutdown.assert_called_once_with()
-        second_pre_uploader.shutdown.assert_called_once_with()
-        second_uploader.shutdown.assert_called_once_with()
-
-    def test_after_fork_reset_discards_inherited_worker_state(self):
-        module = self._reload_module()
-        previous_queue = module._retired_pair_queue
-        previous_lock = module._retired_pair_worker_lock
-        module._retired_pair_worker = MagicMock(spec=threading.Thread)
-
-        module._reset_retired_pair_worker_after_fork()
-
-        self.assertIsNot(module._retired_pair_queue, previous_queue)
-        self.assertIsNot(module._retired_pair_worker_lock, previous_lock)
-        self.assertIsNone(module._retired_pair_worker)
-
-
 class TestUploaderPairHotReload(TestCase):
-    @patch.dict(
-        "os.environ",
-        {
-            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE: "both",
-            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER: "fs",
-            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER: "fs",
-            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH: "file:///tmp/mm",
-        },
-        clear=True,
-    )
-    def test_generation_churn_keeps_one_retirement_worker(self):
-        module = reload_multimodal_upload_hook_module()
-        self.addCleanup(module._shutdown_retired_pair_worker_for_test)
-        release_shutdown = threading.Event()
-        self.addCleanup(release_shutdown.set)
-        shutdown_started = threading.Event()
-        built_pairs = []
-
-        for index in range(21):
-            uploader = MagicMock(spec=Uploader, name=f"uploader-{index}")
-            pre_uploader = MagicMock(
-                spec=PreUploader, name=f"pre-uploader-{index}"
-            )
-            built_pairs.append((uploader, pre_uploader))
-
-        def block_first_retirement():
-            shutdown_started.set()
-            release_shutdown.wait(timeout=5)
-
-        built_pairs[0][1].shutdown.side_effect = block_first_retirement
-
-        with patch.object(
-            module,
-            "_load_pair_from_snapshot",
-            side_effect=built_pairs,
-        ):
-            module.get_or_rebuild_uploader_pair()
-            for generation in range(1, 21):
-                update_multimodal_runtime_config(
-                    storage_base_path=f"file:///tmp/mm-{generation}"
-                )
-                module.get_or_rebuild_uploader_pair()
-                if generation == 1:
-                    self.assertTrue(shutdown_started.wait(timeout=5))
-
-        retirement_threads = [
-            thread
-            for thread in threading.enumerate()
-            if thread.name == "multimodal-uploader-retire"
-        ]
-        self.assertEqual(retirement_threads, [module._retired_pair_worker])
-        self.assertEqual(module._retired_pair_queue.qsize(), 19)
-
-        release_shutdown.set()
-        module._retired_pair_queue.join()
-
-        for uploader, pre_uploader in built_pairs[:-1]:
-            pre_uploader.shutdown.assert_called_once_with()
-            uploader.shutdown.assert_called_once_with()
-        built_pairs[-1][0].shutdown.assert_not_called()
-        built_pairs[-1][1].shutdown.assert_not_called()
-
     @patch.dict(
         "os.environ",
         {
@@ -612,4 +444,3 @@ class TestUploaderPairHotReload(TestCase):
         self.assertIs(first[0], second[0])
         self.assertIs(first[1], second[1])
         self.assertEqual(load_calls["count"], 1)
-        self.assertIsNone(module._retired_pair_worker)

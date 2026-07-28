@@ -20,9 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Serialize retired multimodal uploader cleanup through one background worker
-  and keep the associated tests compatible with downstream Python 3.8
-  consumers.
+- Keep multimodal tests compatible with downstream Python 3.8 consumers.
 
 ## Version 0.7.0 (2026-07-03)
 

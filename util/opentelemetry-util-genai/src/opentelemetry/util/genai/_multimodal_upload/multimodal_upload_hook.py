@@ -16,8 +16,6 @@ from __future__ import annotations
 
 import inspect
 import logging
-import os
-import queue
 import threading
 from importlib import metadata
 from typing import Any, Callable, Optional, Protocol, runtime_checkable
@@ -46,14 +44,6 @@ _uploader_generation = -1
 _failed_generation = -1
 _building_generation = -1
 _uploader_pair_lock = threading.RLock()
-_retired_pair_queue: queue.Queue[
-    Optional[tuple[Optional[Uploader], Optional[PreUploader]]]
-] = queue.Queue()
-_retired_pair_worker: Optional[threading.Thread] = None
-_retired_pair_worker_lock = threading.Lock()
-_retired_pair_at_fork_registered = globals().get(
-    "_retired_pair_at_fork_registered", False
-)
 
 
 def _iter_entry_points(group: str) -> list[Any]:
@@ -119,89 +109,33 @@ def _is_complete_pair(
     return uploader is not None and pre_uploader is not None
 
 
-def _shutdown_retired_pair(
-    pair: tuple[Optional[Uploader], Optional[PreUploader]],
-) -> None:
-    uploader, pre_uploader = pair
-    try:
-        if pre_uploader is not None:
-            pre_uploader.shutdown()
-    except Exception:  # pylint: disable=broad-except
-        _logger.debug("Failed to shutdown retired pre-uploader", exc_info=True)
-    try:
-        if uploader is not None:
-            uploader.shutdown()
-    except Exception:  # pylint: disable=broad-except
-        _logger.debug("Failed to shutdown retired uploader", exc_info=True)
-
-
-def _retired_pair_worker_loop(
-    retired_pair_queue: queue.Queue[
-        Optional[tuple[Optional[Uploader], Optional[PreUploader]]]
-    ],
-) -> None:
-    while True:
-        pair = retired_pair_queue.get()
-        try:
-            if pair is None:
-                return
-            _shutdown_retired_pair(pair)
-        finally:
-            retired_pair_queue.task_done()
-
-
 def _schedule_retired_pair_shutdown(
     pair: tuple[Optional[Uploader], Optional[PreUploader]],
 ) -> None:
-    global _retired_pair_worker  # pylint: disable=global-statement
-
     uploader, pre_uploader = pair
     if uploader is None and pre_uploader is None:
         return
 
-    with _retired_pair_worker_lock:
-        if _retired_pair_worker is None or not _retired_pair_worker.is_alive():
-            _retired_pair_worker = threading.Thread(
-                target=_retired_pair_worker_loop,
-                args=(_retired_pair_queue,),
-                name="multimodal-uploader-retire",
-                daemon=True,
+    def _shutdown() -> None:
+        try:
+            if pre_uploader is not None:
+                pre_uploader.shutdown()
+        except Exception:  # pylint: disable=broad-except
+            _logger.debug(
+                "Failed to shutdown retired pre-uploader", exc_info=True
             )
-            _retired_pair_worker.start()
-        _retired_pair_queue.put(pair)
+        try:
+            if uploader is not None:
+                uploader.shutdown()
+        except Exception:  # pylint: disable=broad-except
+            _logger.debug("Failed to shutdown retired uploader", exc_info=True)
 
-
-def _reset_retired_pair_worker_after_fork() -> None:
-    global _retired_pair_queue  # pylint: disable=global-statement
-    global _retired_pair_worker  # pylint: disable=global-statement
-    global _retired_pair_worker_lock  # pylint: disable=global-statement
-
-    _retired_pair_queue = queue.Queue()
-    _retired_pair_worker = None
-    _retired_pair_worker_lock = threading.Lock()
-
-
-def _shutdown_retired_pair_worker_for_test(timeout: float = 5.0) -> None:
-    """Stop the daemon worker so module reloads do not leak test threads."""
-    global _retired_pair_queue  # pylint: disable=global-statement
-    global _retired_pair_worker  # pylint: disable=global-statement
-
-    with _retired_pair_worker_lock:
-        worker = _retired_pair_worker
-        if worker is None:
-            return
-        _retired_pair_queue.put(None)
-        worker.join(timeout=timeout)
-        if worker.is_alive():
-            raise RuntimeError("retired uploader shutdown worker did not stop")
-        if _retired_pair_worker is worker:
-            _retired_pair_queue = queue.Queue()
-            _retired_pair_worker = None
-
-
-if hasattr(os, "register_at_fork") and not _retired_pair_at_fork_registered:
-    os.register_at_fork(after_in_child=_reset_retired_pair_worker_after_fork)
-    _retired_pair_at_fork_registered = True
+    thread = threading.Thread(
+        target=_shutdown,
+        name="multimodal-uploader-retire",
+        daemon=True,
+    )
+    thread.start()
 
 
 def load_uploader_hook(
