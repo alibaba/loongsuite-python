@@ -206,7 +206,7 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
 
         Principle: Never block the user application.
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             return invocation
 
         # Record actual end time
@@ -227,7 +227,7 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         Similar to stop_llm but includes error handling.
         Principle: Never block the user application.
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             return invocation
 
         invocation.monotonic_end_s = timeit.default_timer()
