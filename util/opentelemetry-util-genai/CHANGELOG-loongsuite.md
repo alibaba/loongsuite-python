@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add optional `MultimodalUsageRecorder` hooks for `FsUploader` upload
   success/error recording. Default is no-op.
+- Add `hook_advice` and `async_hook_advice` fail-open decorators for
+  instrumentation-only logic, with explicit rejection of deferred generator
+  lifecycles.
 
 ## Version 0.7.0 (2026-07-03)
 
