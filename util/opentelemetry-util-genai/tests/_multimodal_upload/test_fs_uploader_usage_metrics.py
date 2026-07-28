@@ -18,7 +18,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -33,8 +33,8 @@ from opentelemetry.util.genai._multimodal_upload.usage_recorder import (
 
 @dataclass
 class RecordingUsageRecorder:
-    successes: List[tuple[str, int]] = field(default_factory=list)
-    errors: List[tuple[str, str]] = field(default_factory=list)
+    successes: List[Tuple[str, int]] = field(default_factory=list)
+    errors: List[Tuple[str, str]] = field(default_factory=list)
     success_event: threading.Event = field(default_factory=threading.Event)
     raise_on_success: bool = False
     raise_on_error: bool = False
@@ -352,7 +352,7 @@ def test_recorder_success_exception_does_not_retry_upload():
         path: str,
         content: bytes,
         content_type: Optional[str],
-        meta: Optional[dict[str, str]],
+        meta: Optional[Dict[str, str]],
     ) -> bool:
         write_calls["count"] += 1
         return original_write(path, content, content_type, meta)

@@ -63,6 +63,11 @@ def get_default_pre_uploader_hook_name() -> str:
 
 def reload_multimodal_upload_hook_module() -> ModuleType:
     """Reset runtime state and reload the hook module under current env."""
-    reset_multimodal_runtime_state_for_test()
     module = importlib.import_module(MULTIMODAL_UPLOAD_HOOK_MODULE)
+    stop_retired_worker = getattr(
+        module, "_shutdown_retired_pair_worker_for_test", None
+    )
+    if stop_retired_worker is not None:
+        stop_retired_worker()
+    reset_multimodal_runtime_state_for_test()
     return importlib.reload(module)

@@ -16,7 +16,7 @@
 
 import threading
 from dataclasses import dataclass, field
-from typing import Iterator, List
+from typing import Iterator, List, Tuple
 
 import pytest
 
@@ -29,8 +29,8 @@ from opentelemetry.util.genai._multimodal_upload.usage_recorder import (
 
 @dataclass
 class RecordingUsageRecorder:
-    successes: List[tuple[str, int]] = field(default_factory=list)
-    errors: List[tuple[str, str]] = field(default_factory=list)
+    successes: List[Tuple[str, int]] = field(default_factory=list)
+    errors: List[Tuple[str, str]] = field(default_factory=list)
 
     def record_upload_success(
         self, *, provider: str, content_bytes: int
