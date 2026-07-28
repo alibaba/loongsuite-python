@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Add multimodal runtime config snapshot and generation-aware uploader hot-reload.
 - Avoid import-time warnings when optional audio dependencies for PCM16-to-WAV conversion are not installed.
 - Guarantee idempotent LLM span/context cleanup when synchronous probe
   finalization fails, and allow a detached streaming span to finish in another

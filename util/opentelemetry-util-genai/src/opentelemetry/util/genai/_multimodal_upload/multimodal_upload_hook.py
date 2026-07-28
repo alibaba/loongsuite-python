@@ -14,15 +14,15 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
+import threading
 from importlib import metadata
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, runtime_checkable
 
-from opentelemetry.util._once import Once
-from opentelemetry.util.genai.utils import (  # pylint: disable=no-name-in-module
-    get_multimodal_pre_uploader_hook_name,
-    get_multimodal_upload_mode,
-    get_multimodal_uploader_hook_name,
+from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
+    MultimodalConfigSnapshot,
+    get_multimodal_config_snapshot,
 )
 
 from ._base import PreUploader, Uploader
@@ -40,7 +40,10 @@ _UPLOAD_MODE_NONE = "none"
 
 _uploader: Optional[Uploader] = None
 _pre_uploader: Optional[PreUploader] = None
-_load_once = Once()
+_uploader_generation = -1
+_failed_generation = -1
+_building_generation = -1
+_uploader_pair_lock = threading.RLock()
 
 
 def _iter_entry_points(group: str) -> list[Any]:
@@ -53,52 +56,113 @@ def _iter_entry_points(group: str) -> list[Any]:
 
 @runtime_checkable
 class UploaderHook(Protocol):
-    def __call__(self) -> Optional[Uploader]: ...
+    def __call__(
+        self,
+        snapshot: Optional[MultimodalConfigSnapshot] = None,
+    ) -> Optional[Uploader]: ...
 
 
 @runtime_checkable
 class PreUploaderHook(Protocol):
-    def __call__(self) -> Optional[PreUploader]: ...
+    def __call__(
+        self,
+        snapshot: Optional[MultimodalConfigSnapshot] = None,
+    ) -> Optional[PreUploader]: ...
+
+
+def _call_hook(
+    hook: Callable[..., Any],
+    snapshot: MultimodalConfigSnapshot,
+) -> Optional[object]:
+    try:
+        params = inspect.signature(hook).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if params:
+        return hook(snapshot)
+    return hook()
 
 
 def _load_by_name(
     *,
     hook_name: str,
     group: str,
+    snapshot: MultimodalConfigSnapshot,
 ) -> Optional[object]:
     for entry_point in _iter_entry_points(group):
         name = str(entry_point.name)
         if name != hook_name:
             continue
         try:
-            return entry_point.load()()
+            hook = entry_point.load()
+            return _call_hook(hook, snapshot)
         except Exception:  # pylint: disable=broad-except
             _logger.exception("%s hook %s configuration failed", group, name)
             return None
     return None
 
 
-def load_uploader_hook() -> Optional[Uploader]:
+def _is_complete_pair(
+    pair: tuple[Optional[Uploader], Optional[PreUploader]],
+) -> bool:
+    uploader, pre_uploader = pair
+    return uploader is not None and pre_uploader is not None
+
+
+def _schedule_retired_pair_shutdown(
+    pair: tuple[Optional[Uploader], Optional[PreUploader]],
+) -> None:
+    uploader, pre_uploader = pair
+    if uploader is None and pre_uploader is None:
+        return
+
+    def _shutdown() -> None:
+        try:
+            if pre_uploader is not None:
+                pre_uploader.shutdown()
+        except Exception:  # pylint: disable=broad-except
+            _logger.debug(
+                "Failed to shutdown retired pre-uploader", exc_info=True
+            )
+        try:
+            if uploader is not None:
+                uploader.shutdown()
+        except Exception:  # pylint: disable=broad-except
+            _logger.debug("Failed to shutdown retired uploader", exc_info=True)
+
+    thread = threading.Thread(
+        target=_shutdown,
+        name="multimodal-uploader-retire",
+        daemon=True,
+    )
+    thread.start()
+
+
+def load_uploader_hook(
+    snapshot: Optional[MultimodalConfigSnapshot] = None,
+) -> Optional[Uploader]:
     """Load multimodal uploader hook from entry points.
 
     Mechanism:
-    - read hook name from env var
-      `OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER`
+    - read hook name from runtime snapshot
+      (`otel.instrumentation.genai.multimodal.uploader`, default: ``fs``)
     - resolve hook factory from entry-point group
-      `opentelemetry_genai_multimodal_uploader`
-    - call zero-arg hook factory to build uploader instance
-    - validate returned object type (`Uploader`)
+      ``opentelemetry_genai_multimodal_uploader``
+    - call hook factory with snapshot (legacy zero-arg hooks still supported)
+    - validate returned object type (``Uploader``)
     """
-    upload_mode = get_multimodal_upload_mode()
-    if upload_mode == _UPLOAD_MODE_NONE:
+    cfg = snapshot or get_multimodal_config_snapshot()
+    if cfg.upload_mode == _UPLOAD_MODE_NONE:
         return None
 
-    hook_name = get_multimodal_uploader_hook_name()
+    hook_name = cfg.uploader_hook_name or None
     if not hook_name:
         return None
 
     uploader = _load_by_name(
-        hook_name=hook_name, group=_MULTIMODAL_UPLOADER_ENTRY_POINT_GROUP
+        hook_name=hook_name,
+        group=_MULTIMODAL_UPLOADER_ENTRY_POINT_GROUP,
+        snapshot=cfg,
     )
     if uploader is None:
         return None
@@ -109,28 +173,30 @@ def load_uploader_hook() -> Optional[Uploader]:
     return uploader
 
 
-def load_pre_uploader_hook() -> Optional[PreUploader]:
+def load_pre_uploader_hook(
+    snapshot: Optional[MultimodalConfigSnapshot] = None,
+) -> Optional[PreUploader]:
     """Load multimodal pre-uploader hook from entry points.
 
     Mechanism:
-    - read hook name from env var
-      `OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER`
-      (default: `fs`)
+    - read hook name from runtime snapshot
+      (`otel.instrumentation.genai.multimodal.pre-uploader`, default: ``fs``)
     - resolve hook factory from entry-point group
-      `opentelemetry_genai_multimodal_pre_uploader`
-    - call zero-arg hook factory to build pre-uploader instance
-    - validate returned object type (`PreUploader`)
+      ``opentelemetry_genai_multimodal_pre_uploader``
+    - call hook factory with snapshot (legacy zero-arg hooks still supported)
+    - validate returned object type (``PreUploader``)
     """
-    upload_mode = get_multimodal_upload_mode()
-    if upload_mode == _UPLOAD_MODE_NONE:
+    cfg = snapshot or get_multimodal_config_snapshot()
+    if cfg.upload_mode == _UPLOAD_MODE_NONE:
         return None
 
-    hook_name = get_multimodal_pre_uploader_hook_name()
+    hook_name = cfg.pre_uploader_hook_name or None
     if not hook_name:
         return None
     pre_uploader = _load_by_name(
         hook_name=hook_name,
         group=_MULTIMODAL_PRE_UPLOADER_ENTRY_POINT_GROUP,
+        snapshot=cfg,
     )
     if pre_uploader is None:
         return None
@@ -141,26 +207,100 @@ def load_pre_uploader_hook() -> Optional[PreUploader]:
     return pre_uploader
 
 
-def get_or_load_uploader_pair() -> tuple[
-    Optional[Uploader], Optional[PreUploader]
-]:
-    """Get lazily loaded singleton uploader/pre-uploader pair.
+def _load_pair_from_snapshot(
+    snapshot: MultimodalConfigSnapshot,
+) -> tuple[Optional[Uploader], Optional[PreUploader]]:
+    uploader = load_uploader_hook(snapshot)
+    pre_uploader = load_pre_uploader_hook(snapshot)
+    if uploader is None or pre_uploader is None:
+        return None, None
+    return uploader, pre_uploader
 
-    First call performs one-time loading; subsequent calls return cache.
-    If either side fails to load, both are downgraded to `(None, None)`.
+
+def _resolve_cached_uploader_pair(
+    generation: int,
+) -> tuple[bool, tuple[Optional[Uploader], Optional[PreUploader]]]:
+    """Return (resolved, pair). When resolved is True, pair is the final result."""
+    global _building_generation  # pylint: disable=global-statement
+
+    with _uploader_pair_lock:
+        if _failed_generation == generation:
+            return True, (None, None)
+        if (
+            _uploader_generation == generation
+            and _uploader is not None
+            and _pre_uploader is not None
+        ):
+            return True, (_uploader, _pre_uploader)
+        if _building_generation == generation:
+            return True, (None, None)
+        _building_generation = generation
+    return False, (None, None)
+
+
+def _commit_uploader_pair(
+    generation: int,
+    new_pair: tuple[Optional[Uploader], Optional[PreUploader]],
+) -> tuple[Optional[Uploader], Optional[PreUploader]]:
+    global _uploader  # pylint: disable=global-statement
+    global _pre_uploader  # pylint: disable=global-statement
+    global _uploader_generation  # pylint: disable=global-statement
+    global _failed_generation  # pylint: disable=global-statement
+    global _building_generation  # pylint: disable=global-statement
+
+    with _uploader_pair_lock:
+        _building_generation = -1
+
+        if get_multimodal_config_snapshot().uploader_generation != generation:
+            _schedule_retired_pair_shutdown(new_pair)
+            return None, None
+
+        if not _is_complete_pair(new_pair):
+            _failed_generation = generation
+            _logger.warning(
+                "Multimodal uploader pair build failed for generation %s; "
+                "uploads disabled until generation changes",
+                generation,
+            )
+            return None, None
+
+        old_pair = (_uploader, _pre_uploader)
+        _uploader, _pre_uploader = new_pair
+        _uploader_generation = generation
+        _schedule_retired_pair_shutdown(old_pair)
+        return _uploader, _pre_uploader
+
+
+def get_or_rebuild_uploader_pair(
+    snapshot: Optional[MultimodalConfigSnapshot] = None,
+) -> tuple[Optional[Uploader], Optional[PreUploader]]:
+    """Get or rebuild uploader/pre-uploader pair for the current generation.
+
+    Generation-aware hot reload:
+    - cache hit: return cached pair when ``uploader_generation`` unchanged
+    - cache miss: load a new pair outside the lock, then install atomically
+    - in-flight build: concurrent callers for the same generation get ``(None, None)``
+    - stale build: if generation advanced during load, discard the new pair
+    - failed generation: remember load failure and skip retry for that generation
     """
+    cfg = snapshot or get_multimodal_config_snapshot()
+    if cfg.upload_mode == _UPLOAD_MODE_NONE:
+        return None, None
 
-    def _load() -> None:
-        global _uploader  # pylint: disable=global-statement
-        global _pre_uploader  # pylint: disable=global-statement
-        _uploader = load_uploader_hook()
-        _pre_uploader = load_pre_uploader_hook()
-        if _uploader is None or _pre_uploader is None:
-            _uploader = None
-            _pre_uploader = None
+    generation = cfg.uploader_generation
+    resolved, pair = _resolve_cached_uploader_pair(generation)
+    if resolved:
+        return pair
 
-    _load_once.do_once(_load)
-    return _uploader, _pre_uploader
+    new_pair = _load_pair_from_snapshot(cfg)
+    return _commit_uploader_pair(generation, new_pair)
+
+
+def get_or_load_uploader_pair(
+    snapshot: Optional[MultimodalConfigSnapshot] = None,
+) -> tuple[Optional[Uploader], Optional[PreUploader]]:
+    """Backward-compatible alias for generation-aware pair loading."""
+    return get_or_rebuild_uploader_pair(snapshot)
 
 
 def get_uploader_pair() -> tuple[Optional[Uploader], Optional[PreUploader]]:
@@ -168,14 +308,18 @@ def get_uploader_pair() -> tuple[Optional[Uploader], Optional[PreUploader]]:
     return _uploader, _pre_uploader
 
 
-def get_or_load_uploader() -> Optional[Uploader]:
+def get_or_load_uploader(
+    snapshot: Optional[MultimodalConfigSnapshot] = None,
+) -> Optional[Uploader]:
     """Get uploader and trigger lazy loading when needed."""
-    return get_or_load_uploader_pair()[0]
+    return get_or_rebuild_uploader_pair(snapshot)[0]
 
 
-def get_or_load_pre_uploader() -> Optional[PreUploader]:
+def get_or_load_pre_uploader(
+    snapshot: Optional[MultimodalConfigSnapshot] = None,
+) -> Optional[PreUploader]:
     """Get pre-uploader and trigger lazy loading when needed."""
-    return get_or_load_uploader_pair()[1]
+    return get_or_rebuild_uploader_pair(snapshot)[1]
 
 
 def get_uploader() -> Optional[Uploader]:

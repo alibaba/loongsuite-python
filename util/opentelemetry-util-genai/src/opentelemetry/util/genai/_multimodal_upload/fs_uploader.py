@@ -64,10 +64,19 @@ def hash_content(content: bytes | str) -> str:
     return hashlib.sha256(content, usedforsecurity=False).hexdigest()
 
 
-def fs_uploader_hook() -> Optional[Uploader]:
-    """Create default FsUploader from environment variables."""
-    base_path = os.environ.get(
-        OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH
+def fs_uploader_hook(
+    snapshot: Optional[Any] = None,
+) -> Optional[Uploader]:
+    """Create default FsUploader from runtime snapshot."""
+    if snapshot is None:
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
+            get_multimodal_config_snapshot,
+        )
+
+        snapshot = get_multimodal_config_snapshot()
+
+    base_path = (
+        snapshot.effective_storage_base_path or snapshot.storage_base_path
     )
     if not base_path:
         _logger.warning(

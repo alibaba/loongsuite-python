@@ -28,6 +28,8 @@ from opentelemetry.util.genai.extended_environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH,
 )
 
+from .multimodal_test_helpers import reset_multimodal_runtime_state_for_test
+
 
 class TestDefaultHooks(TestCase):
     @patch.dict("os.environ", {}, clear=True)
@@ -50,8 +52,10 @@ class TestDefaultHooks(TestCase):
         clear=True,
     )
     def test_fs_uploader_hook_returns_uploader(self):
+        reset_multimodal_runtime_state_for_test()
         uploader = fs_uploader_hook()
         self.assertIsInstance(uploader, FsUploader)
+        assert uploader is not None
         uploader.shutdown(timeout=0.1)
 
     @patch.dict("os.environ", {}, clear=True)
@@ -74,6 +78,8 @@ class TestDefaultHooks(TestCase):
         clear=True,
     )
     def test_fs_pre_uploader_hook_returns_pre_uploader(self):
+        reset_multimodal_runtime_state_for_test()
         pre_uploader = fs_pre_uploader_hook()
         self.assertIsInstance(pre_uploader, MultimodalPreUploader)
+        assert pre_uploader is not None
         pre_uploader.shutdown(timeout=0.1)

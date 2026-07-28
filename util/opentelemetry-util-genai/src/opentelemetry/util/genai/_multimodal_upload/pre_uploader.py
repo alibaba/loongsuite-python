@@ -56,7 +56,6 @@ from opentelemetry.util.genai.extended_environment_variables import (
 from opentelemetry.util.genai.types import Base64Blob, Blob, Modality, Uri
 from opentelemetry.util.genai.utils import (  # pylint: disable=no-name-in-module
     get_multimodal_allowed_root_paths,
-    get_multimodal_storage_base_path,
     is_multimodal_audio_conversion_enabled,
     is_multimodal_download_enabled,
     is_multimodal_local_file_enabled,
@@ -144,7 +143,7 @@ class MultimodalPreUploader(PreUploader):
         self._active_tasks = 0
         self._active_cond = threading.Condition()
 
-        # Read multimodal upload configuration (static config, read once only)
+        # Bootstrap strategy fields from runtime snapshot at construction time.
         self._process_input = should_process_multimodal_input()
         self._process_output = should_process_multimodal_output()
         self._download_enabled = is_multimodal_download_enabled()
@@ -156,6 +155,9 @@ class MultimodalPreUploader(PreUploader):
         # Local file configuration
         self._local_file_enabled = is_multimodal_local_file_enabled()
         self._allowed_root_paths = get_multimodal_allowed_root_paths()
+        self._applied_strategy_version: int = (
+            self._read_applied_strategy_version()
+        )
 
         if self._local_file_enabled and not self._allowed_root_paths:
             _logger.warning(
@@ -1186,12 +1188,32 @@ class MultimodalPreUploader(PreUploader):
 
         return uris
 
+    @staticmethod
+    def _read_applied_strategy_version() -> int:
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
+            get_multimodal_config_snapshot,
+        )
+
+        return get_multimodal_config_snapshot().strategy_version
+
+    def _sync_strategy_from_snapshot(self, config_snapshot: Any) -> bool:
+        """Apply strategy fields when snapshot strategy_version changes."""
+        if config_snapshot.strategy_version != self._applied_strategy_version:
+            self._process_input = config_snapshot.process_input
+            self._process_output = config_snapshot.process_output
+            self._download_enabled = config_snapshot.download_enabled
+            self._local_file_enabled = config_snapshot.local_file_enabled
+            self._allowed_root_paths = list(config_snapshot.allowed_root_paths)
+            self._applied_strategy_version = config_snapshot.strategy_version
+        return self._process_input or self._process_output
+
     def pre_upload(  # pylint: disable=too-many-branches
         self,
         span_context: Optional[SpanContext],
         start_time_utc_nano: int,
         input_messages: Optional[List[Any]],
         output_messages: Optional[List[Any]],
+        config_snapshot: Optional[Any] = None,
     ) -> List[PreUploadItem]:
         """
         Preprocess multimodal data in messages:
@@ -1211,10 +1233,32 @@ class MultimodalPreUploader(PreUploader):
         """
         uploads: List[PreUploadItem] = []
 
-        # If not processing either, return directly (use config read in __init__)
-        if not self._process_input and not self._process_output:
+        if config_snapshot is None:
+            from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
+                get_multimodal_config_snapshot,
+            )
+
+            config_snapshot = get_multimodal_config_snapshot()
+
+        if not self._sync_strategy_from_snapshot(config_snapshot):
             return uploads
 
+        return self._pre_upload_with_current_config(
+            span_context,
+            start_time_utc_nano,
+            input_messages,
+            output_messages,
+            uploads,
+        )
+
+    def _pre_upload_with_current_config(
+        self,
+        span_context: Optional[SpanContext],
+        start_time_utc_nano: int,
+        input_messages: Optional[List[Any]],
+        output_messages: Optional[List[Any]],
+        uploads: List[PreUploadItem],
+    ) -> List[PreUploadItem]:
         trace_id: Optional[str] = None
         span_id: Optional[str] = None
         try:
@@ -1273,9 +1317,20 @@ class MultimodalPreUploader(PreUploader):
         return uploads
 
 
-def fs_pre_uploader_hook() -> Optional[PreUploader]:
-    """Create file-system pre-uploader from environment variables."""
-    base_path = get_multimodal_storage_base_path()
+def fs_pre_uploader_hook(
+    snapshot: Optional[Any] = None,
+) -> Optional[PreUploader]:
+    """Create file-system pre-uploader from runtime snapshot."""
+    if snapshot is None:
+        from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=import-outside-toplevel,no-name-in-module  # noqa: PLC0415
+            get_multimodal_config_snapshot,
+        )
+
+        snapshot = get_multimodal_config_snapshot()
+
+    base_path = (
+        snapshot.effective_storage_base_path or snapshot.storage_base_path
+    )
     if not base_path:
         _logger.warning(
             "%s is required but not set, multimodal pre-uploader disabled",
