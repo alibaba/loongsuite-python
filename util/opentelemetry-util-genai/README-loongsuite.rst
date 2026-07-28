@@ -414,6 +414,31 @@ Framework 探针若已声明对本包的依赖，会随探针一并安装；单�
 
 **自定义上传实现**：通过 ``pyproject.toml`` 中的 entry point ``opentelemetry_genai_multimodal_uploader``、``opentelemetry_genai_multimodal_pre_uploader`` 注册实现；本仓库默认提供 ``fs`` hook（见包内 ``pyproject.toml``）。
 
+**运行时动态配置**
+
+进程内维护一份多模态配置 snapshot（``MultimodalRuntimeConfig`` / ``MultimodalConfigSnapshot``）。启动时仍由上述环境变量完成 bootstrap；之后可通过公开 API 热更新，无需重启进程：
+
+::
+
+    from opentelemetry.util.genai._multimodal_upload import (
+        get_multimodal_config_snapshot,
+        update_multimodal_runtime_config,
+    )
+
+    update_multimodal_runtime_config(
+        upload_mode="both",
+        storage_base_path="file:///var/log/genai/multimodal",
+        uploader_hook_name="fs",
+        pre_uploader_hook_name="fs",
+    )
+    snapshot = get_multimodal_config_snapshot()
+
+策略字段（如 ``upload_mode``、``download_enabled``、``local_file_enabled``、
+``allowed_root_paths``）变更会递增 ``strategy_version``，立即作用于后续请求；
+构造字段（如 ``storage_base_path``、uploader/pre-uploader hook 名）变更会递增
+``uploader_generation``，并在下次上传前通过 ``get_or_rebuild_uploader_pair()``
+热重建 uploader/pre-uploader。
+
 ------------------------------------------------------------------------
 5. 补充说明
 ------------------------------------------------------------------------

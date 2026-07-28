@@ -22,10 +22,15 @@ from opentelemetry.util.genai._multimodal_upload._base import (
     Uploader,
     UploadItem,
 )
+from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
+    get_multimodal_config_snapshot,
+    update_multimodal_runtime_config,
+)
 from opentelemetry.util.genai._multimodal_upload.multimodal_upload_hook import (  # pylint: disable=no-name-in-module
     get_or_load_pre_uploader,
     get_or_load_uploader,
     get_or_load_uploader_pair,
+    get_or_rebuild_uploader_pair,
     get_pre_uploader,
     get_uploader,
     get_uploader_pair,
@@ -58,6 +63,9 @@ __all__ = [
     "get_or_load_uploader",
     "get_or_load_pre_uploader",
     "get_or_load_uploader_pair",
+    "get_or_rebuild_uploader_pair",
+    "get_multimodal_config_snapshot",
+    "update_multimodal_runtime_config",
     "get_uploader",
     "get_pre_uploader",
 ]
