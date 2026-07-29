@@ -21,7 +21,6 @@ import json
 import logging
 import timeit
 from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
-from contextvars import ContextVar
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
@@ -105,10 +104,6 @@ class AgentScopeV2Middleware(MiddlewareBase):
         self, handler: Callable[[], ExtendedTelemetryHandler | None]
     ) -> None:
         self._handler = handler
-        self._react_round: ContextVar[int] = ContextVar(
-            "loongsuite_agentscope_v2_react_round",
-            default=0,
-        )
 
     async def on_reply(
         self,
@@ -124,7 +119,6 @@ class AgentScopeV2Middleware(MiddlewareBase):
 
         invocation = _create_agent_invocation(agent, input_kwargs)
         handler.start_invoke_agent(invocation)
-        round_token = self._react_round.set(0)
         first_token_seen = False
         last_msg = None
         closed = False
@@ -152,7 +146,6 @@ class AgentScopeV2Middleware(MiddlewareBase):
             handler.stop_invoke_agent(invocation)
             closed = True
         finally:
-            self._react_round.reset(round_token)
             if not closed:
                 handler.stop_invoke_agent(invocation)
 
@@ -239,7 +232,7 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return
 
         tool_call = input_kwargs.get("tool_call")
-        react_invocation = ReactStepInvocation(round=self._next_react_round())
+        react_invocation = ReactStepInvocation(round=agent.state.cur_iter + 1)
         handler.start_react_step(react_invocation, context=get_current())
         invocation = ExecuteToolInvocation(
             tool_name=getattr(tool_call, "name", "unknown_tool"),
@@ -285,11 +278,6 @@ class AgentScopeV2Middleware(MiddlewareBase):
                 handler.stop_execute_tool(invocation)
             if not react_closed:
                 handler.stop_react_step(react_invocation)
-
-    def _next_react_round(self) -> int:
-        current = self._react_round.get() + 1
-        self._react_round.set(current)
-        return current
 
 
 def _create_agent_invocation(

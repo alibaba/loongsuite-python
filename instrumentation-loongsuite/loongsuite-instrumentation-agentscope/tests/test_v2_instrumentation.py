@@ -322,6 +322,116 @@ async def test_v2_streaming_model_call_captures_input_and_output_content(
     assert output_messages[0]["parts"][0]["content"] == "done"
 
 
+async def test_v2_reply_stream_survives_cross_task_heartbeat(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="cross_task_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    expected = Msg(
+        name="assistant",
+        role="assistant",
+        content=[TextBlock(text="done")],
+    )
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        yield expected
+
+    stream = middleware.on_reply(agent, {"inputs": []}, reply_handler)
+
+    assert await _heartbeat_next(stream) is expected
+    with pytest.raises(StopAsyncIteration):
+        await _heartbeat_next(stream)
+
+    agent_spans = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "invoke_agent",
+    )
+    assert len(agent_spans) == 1
+    assert agent_spans[0].status.status_code == StatusCode.UNSET
+
+
+async def test_v2_reply_stream_preserves_cross_task_business_error(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="cross_task_error_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    expected_error = RuntimeError("reply failed")
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        yield Msg(
+            name="assistant",
+            role="assistant",
+            content=[TextBlock(text="partial")],
+        )
+        raise expected_error
+
+    stream = middleware.on_reply(agent, {"inputs": []}, reply_handler)
+
+    await _heartbeat_next(stream)
+    with pytest.raises(RuntimeError, match="reply failed") as caught:
+        await _heartbeat_next(stream)
+
+    assert caught.value is expected_error
+    agent_spans = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "invoke_agent",
+    )
+    assert len(agent_spans) == 1
+    assert agent_spans[0].status.status_code == StatusCode.ERROR
+
+
+async def test_v2_reply_stream_preserves_cross_task_cancellation(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="cross_task_cancel_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    resumed = asyncio.Event()
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        yield Msg(
+            name="assistant",
+            role="assistant",
+            content=[TextBlock(text="partial")],
+        )
+        resumed.set()
+        await asyncio.Event().wait()
+
+    stream = middleware.on_reply(agent, {"inputs": []}, reply_handler)
+    await _heartbeat_next(stream)
+
+    pending_next = asyncio.create_task(_heartbeat_next(stream))
+    await asyncio.wait_for(resumed.wait(), timeout=1)
+    pending_next.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending_next
+
+    agent_spans = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "invoke_agent",
+    )
+    assert len(agent_spans) == 1
+    assert agent_spans[0].status.status_code == StatusCode.ERROR
+    assert agent_spans[0].attributes["error.type"] == "CancelledError"
+
+
 async def test_v2_tool_acting_hook(instrument, span_exporter):
     agent = Agent(
         name="tool_agent",
@@ -421,6 +531,7 @@ async def test_v2_react_many_tools_telemetry(instrument, span_exporter):
             del kwargs
             yield ToolResponse(content=[TextBlock(text=f"result {idx}")])
 
+        agent.state.cur_iter = idx - 1
         results = [
             item
             async for item in middleware.on_acting(
@@ -452,6 +563,52 @@ async def test_v2_react_many_tools_telemetry(instrument, span_exporter):
     }
     react_span_ids = {span.context.span_id for span in react_spans}
     assert {span.parent.span_id for span in tool_spans} == react_span_ids
+
+
+async def test_v2_react_concurrent_tools_share_agent_iteration(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="concurrent_tool_agent",
+        system_prompt="Use tools.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._acting_middlewares)
+    agent.state.cur_iter = 2
+
+    async def call_tool(idx: int):
+        tool_call = SimpleNamespace(
+            name=f"tool_{idx}",
+            id=f"tool-call-{idx}",
+            input=f'{{"idx": {idx}}}',
+        )
+
+        async def tool_handler(**kwargs):
+            del kwargs
+            await asyncio.sleep(0)
+            yield ToolResponse(content=[TextBlock(text=f"result {idx}")])
+
+        return [
+            item
+            async for item in middleware.on_acting(
+                agent,
+                {"tool_call": tool_call},
+                tool_handler,
+            )
+        ]
+
+    results = await asyncio.gather(*(call_tool(idx) for idx in range(4)))
+
+    assert all(results)
+    react_spans = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "react",
+    )
+    assert len(react_spans) == 4
+    assert {span.attributes["gen_ai.react.round"] for span in react_spans} == {
+        3
+    }
 
 
 @pytest.mark.vcr()
@@ -542,6 +699,15 @@ def _spans_by_operation(spans, operation_name):
         for span in spans
         if span.attributes.get("gen_ai.operation.name") == operation_name
     ]
+
+
+async def _heartbeat_next(stream):
+    """Advance an async generator in a fresh Task, like QwenPaw heartbeat."""
+
+    async def advance():
+        return await stream.__anext__()
+
+    return await asyncio.wait_for(asyncio.create_task(advance()), timeout=1)
 
 
 def _middleware(middlewares):

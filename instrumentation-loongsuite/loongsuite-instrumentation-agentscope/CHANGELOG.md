@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Derive AgentScope v2 ReAct rounds from the agent iteration state instead of
+  a `ContextVar` token that could fail when QwenPaw advances a reply stream
+  from different asyncio tasks.
 - Start AgentScope v2 streaming LLM spans before invoking the underlying model
   call so TTFT and stream lifecycle are recorded on the framework LLM span.
 - Capture AgentScope v2 string message content as text parts so LLM input and
