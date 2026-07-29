@@ -372,19 +372,17 @@ class TestUploaderPairHotReload(TestCase):
             )
             return FakeUploader(), FakePreUploader()
 
-        with (
-            patch.object(
-                module,
-                "_load_pair_from_snapshot",
-                side_effect=load_pair_and_bump_generation,
-            ),
-            patch.object(
+        with patch.object(
+            module,
+            "_load_pair_from_snapshot",
+            side_effect=load_pair_and_bump_generation,
+        ):
+            with patch.object(
                 module,
                 "_schedule_retired_pair_shutdown",
                 side_effect=track_shutdown,
-            ),
-        ):
-            uploader, pre_uploader = module.get_or_rebuild_uploader_pair()
+            ):
+                uploader, pre_uploader = module.get_or_rebuild_uploader_pair()
 
         self.assertIsNone(uploader)
         self.assertIsNone(pre_uploader)

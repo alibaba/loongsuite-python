@@ -1153,35 +1153,35 @@ class TestPreUploadLocalFile:
         relative_path = test_file.name
 
         # Aliyun Python Agent Extension: for compatibility with Python 3.8
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED": "true",
-                    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS": str(
-                        test_dir
-                    ),
-                },
-            ),
-            patch("os.getcwd", return_value=str(test_dir)),
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED": "true",
+                "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS": str(
+                    test_dir
+                ),
+            },
         ):
-            reset_multimodal_runtime_state_for_test()
-            pre_uploader = pre_uploader_factory()
-            # Test with simple filename (relative path)
-            part = Uri(
-                modality="image", mime_type="image/png", uri=relative_path
-            )
-            message = InputMessage(role="user", parts=[part])
+            with patch("os.getcwd", return_value=str(test_dir)):
+                reset_multimodal_runtime_state_for_test()
+                pre_uploader = pre_uploader_factory()
+                # Test with simple filename (relative path)
+                part = Uri(
+                    modality="image",
+                    mime_type="image/png",
+                    uri=relative_path,
+                )
+                message = InputMessage(role="user", parts=[part])
 
-            uploads = pre_uploader.pre_upload(
-                span_context=None,
-                start_time_utc_nano=1000000000000,
-                input_messages=[message],
-                output_messages=[],
-            )
+                uploads = pre_uploader.pre_upload(
+                    span_context=None,
+                    start_time_utc_nano=1000000000000,
+                    input_messages=[message],
+                    output_messages=[],
+                )
 
-            assert len(uploads) == 1
-            assert uploads[0].data == test_file.read_bytes()
+                assert len(uploads) == 1
+                assert uploads[0].data == test_file.read_bytes()
 
     @staticmethod
     def test_local_file_processing_disabled_by_default(pre_uploader_factory):

@@ -235,40 +235,40 @@ class TestAudioFormatDetection:
         caplog,
     ):
         """Missing optional audio libs should only log the actual conversion skip."""
-        with (
-            patch(
-                "opentelemetry.util.genai._multimodal_upload.pre_uploader._audio_libs_available",
-                False,
-            ),
-            patch(
+        with patch(
+            "opentelemetry.util.genai._multimodal_upload.pre_uploader._audio_libs_available",
+            False,
+        ):
+            with patch(
                 "opentelemetry.util.genai._multimodal_upload.pre_uploader.np",
                 None,
-            ),
-            patch(
-                "opentelemetry.util.genai._multimodal_upload.pre_uploader.sf",
-                None,
-            ),
-        ):
-            pre_uploader = MultimodalPreUploader(base_path="/tmp/test_upload")
-            part = Blob(
-                content=b"\x00\x01" * 1000,
-                mime_type="audio/pcm16",
-                modality="audio",
-            )
-            input_messages = [InputMessage(role="user", parts=[part])]
-
-            with caplog.at_level(
-                "WARNING",
-                logger=(
-                    "opentelemetry.util.genai._multimodal_upload.pre_uploader"
-                ),
             ):
-                uploads = pre_uploader.pre_upload(
-                    span_context=None,
-                    start_time_utc_nano=1000000000000000000,
-                    input_messages=input_messages,
-                    output_messages=None,
-                )
+                with patch(
+                    "opentelemetry.util.genai._multimodal_upload.pre_uploader.sf",
+                    None,
+                ):
+                    pre_uploader = MultimodalPreUploader(
+                        base_path="/tmp/test_upload"
+                    )
+                    part = Blob(
+                        content=b"\x00\x01" * 1000,
+                        mime_type="audio/pcm16",
+                        modality="audio",
+                    )
+                    input_messages = [InputMessage(role="user", parts=[part])]
+
+                    with caplog.at_level(
+                        "WARNING",
+                        logger=(
+                            "opentelemetry.util.genai._multimodal_upload.pre_uploader"
+                        ),
+                    ):
+                        uploads = pre_uploader.pre_upload(
+                            span_context=None,
+                            start_time_utc_nano=1000000000000000000,
+                            input_messages=input_messages,
+                            output_messages=None,
+                        )
 
         assert len(uploads) == 1
         assert uploads[0].content_type == "audio/pcm16"

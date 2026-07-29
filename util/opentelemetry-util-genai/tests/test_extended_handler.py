@@ -1863,40 +1863,40 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         async_inv.span = mock_span
         async_inv.input_messages = inv.input_messages
 
-        with (
-            patch.object(h1, "_upload_and_set_metadata") as mock_upload,
-            patch(
+        with patch.object(h1, "_upload_and_set_metadata") as mock_upload:
+            with patch(
                 "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
-            ),
-            patch(
-                "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
-            ),
-        ):
-            h1._async_stop_llm(
-                _MultimodalAsyncTask(
-                    invocation=async_inv, method="stop_llm", handler=h1
-                )
-            )
-            mock_upload.assert_called_once()
-            mock_span.end.assert_called_once()
+            ):
+                with patch(
+                    "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+                ):
+                    h1._async_stop_llm(
+                        _MultimodalAsyncTask(
+                            invocation=async_inv,
+                            method="stop_llm",
+                            handler=h1,
+                        )
+                    )
+                    mock_upload.assert_called_once()
+                    mock_span.end.assert_called_once()
 
         mock_span.reset_mock()
-        with (
-            patch.object(h2, "_upload_and_set_metadata") as mock_upload2,
-            patch(
+        with patch.object(h2, "_upload_and_set_metadata") as mock_upload2:
+            with patch(
                 "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
-            ),
-            patch(
-                "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
-            ),
-        ):
-            h2._async_stop_llm(
-                _MultimodalAsyncTask(
-                    invocation=async_inv, method="stop_llm", handler=h2
-                )
-            )
-            mock_upload2.assert_not_called()
-            mock_span.end.assert_called_once()
+            ):
+                with patch(
+                    "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+                ):
+                    h2._async_stop_llm(
+                        _MultimodalAsyncTask(
+                            invocation=async_inv,
+                            method="stop_llm",
+                            handler=h2,
+                        )
+                    )
+                    mock_upload2.assert_not_called()
+                    mock_span.end.assert_called_once()
 
     # ==================== process_multimodal_stop/fail Tests ====================
 
