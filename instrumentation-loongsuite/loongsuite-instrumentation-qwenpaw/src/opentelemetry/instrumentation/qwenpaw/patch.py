@@ -243,10 +243,15 @@ async def _entry_stream(
             _record_entry_output(state, item, output_mapper)
             yield item
     except GeneratorExit as exc:
+        token = _attach_entry(state)
         try:
             await _close_iterator(iterator)
+        except BaseException as close_error:
+            _finish_entry(state, close_error)
+            raise
         finally:
-            _finish_entry(state, exc)
+            _detach_entry(token)
+        _finish_entry(state, exc)
         raise
     except BaseException as exc:
         _finish_entry(state, exc)

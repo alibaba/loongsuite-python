@@ -20,8 +20,14 @@ import inspect
 import json
 import logging
 import timeit
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
-from dataclasses import asdict, is_dataclass
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Sequence,
+)
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 from agentscope.agent import Agent
@@ -30,13 +36,16 @@ from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatModelBase, ChatResponse
 from agentscope.tool import ToolResponse
 
-from opentelemetry.context import get_current
+from opentelemetry import context as otel_context
+from opentelemetry.context import Context, get_current
+from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation,
     InvokeAgentInvocation,
     ReactStepInvocation,
 )
+from opentelemetry.util.genai.handler import _safe_detach
 from opentelemetry.util.genai.types import (
     Error,
     FunctionToolDefinition,
@@ -57,6 +66,252 @@ _FIRST_TOKEN_EVENT_TYPES = {
     "thinking_block_delta",
     "tool_call_delta",
 }
+
+
+@dataclass
+class _AgentState:
+    handler: ExtendedTelemetryHandler
+    invocation: InvokeAgentInvocation
+    context: Context
+    first_token_seen: bool = False
+    last_msg: Msg | None = None
+    finalized: bool = False
+
+
+@dataclass
+class _ActingState:
+    handler: ExtendedTelemetryHandler
+    react_invocation: ReactStepInvocation
+    tool_invocation: ExecuteToolInvocation
+    react_context: Context
+    tool_context: Context
+    last_item: Any = None
+    tool_finalized: bool = False
+    react_finalized: bool = False
+
+
+def _abandon_invocation(invocation: Any) -> None:
+    token = invocation.context_token
+    invocation.context_token = None
+    _safe_detach(token)
+    span = invocation.span
+    if span is not None and span.is_recording():
+        span.end()
+
+
+@hook_advice("agentscope", "start_invoke_agent")
+def _start_agent(
+    handler: ExtendedTelemetryHandler,
+    invocation: InvokeAgentInvocation,
+) -> _AgentState:
+    """Start Agent, save its Context, then detach before yielding ownership."""
+
+    try:
+        handler.start_invoke_agent(invocation)
+        agent_context = get_current()
+    except Exception:
+        _abandon_invocation(invocation)
+        raise
+
+    token = invocation.context_token
+    invocation.context_token = None
+    _safe_detach(token)
+    return _AgentState(
+        handler=handler,
+        invocation=invocation,
+        context=agent_context,
+    )
+
+
+@hook_advice("agentscope", "attach_stream_context")
+def _attach_stream_context(context: Context) -> object:
+    return otel_context.attach(context)
+
+
+@hook_advice("agentscope", "detach_stream_context")
+def _detach_stream_context(token: object | None) -> None:
+    _safe_detach(token)
+
+
+@hook_advice("agentscope", "record_agent_chunk")
+def _record_agent_chunk(state: _AgentState, item: Any) -> None:
+    if not state.first_token_seen and _is_first_token_event(item):
+        state.invocation.monotonic_first_token_s = timeit.default_timer()
+        state.first_token_seen = True
+    if isinstance(item, Msg):
+        state.last_msg = item
+
+
+@hook_advice("agentscope", "finish_invoke_agent")
+def _finish_agent(
+    state: _AgentState,
+    error: BaseException | None = None,
+) -> None:
+    if state.finalized:
+        return
+    state.finalized = True
+
+    invocation = state.invocation
+    if state.last_msg is not None:
+        invocation.output_messages = [_message_to_output(state.last_msg)]
+        if state.last_msg.usage is not None:
+            invocation.input_tokens = state.last_msg.usage.input_tokens
+            invocation.output_tokens = state.last_msg.usage.output_tokens
+
+    token = None
+    span = invocation.span
+    try:
+        token = otel_context.attach(state.context)
+        invocation.context_token = token
+        if error is None or isinstance(error, GeneratorExit):
+            state.handler.stop_invoke_agent(invocation)
+        else:
+            state.handler.fail_invoke_agent(
+                invocation,
+                Error(
+                    message=str(error) or type(error).__name__,
+                    type=type(error),
+                ),
+            )
+    finally:
+        invocation.context_token = None
+        if span is not None and span.is_recording():
+            _safe_detach(token)
+            span.end()
+
+
+@hook_advice("agentscope", "start_acting")
+def _start_acting(
+    handler: ExtendedTelemetryHandler,
+    agent: Agent,
+    tool_call: Any,
+) -> _ActingState:
+    react_invocation = ReactStepInvocation(
+        round=getattr(
+            getattr(agent, "state", None),
+            "cur_iter",
+            0,
+        )
+        + 1
+    )
+    tool_invocation = ExecuteToolInvocation(
+        tool_name=getattr(tool_call, "name", "unknown_tool"),
+        tool_type="function",
+        tool_call_id=getattr(tool_call, "id", None),
+        tool_call_arguments=_loads_json(getattr(tool_call, "input", None)),
+        provider="agentscope",
+    )
+
+    try:
+        handler.start_react_step(react_invocation, context=get_current())
+        react_context = get_current()
+        handler.start_execute_tool(tool_invocation)
+        tool_context = get_current()
+    except Exception:
+        _abandon_invocation(tool_invocation)
+        _abandon_invocation(react_invocation)
+        raise
+
+    tool_token = tool_invocation.context_token
+    tool_invocation.context_token = None
+    _safe_detach(tool_token)
+    react_token = react_invocation.context_token
+    react_invocation.context_token = None
+    _safe_detach(react_token)
+    return _ActingState(
+        handler=handler,
+        react_invocation=react_invocation,
+        tool_invocation=tool_invocation,
+        react_context=react_context,
+        tool_context=tool_context,
+    )
+
+
+@hook_advice("agentscope", "finish_execute_tool")
+def _finish_tool(
+    state: _ActingState,
+    error: BaseException | None = None,
+) -> None:
+    if state.tool_finalized:
+        return
+    state.tool_finalized = True
+
+    invocation = state.tool_invocation
+    if error is None or isinstance(error, GeneratorExit):
+        if isinstance(state.last_item, ToolResponse):
+            invocation.tool_call_result = _jsonable(
+                _blocks_to_parts(state.last_item.content)
+            )
+        elif state.last_item is not None:
+            invocation.tool_call_result = str(state.last_item)
+
+    token = None
+    span = invocation.span
+    try:
+        token = otel_context.attach(state.tool_context)
+        invocation.context_token = token
+        if error is None or isinstance(error, GeneratorExit):
+            state.handler.stop_execute_tool(invocation)
+        else:
+            state.handler.fail_execute_tool(
+                invocation,
+                Error(
+                    message=str(error) or type(error).__name__,
+                    type=type(error),
+                ),
+            )
+    finally:
+        invocation.context_token = None
+        if span is not None and span.is_recording():
+            _safe_detach(token)
+            span.end()
+
+
+@hook_advice("agentscope", "finish_react_step")
+def _finish_react(
+    state: _ActingState,
+    error: BaseException | None = None,
+) -> None:
+    if state.react_finalized:
+        return
+    state.react_finalized = True
+
+    invocation = state.react_invocation
+    token = None
+    span = invocation.span
+    try:
+        token = otel_context.attach(state.react_context)
+        invocation.context_token = token
+        if error is None or isinstance(error, GeneratorExit):
+            invocation.finish_reason = "tool_calls"
+            state.handler.stop_react_step(invocation)
+        else:
+            state.handler.fail_react_step(
+                invocation,
+                Error(
+                    message=str(error) or type(error).__name__,
+                    type=type(error),
+                ),
+            )
+    finally:
+        invocation.context_token = None
+        if span is not None and span.is_recording():
+            _safe_detach(token)
+            span.end()
+
+
+def _finish_acting(
+    state: _ActingState,
+    error: BaseException | None = None,
+) -> None:
+    _finish_tool(state, error)
+    _finish_react(state, error)
+
+
+async def _close_iterator(iterator: AsyncIterator[Any]) -> None:
+    close = getattr(iterator, "aclose", None)
+    if close is not None:
+        await close()
 
 
 def append_loongsuite_middleware(
@@ -118,36 +373,52 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return
 
         invocation = _create_agent_invocation(agent, input_kwargs)
-        handler.start_invoke_agent(invocation)
-        first_token_seen = False
-        last_msg = None
-        closed = False
+        state = _start_agent(handler, invocation)
         try:
-            async for item in next_handler(**input_kwargs):
-                if not first_token_seen and _is_first_token_event(item):
-                    invocation.monotonic_first_token_s = timeit.default_timer()
-                    first_token_seen = True
-                if isinstance(item, Msg):
-                    last_msg = item
-                yield item
+            business_stream = next_handler(**input_kwargs)
+            iterator = business_stream.__aiter__()
         except BaseException as exc:
-            handler.fail_invoke_agent(
-                invocation,
-                Error(message=str(exc) or type(exc).__name__, type=type(exc)),
-            )
-            closed = True
+            if state is not None:
+                _finish_agent(state, exc)
             raise
-        else:
-            if last_msg is not None:
-                invocation.output_messages = [_message_to_output(last_msg)]
-                if last_msg.usage is not None:
-                    invocation.input_tokens = last_msg.usage.input_tokens
-                    invocation.output_tokens = last_msg.usage.output_tokens
-            handler.stop_invoke_agent(invocation)
-            closed = True
+        if state is None:
+            try:
+                async for item in iterator:
+                    yield item
+            except GeneratorExit:
+                await _close_iterator(iterator)
+                raise
+            return
+
+        try:
+            while True:
+                token = _attach_stream_context(state.context)
+                try:
+                    item = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    _detach_stream_context(token)
+
+                _record_agent_chunk(state, item)
+                yield item
+        except GeneratorExit as exc:
+            token = _attach_stream_context(state.context)
+            try:
+                await _close_iterator(iterator)
+            except BaseException as close_error:
+                _finish_agent(state, close_error)
+                raise
+            finally:
+                _detach_stream_context(token)
+            _finish_agent(state, exc)
+            raise
+        except BaseException as exc:
+            _finish_agent(state, exc)
+            raise
         finally:
-            if not closed:
-                handler.stop_invoke_agent(invocation)
+            if not state.finalized:
+                _finish_agent(state)
 
     async def on_model_call(
         self,
@@ -232,59 +503,52 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return
 
         tool_call = input_kwargs.get("tool_call")
-        react_invocation = ReactStepInvocation(
-            round=getattr(
-                getattr(agent, "state", None),
-                "cur_iter",
-                0,
-            )
-            + 1
-        )
-        handler.start_react_step(react_invocation, context=get_current())
-        invocation = ExecuteToolInvocation(
-            tool_name=getattr(tool_call, "name", "unknown_tool"),
-            tool_type="function",
-            tool_call_id=getattr(tool_call, "id", None),
-            tool_call_arguments=_loads_json(getattr(tool_call, "input", None)),
-            provider="agentscope",
-        )
-        handler.start_execute_tool(invocation)
-        last_item = None
-        tool_closed = False
-        react_closed = False
+        state = _start_acting(handler, agent, tool_call)
         try:
-            async for item in next_handler(**input_kwargs):
-                last_item = item
-                yield item
+            business_stream = next_handler(**input_kwargs)
+            iterator = business_stream.__aiter__()
         except BaseException as exc:
-            error = Error(
-                message=str(exc) or type(exc).__name__, type=type(exc)
-            )
-            handler.fail_execute_tool(
-                invocation,
-                error,
-            )
-            tool_closed = True
-            handler.fail_react_step(react_invocation, error)
-            react_closed = True
+            if state is not None:
+                _finish_acting(state, exc)
             raise
-        else:
-            if isinstance(last_item, ToolResponse):
-                invocation.tool_call_result = _jsonable(
-                    _blocks_to_parts(last_item.content)
-                )
-            elif last_item is not None:
-                invocation.tool_call_result = str(last_item)
-            handler.stop_execute_tool(invocation)
-            tool_closed = True
-            react_invocation.finish_reason = "tool_calls"
-            handler.stop_react_step(react_invocation)
-            react_closed = True
+        if state is None:
+            try:
+                async for item in iterator:
+                    yield item
+            except GeneratorExit:
+                await _close_iterator(iterator)
+                raise
+            return
+
+        try:
+            while True:
+                token = _attach_stream_context(state.tool_context)
+                try:
+                    item = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    _detach_stream_context(token)
+
+                state.last_item = item
+                yield item
+        except GeneratorExit as exc:
+            token = _attach_stream_context(state.tool_context)
+            try:
+                await _close_iterator(iterator)
+            except BaseException as close_error:
+                _finish_acting(state, close_error)
+                raise
+            finally:
+                _detach_stream_context(token)
+            _finish_acting(state, exc)
+            raise
+        except BaseException as exc:
+            _finish_acting(state, exc)
+            raise
         finally:
-            if not tool_closed:
-                handler.stop_execute_tool(invocation)
-            if not react_closed:
-                handler.stop_react_step(react_invocation)
+            if not state.tool_finalized or not state.react_finalized:
+                _finish_acting(state)
 
 
 def _create_agent_invocation(

@@ -22,7 +22,19 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip(
+    "opentelemetry.instrumentation.agentscope._v2_middleware",
+    reason="QwenPaw 2 runtime tests require AgentScope v2 instrumentation",
+)
+
+from agentscope.message import TextBlock
+from agentscope.model import ChatModelBase, ChatResponse
+from agentscope.tool import ToolResponse
+
 from opentelemetry import trace
+from opentelemetry.instrumentation.agentscope._v2_middleware import (
+    AgentScopeV2Middleware,
+)
 from opentelemetry.instrumentation.qwenpaw import QwenPawInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
@@ -493,6 +505,137 @@ async def test_runtime_aclose_closes_business_stream_once(
 
 
 @pytest.mark.asyncio
+async def test_runtime_aclose_preserves_agentscope_tree_and_success_status(
+    runtime_module,
+    tracer_provider,
+    span_exporter,
+    monkeypatch,
+    caplog,
+):
+    caplog.set_level("DEBUG", logger="opentelemetry.util.genai.handler")
+    model = object.__new__(ChatModelBase)
+    model.model = "test-model"
+    model.parameters = None
+    agent = SimpleNamespace(
+        name="combined-agent",
+        model=model,
+        state=SimpleNamespace(cur_iter=0, session_id="combined-session"),
+        _system_prompt="Use the tool.",
+    )
+    tool_call = SimpleNamespace(
+        name="successful_tool",
+        id="tool-call-combined",
+        input="{}",
+    )
+    agent_middleware = None
+
+    async def model_handler(**kwargs):
+        del kwargs
+        return ChatResponse(
+            content=[TextBlock(text="Use the tool.")],
+            is_last=True,
+        )
+
+    async def tool_handler(**kwargs):
+        del kwargs
+        yield ToolResponse(content=[TextBlock(text="success")])
+        yield ToolResponse(content=[TextBlock(text="unused")])
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        assert agent_middleware is not None
+        await agent_middleware.on_model_call(
+            agent,
+            {
+                "current_model": model,
+                "messages": [],
+            },
+            model_handler,
+        )
+        acting_stream = agent_middleware.on_acting(
+            agent,
+            {"tool_call": tool_call},
+            tool_handler,
+        )
+        try:
+            async for item in acting_stream:
+                yield item
+        except GeneratorExit:
+            await acting_stream.aclose()
+            raise
+
+    async def fake_run(self, request):
+        del self, request
+        assert agent_middleware is not None
+        reply_stream = agent_middleware.on_reply(
+            agent,
+            {"inputs": []},
+            reply_handler,
+        )
+        try:
+            async for item in reply_stream:
+                yield item
+        except GeneratorExit:
+            await reply_stream.aclose()
+            raise
+
+    monkeypatch.setattr(runtime_module.Runtime, "run", fake_run)
+    instrumentor = _instrument(tracer_provider)
+    monkeypatch.setattr(
+        instrumentor._handler,
+        "process_multimodal_stop",
+        lambda *args, **kwargs: False,
+    )
+    agent_middleware = AgentScopeV2Middleware(lambda: instrumentor._handler)
+    try:
+        stream = _runtime(runtime_module).run(
+            _request("combined-runtime-close")
+        )
+        first = await asyncio.create_task(stream.__anext__())
+        assert isinstance(first, ToolResponse)
+        await asyncio.create_task(stream.aclose())
+    finally:
+        instrumentor.uninstrument()
+
+    spans = span_exporter.get_finished_spans()
+    [entry] = _entry_spans(span_exporter)
+    [agent_span] = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == "invoke_agent"
+    ]
+    [llm_span] = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == "chat"
+    ]
+    [react_span] = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == "react"
+    ]
+    [tool_span] = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == "execute_tool"
+    ]
+
+    assert agent_span.parent.span_id == entry.context.span_id
+    assert llm_span.parent.span_id == agent_span.context.span_id
+    assert react_span.parent.span_id == agent_span.context.span_id
+    assert tool_span.parent.span_id == react_span.context.span_id
+    for span in (entry, agent_span, llm_span, react_span, tool_span):
+        assert span.status.status_code.name == "UNSET"
+        assert "error.type" not in span.attributes
+    assert not any(
+        "Context detach failed" in record.getMessage()
+        or "Failed to detach context" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not trace.get_current_span().get_span_context().is_valid
+
+
+@pytest.mark.asyncio
 async def test_runtime_aclose_error_still_finishes_entry(
     runtime_module,
     tracer_provider,
@@ -522,4 +665,6 @@ async def test_runtime_aclose_error_still_finishes_entry(
     finally:
         instrumentor.uninstrument()
 
-    assert len(_entry_spans(span_exporter)) == 1
+    [entry] = _entry_spans(span_exporter)
+    assert entry.status.status_code.name == "ERROR"
+    assert entry.attributes["error.type"] == "ValueError"

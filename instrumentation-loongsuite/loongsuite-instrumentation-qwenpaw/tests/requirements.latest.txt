@@ -23,5 +23,6 @@ opentelemetry-sdk
 opentelemetry-semantic-conventions
 opentelemetry-instrumentation
 
+-e instrumentation-loongsuite/loongsuite-instrumentation-agentscope
 -e instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw
 -e util/opentelemetry-util-genai

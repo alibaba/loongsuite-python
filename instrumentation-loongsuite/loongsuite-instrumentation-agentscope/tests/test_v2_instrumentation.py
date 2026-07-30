@@ -324,6 +324,7 @@ async def test_v2_streaming_model_call_captures_input_and_output_content(
 
 async def test_v2_reply_stream_survives_cross_task_heartbeat(
     instrument,
+    tracer_provider,
     span_exporter,
 ):
     agent = Agent(
@@ -332,6 +333,10 @@ async def test_v2_reply_stream_survives_cross_task_heartbeat(
         model=_make_model(stream=False),
     )
     middleware = _middleware(agent._reply_middlewares)
+    child_tracer = trace_api.get_tracer(
+        "agentscope-cross-task-test",
+        tracer_provider=tracer_provider,
+    )
     expected = Msg(
         name="assistant",
         role="assistant",
@@ -340,6 +345,8 @@ async def test_v2_reply_stream_survives_cross_task_heartbeat(
 
     async def reply_handler(**kwargs):
         del kwargs
+        with child_tracer.start_as_current_span("reply-child"):
+            pass
         yield expected
 
     stream = middleware.on_reply(agent, {"inputs": []}, reply_handler)
@@ -354,6 +361,13 @@ async def test_v2_reply_stream_survives_cross_task_heartbeat(
     )
     assert len(agent_spans) == 1
     assert agent_spans[0].status.status_code == StatusCode.UNSET
+    [child_span] = [
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.name == "reply-child"
+    ]
+    assert child_span.parent.span_id == agent_spans[0].context.span_id
+    assert not trace_api.get_current_span().get_span_context().is_valid
 
 
 async def test_v2_reply_stream_preserves_cross_task_business_error(
@@ -390,6 +404,132 @@ async def test_v2_reply_stream_preserves_cross_task_business_error(
     )
     assert len(agent_spans) == 1
     assert agent_spans[0].status.status_code == StatusCode.ERROR
+
+
+async def test_v2_reply_start_failure_preserves_business_stream(
+    instrument,
+    span_exporter,
+    monkeypatch,
+):
+    agent = Agent(
+        name="start_failure_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    expected = Msg(
+        name="assistant",
+        role="assistant",
+        content=[TextBlock(text="business result")],
+    )
+    handler = middleware._handler()
+
+    def start_invoke_agent(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("probe start failure")
+
+    monkeypatch.setattr(handler, "start_invoke_agent", start_invoke_agent)
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        yield expected
+
+    results = [
+        item
+        async for item in middleware.on_reply(
+            agent,
+            {"inputs": []},
+            reply_handler,
+        )
+    ]
+
+    assert results == [expected]
+    assert not span_exporter.get_finished_spans()
+    assert not trace_api.get_current_span().get_span_context().is_valid
+
+
+async def test_v2_reply_finish_failure_does_not_replace_business_result(
+    instrument,
+    span_exporter,
+    monkeypatch,
+):
+    agent = Agent(
+        name="finish_failure_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    expected = Msg(
+        name="assistant",
+        role="assistant",
+        content=[TextBlock(text="business result")],
+    )
+    handler = middleware._handler()
+
+    def stop_invoke_agent(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("probe finish failure")
+
+    monkeypatch.setattr(handler, "stop_invoke_agent", stop_invoke_agent)
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        yield expected
+
+    results = [
+        item
+        async for item in middleware.on_reply(
+            agent,
+            {"inputs": []},
+            reply_handler,
+        )
+    ]
+
+    assert results == [expected]
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert not trace_api.get_current_span().get_span_context().is_valid
+
+
+async def test_v2_reply_fail_callback_preserves_original_business_error(
+    instrument,
+    span_exporter,
+    monkeypatch,
+):
+    agent = Agent(
+        name="fail_callback_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    handler = middleware._handler()
+    business_error = RuntimeError("business failure")
+
+    def fail_invoke_agent(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("probe fail callback failure")
+
+    monkeypatch.setattr(handler, "fail_invoke_agent", fail_invoke_agent)
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        yield Msg(
+            name="assistant",
+            role="assistant",
+            content=[TextBlock(text="partial")],
+        )
+        raise business_error
+
+    stream = middleware.on_reply(agent, {"inputs": []}, reply_handler)
+    await _heartbeat_next(stream)
+    try:
+        await _heartbeat_next(stream)
+    except RuntimeError as exc:
+        assert exc is business_error
+    else:
+        pytest.fail("business error was not raised")
+
+    assert len(span_exporter.get_finished_spans()) == 1
+    assert not trace_api.get_current_span().get_span_context().is_valid
 
 
 async def test_v2_reply_stream_preserves_cross_task_cancellation(
@@ -464,6 +604,105 @@ async def test_v2_tool_acting_hook(instrument, span_exporter):
     )[0]
     assert tool_span.attributes["gen_ai.tool.name"] == "lookup_weather"
     assert tool_span.attributes["gen_ai.tool.type"] == "function"
+
+
+async def test_v2_acting_aclose_is_normal_across_tasks(
+    instrument,
+    span_exporter,
+    caplog,
+):
+    caplog.set_level("DEBUG", logger="opentelemetry.util.genai.handler")
+    agent = Agent(
+        name="cross_task_close_agent",
+        system_prompt="Use tools.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._acting_middlewares)
+    tool_call = SimpleNamespace(
+        name="successful_tool",
+        id="tool-call-close",
+        input="{}",
+    )
+    expected = ToolResponse(content=[TextBlock(text="success")])
+    closed = 0
+
+    async def tool_handler(**kwargs):
+        nonlocal closed
+        del kwargs
+        try:
+            yield expected
+            yield ToolResponse(content=[TextBlock(text="unused")])
+        finally:
+            closed += 1
+
+    stream = middleware.on_acting(
+        agent,
+        {"tool_call": tool_call},
+        tool_handler,
+    )
+    assert await _heartbeat_next(stream) is expected
+    await asyncio.create_task(stream.aclose())
+
+    spans = span_exporter.get_finished_spans()
+    [tool_span] = _spans_by_operation(spans, "execute_tool")
+    [react_span] = _spans_by_operation(spans, "react")
+    assert closed == 1
+    assert tool_span.status.status_code == StatusCode.UNSET
+    assert react_span.status.status_code == StatusCode.UNSET
+    assert "error.type" not in tool_span.attributes
+    assert "error.type" not in react_span.attributes
+    assert not any(
+        "Context detach failed" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not trace_api.get_current_span().get_span_context().is_valid
+
+
+async def test_v2_acting_aclose_error_preserves_original_exception(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="cross_task_close_error_agent",
+        system_prompt="Use tools.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._acting_middlewares)
+    tool_call = SimpleNamespace(
+        name="failing_close_tool",
+        id="tool-call-close-error",
+        input="{}",
+    )
+    close_error = ValueError("business close failure")
+
+    async def tool_handler(**kwargs):
+        del kwargs
+        try:
+            yield ToolResponse(content=[TextBlock(text="partial")])
+        finally:
+            raise close_error
+
+    stream = middleware.on_acting(
+        agent,
+        {"tool_call": tool_call},
+        tool_handler,
+    )
+    await _heartbeat_next(stream)
+    try:
+        await asyncio.create_task(stream.aclose())
+    except ValueError as exc:
+        assert exc is close_error
+    else:
+        pytest.fail("business close error was not raised")
+
+    spans = span_exporter.get_finished_spans()
+    [tool_span] = _spans_by_operation(spans, "execute_tool")
+    [react_span] = _spans_by_operation(spans, "react")
+    assert tool_span.status.status_code == StatusCode.ERROR
+    assert react_span.status.status_code == StatusCode.ERROR
+    assert tool_span.attributes["error.type"] == "ValueError"
+    assert react_span.attributes["error.type"] == "ValueError"
+    assert not trace_api.get_current_span().get_span_context().is_valid
 
 
 async def test_v2_tool_result_content_capture(

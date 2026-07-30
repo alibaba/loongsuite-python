@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Records QwenPaw 2 Entry TTFT only after user-visible output and preserves
   business stream cleanup when Entry telemetry setup fails.
 
+### Fixed
+
+- Restore the Entry context while closing downstream streams and preserve
+  downstream `aclose()` errors instead of finalizing the Entry as successful.
+
 ## Version 0.7.0 (2026-07-03)
 
 There are no changelog entries for this release.
