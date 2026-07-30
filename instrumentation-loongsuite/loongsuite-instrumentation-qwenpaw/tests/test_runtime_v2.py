@@ -541,7 +541,7 @@ async def test_runtime_aclose_preserves_agentscope_tree_and_success_status(
         yield ToolResponse(content=[TextBlock(text="success")])
         yield ToolResponse(content=[TextBlock(text="unused")])
 
-    async def reply_handler(**kwargs):
+    async def reasoning_handler(**kwargs):
         del kwargs
         assert agent_middleware is not None
         await agent_middleware.on_model_call(
@@ -552,6 +552,17 @@ async def test_runtime_aclose_preserves_agentscope_tree_and_success_status(
             },
             model_handler,
         )
+        yield SimpleNamespace(type="tool_call")
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        assert agent_middleware is not None
+        async for _ in agent_middleware.on_reasoning(
+            agent,
+            {},
+            reasoning_handler,
+        ):
+            pass
         acting_stream = agent_middleware.on_acting(
             agent,
             {"tool_call": tool_call},
@@ -621,8 +632,8 @@ async def test_runtime_aclose_preserves_agentscope_tree_and_success_status(
     ]
 
     assert agent_span.parent.span_id == entry.context.span_id
-    assert llm_span.parent.span_id == agent_span.context.span_id
     assert react_span.parent.span_id == agent_span.context.span_id
+    assert llm_span.parent.span_id == react_span.context.span_id
     assert tool_span.parent.span_id == react_span.context.span_id
     for span in (entry, agent_span, llm_span, react_span, tool_span):
         assert span.status.status_code.name == "UNSET"
@@ -675,7 +686,7 @@ async def test_runtime_aclose_preserves_streaming_llm_success_status(
         del kwargs
         return business_model_stream()
 
-    async def reply_handler(**kwargs):
+    async def reasoning_handler(**kwargs):
         del kwargs
         assert agent_middleware is not None
         model_stream = await agent_middleware.on_model_call(
@@ -691,6 +702,21 @@ async def test_runtime_aclose_preserves_streaming_llm_success_status(
                 yield item
         except GeneratorExit:
             await model_stream.aclose()
+            raise
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        assert agent_middleware is not None
+        reasoning_stream = agent_middleware.on_reasoning(
+            agent,
+            {},
+            reasoning_handler,
+        )
+        try:
+            async for item in reasoning_stream:
+                yield item
+        except GeneratorExit:
+            await reasoning_stream.aclose()
             raise
 
     async def fake_run(self, request):
@@ -737,10 +763,16 @@ async def test_runtime_aclose_preserves_streaming_llm_success_status(
         for span in spans
         if span.attributes.get("gen_ai.operation.name") == "chat"
     ]
+    [react_span] = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == "react"
+    ]
     assert closed == 1
     assert agent_span.parent.span_id == entry.context.span_id
-    assert llm_span.parent.span_id == agent_span.context.span_id
-    for span in (entry, agent_span, llm_span):
+    assert react_span.parent.span_id == agent_span.context.span_id
+    assert llm_span.parent.span_id == react_span.context.span_id
+    for span in (entry, agent_span, react_span, llm_span):
         assert span.status.status_code.name == "UNSET"
         assert "error.type" not in span.attributes
     assert not any(

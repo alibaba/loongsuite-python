@@ -36,6 +36,7 @@ from agentscope.credential import DashScopeCredential  # noqa: E402
 from agentscope.message import (  # noqa: E402
     Msg,
     TextBlock,
+    ToolCallBlock,
     ToolResultBlock,
     UserMsg,
 )
@@ -99,6 +100,10 @@ def test_instrumentor_injects_v2_middleware(instrument):
     assert any(
         isinstance(middleware, AgentScopeV2Middleware)
         for middleware in agent._model_call_middlewares
+    )
+    assert any(
+        isinstance(middleware, AgentScopeV2Middleware)
+        for middleware in agent._reasoning_middlewares
     )
     assert any(
         isinstance(middleware, AgentScopeV2Middleware)
@@ -621,6 +626,108 @@ async def test_v2_reply_start_failure_preserves_business_stream(
     assert not trace_api.get_current_span().get_span_context().is_valid
 
 
+async def test_v2_react_start_failure_preserves_reasoning_stream(
+    instrument,
+    span_exporter,
+    monkeypatch,
+):
+    agent = Agent(
+        name="react_start_failure_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    handler = middleware._handler()
+    expected = Msg(
+        name="assistant",
+        role="assistant",
+        content=[TextBlock(text="business result")],
+    )
+
+    def start_react_step(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("probe step start failure")
+
+    monkeypatch.setattr(handler, "start_react_step", start_react_step)
+
+    async def reasoning_handler(**kwargs):
+        del kwargs
+        yield expected
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        async for item in middleware.on_reasoning(
+            agent,
+            {},
+            reasoning_handler,
+        ):
+            yield item
+
+    results = [
+        item
+        async for item in middleware.on_reply(
+            agent,
+            {"inputs": []},
+            reply_handler,
+        )
+    ]
+
+    assert results == [expected]
+    assert not _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "react",
+    )
+    assert _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "invoke_agent",
+    )
+    assert not middleware._reply_states
+
+
+async def test_v2_reasoning_error_preserves_identity_and_fails_step(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="react_error_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    business_error = RuntimeError("reasoning failed")
+
+    async def reasoning_handler(**kwargs):
+        del kwargs
+        yield SimpleNamespace(type="thinking_block_delta")
+        raise business_error
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        async for item in middleware.on_reasoning(
+            agent,
+            {},
+            reasoning_handler,
+        ):
+            yield item
+
+    stream = middleware.on_reply(agent, {"inputs": []}, reply_handler)
+    await _heartbeat_next(stream)
+    try:
+        await _heartbeat_next(stream)
+    except RuntimeError as exc:
+        assert exc is business_error
+    else:
+        pytest.fail("business error was not raised")
+
+    [react_span] = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "react",
+    )
+    assert react_span.status.status_code == StatusCode.ERROR
+    assert react_span.attributes["error.type"] == "RuntimeError"
+    assert not middleware._reply_states
+
+
 async def test_v2_reply_finish_failure_does_not_replace_business_result(
     instrument,
     span_exporter,
@@ -824,6 +931,7 @@ async def test_v2_acting_aclose_is_normal_across_tasks(
     assert react_span.status.status_code == StatusCode.UNSET
     assert "error.type" not in tool_span.attributes
     assert "error.type" not in react_span.attributes
+    assert react_span.attributes["gen_ai.react.finish_reason"] == "tool_calls"
     assert not any(
         "Context detach failed" in record.getMessage()
         for record in caplog.records
@@ -875,6 +983,7 @@ async def test_v2_acting_aclose_error_preserves_original_exception(
     assert react_span.status.status_code == StatusCode.ERROR
     assert tool_span.attributes["error.type"] == "ValueError"
     assert react_span.attributes["error.type"] == "ValueError"
+    assert "gen_ai.react.finish_reason" not in react_span.attributes
     assert not trace_api.get_current_span().get_span_context().is_valid
 
 
@@ -1023,6 +1132,201 @@ async def test_v2_react_concurrent_tools_share_agent_iteration(
     }
 
 
+async def test_v2_react_step_parents_reasoning_llm_and_concurrent_tools(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="react_hierarchy_agent",
+        system_prompt="Use tools.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    tool_calls = [
+        ToolCallBlock(
+            id=f"tool-call-{idx}",
+            name=f"tool_{idx}",
+            input=json.dumps({"idx": idx}),
+        )
+        for idx in range(2)
+    ]
+
+    async def model_handler(**kwargs):
+        del kwargs
+        return ChatResponse(content=tool_calls, is_last=True)
+
+    async def reasoning_handler(**kwargs):
+        del kwargs
+        await middleware.on_model_call(
+            agent,
+            {
+                "current_model": agent.model,
+                "messages": [UserMsg(name="user", content="use tools")],
+            },
+            model_handler,
+        )
+        for tool_call in tool_calls:
+            yield SimpleNamespace(type="TOOL_CALL_START")
+            yield SimpleNamespace(type="TOOL_CALL_END")
+        # Some framework versions may emit a completed message after the
+        # individual tool-call events.
+        yield Msg(
+            name="assistant",
+            role="assistant",
+            content=tool_calls,
+        )
+
+    async def call_tool(tool_call):
+        async def tool_handler(**kwargs):
+            del kwargs
+            await asyncio.sleep(0)
+            yield ToolResponse(
+                content=[TextBlock(text=f"result {tool_call.name}")]
+            )
+
+        return [
+            item
+            async for item in middleware.on_acting(
+                agent,
+                {"tool_call": tool_call},
+                tool_handler,
+            )
+        ]
+
+    expected = Msg(
+        name="assistant",
+        role="assistant",
+        content=[TextBlock(text="done")],
+    )
+
+    async def final_model_handler(**kwargs):
+        del kwargs
+        return ChatResponse(
+            content=[TextBlock(text="done")],
+            is_last=True,
+        )
+
+    async def final_reasoning_handler(**kwargs):
+        del kwargs
+        await middleware.on_model_call(
+            agent,
+            {
+                "current_model": agent.model,
+                "messages": [UserMsg(name="user", content="finish")],
+            },
+            final_model_handler,
+        )
+        yield expected
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        async for item in middleware.on_reasoning(
+            agent,
+            {},
+            reasoning_handler,
+        ):
+            yield item
+        assert all(await asyncio.gather(*(call_tool(tc) for tc in tool_calls)))
+        agent.state.cur_iter = 1
+        async for item in middleware.on_reasoning(
+            agent,
+            {},
+            final_reasoning_handler,
+        ):
+            yield item
+
+    stream = middleware.on_reply(agent, {"inputs": []}, reply_handler)
+    while True:
+        try:
+            await _heartbeat_next(stream)
+        except StopAsyncIteration:
+            break
+
+    spans = span_exporter.get_finished_spans()
+    [agent_span] = _spans_by_operation(spans, "invoke_agent")
+    react_spans = _spans_by_operation(spans, "react")
+    llm_spans = _spans_by_operation(spans, "chat")
+    tool_spans = _spans_by_operation(spans, "execute_tool")
+
+    assert len(react_spans) == 2
+    assert len(llm_spans) == 2
+    assert {span.parent.span_id for span in react_spans} == {
+        agent_span.context.span_id
+    }
+    react_by_round = {
+        span.attributes["gen_ai.react.round"]: span for span in react_spans
+    }
+    llm_parent_ids = {span.parent.span_id for span in llm_spans}
+    assert llm_parent_ids == {span.context.span_id for span in react_spans}
+    assert len(tool_spans) == 2
+    assert {span.parent.span_id for span in tool_spans} == {
+        react_by_round[1].context.span_id
+    }
+    assert (
+        react_by_round[1].attributes["gen_ai.react.finish_reason"]
+        == "tool_calls"
+    )
+    assert react_by_round[2].attributes["gen_ai.react.finish_reason"] == "stop"
+
+
+async def test_v2_skill_viewer_tool_captures_skill_metadata(
+    instrument,
+    span_exporter,
+    tmp_path,
+):
+    agent = Agent(
+        name="skill_agent",
+        system_prompt="Load a skill.",
+        model=_make_model(stream=False),
+    )
+    skill_dir = tmp_path / "workspaces" / "demo" / "skills" / "code-review"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: code-review\n"
+        "description: Review source code\n"
+        "version: 1.2.3\n"
+        "---\n"
+        "Review the requested source code.\n",
+        encoding="utf-8",
+    )
+    agent.toolkit._qp_skills = {
+        "code-review": {
+            "dir": str(skill_dir),
+        }
+    }
+    middleware = _middleware(agent._acting_middlewares)
+    tool_call = SimpleNamespace(
+        name="Skill",
+        id="skill-tool-call",
+        input='{"skill": "code-review"}',
+    )
+
+    async def tool_handler(**kwargs):
+        del kwargs
+        yield ToolResponse(content=[TextBlock(text="skill markdown")])
+
+    results = [
+        item
+        async for item in middleware.on_acting(
+            agent,
+            {"tool_call": tool_call},
+            tool_handler,
+        )
+    ]
+
+    assert results
+    [tool_span] = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "execute_tool",
+    )
+    assert tool_span.attributes["gen_ai.skill.name"] == "code-review"
+    assert (
+        tool_span.attributes["gen_ai.skill.id"] == "workspace:demo:code-review"
+    )
+    assert tool_span.attributes["gen_ai.skill.version"] == "1.2.3"
+
+
 @pytest.mark.vcr()
 async def test_v2_agent_non_streaming_e2e(instrument, span_exporter):
     model = _make_model(stream=False)
@@ -1079,10 +1383,14 @@ async def test_v2_agent_concurrent_e2e(instrument, span_exporter):
     spans = span_exporter.get_finished_spans()
     agent_spans = _spans_by_operation(spans, "invoke_agent")
     llm_spans = _spans_by_operation(spans, "chat")
+    react_spans = _spans_by_operation(spans, "react")
     assert len(agent_spans) == 2
     assert len(llm_spans) == 2
+    assert len(react_spans) == 2
     agent_span_ids = {span.context.span_id for span in agent_spans}
-    assert {span.parent.span_id for span in llm_spans} == agent_span_ids
+    assert {span.parent.span_id for span in react_spans} == agent_span_ids
+    react_span_ids = {span.context.span_id for span in react_spans}
+    assert {span.parent.span_id for span in llm_spans} == react_span_ids
 
 
 def _make_model(stream: bool):
@@ -1101,8 +1409,11 @@ def _make_model(stream: bool):
 
 
 def _assert_agent_and_llm_spans(spans):
-    assert _spans_by_operation(spans, "invoke_agent")
-    assert _spans_by_operation(spans, "chat")
+    [agent_span] = _spans_by_operation(spans, "invoke_agent")
+    [react_span] = _spans_by_operation(spans, "react")
+    [llm_span] = _spans_by_operation(spans, "chat")
+    assert react_span.parent.span_id == agent_span.context.span_id
+    assert llm_span.parent.span_id == react_span.context.span_id
 
 
 def _spans_by_operation(spans, operation_name):
