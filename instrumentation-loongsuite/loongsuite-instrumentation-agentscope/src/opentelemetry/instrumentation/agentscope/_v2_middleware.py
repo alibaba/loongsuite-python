@@ -232,7 +232,14 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return
 
         tool_call = input_kwargs.get("tool_call")
-        react_invocation = ReactStepInvocation(round=agent.state.cur_iter + 1)
+        react_invocation = ReactStepInvocation(
+            round=getattr(
+                getattr(agent, "state", None),
+                "cur_iter",
+                0,
+            )
+            + 1
+        )
         handler.start_react_step(react_invocation, context=get_current())
         invocation = ExecuteToolInvocation(
             tool_name=getattr(tool_call, "name", "unknown_tool"),

@@ -5,7 +5,9 @@ LoongSuite instrumentation for
 on AgentScope.
 
 Compatibility note: CoPaw was renamed to QwenPaw. Installations pinned to
-`copaw<=1.0.2` are still supported during the transition.
+`copaw<=1.0.2` are still supported during the transition. QwenPaw 1 uses
+`AgentRunner.query_handler` as its request entry point; QwenPaw 2 uses
+`Runtime.run`.
 
 ## Getting Started
 
@@ -113,8 +115,9 @@ With Site-bootstrap enabled in the same shell/session, start the app as usual:
 qwenpaw app
 ```
 
-Telemetry for `AgentRunner.query_handler` (Entry span) is then active without
-modifying QwenPaw source code.
+Telemetry for the installed runtime's request entry point
+(`AgentRunner.query_handler` on QwenPaw 1, or `Runtime.run` on QwenPaw 2) is
+then active without modifying QwenPaw source code.
 
 ### Optional: programmatic hook
 
