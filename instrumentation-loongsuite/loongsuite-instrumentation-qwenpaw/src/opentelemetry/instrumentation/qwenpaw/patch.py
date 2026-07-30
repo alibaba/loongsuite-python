@@ -116,21 +116,51 @@ def _detach_entry(token: object | None) -> None:
     _safe_detach(token)
 
 
-@hook_advice("qwenpaw", "record_entry_chunk")
-def _record_entry_chunk(
+@hook_advice("qwenpaw", "record_entry_first_token")
+def _record_entry_first_token(
     state: _EntryState,
     item: Any,
-    output_mapper: Callable[[Any], OutputMessage | None],
+    first_token_predicate: Callable[[Any], bool],
 ) -> None:
-    if not state.saw_first_token:
+    if not state.saw_first_token and first_token_predicate(item):
         state.invocation.response_time_to_first_token = int(
             (timeit.default_timer() - state.invocation.monotonic_start_s)
             * 1_000_000_000
         )
         state.saw_first_token = True
+
+
+@hook_advice("qwenpaw", "record_entry_output")
+def _record_entry_output(
+    state: _EntryState,
+    item: Any,
+    output_mapper: Callable[[Any], OutputMessage | None],
+) -> None:
     output = output_mapper(item)
     if output is not None:
         state.last_assistant = output
+
+
+def _is_query_handler_first_token(item: Any) -> bool:
+    del item
+    return True
+
+
+def _is_runtime_first_token(item: Any) -> bool:
+    """Ignore QwenPaw protocol envelopes until user-visible output arrives."""
+
+    if getattr(item, "delta", False) is True:
+        text = getattr(item, "text", None)
+        if isinstance(text, str) and text:
+            return True
+
+        data = getattr(item, "data", None)
+        if isinstance(data, dict):
+            arguments = data.get("arguments")
+            if isinstance(arguments, str) and arguments:
+                return True
+
+    return output_message_from_runtime_item(item) is not None
 
 
 @hook_advice("qwenpaw", "finish_entry")
@@ -182,6 +212,7 @@ async def _entry_stream(
     kwargs: Any,
     handler: ExtendedTelemetryHandler,
     invocation: EntryInvocation,
+    first_token_predicate: Callable[[Any], bool],
     output_mapper: Callable[[Any], OutputMessage | None],
 ) -> AsyncIterator[Any]:
     """Advance one business item per same-Context Entry attach/detach pair."""
@@ -190,8 +221,12 @@ async def _entry_stream(
     iterator = business_stream.__aiter__()
     state = _start_entry(handler, invocation)
     if state is None:
-        async for item in iterator:
-            yield item
+        try:
+            async for item in iterator:
+                yield item
+        except GeneratorExit:
+            await _close_iterator(iterator)
+            raise
         return
 
     try:
@@ -204,7 +239,8 @@ async def _entry_stream(
             finally:
                 _detach_entry(token)
 
-            _record_entry_chunk(state, item, output_mapper)
+            _record_entry_first_token(state, item, first_token_predicate)
+            _record_entry_output(state, item, output_mapper)
             yield item
     except GeneratorExit as exc:
         try:
@@ -247,6 +283,7 @@ def make_query_handler_wrapper(
             kwargs,
             handler,
             invocation,
+            _is_query_handler_first_token,
             output_message_from_yield_item,
         )
 
@@ -280,6 +317,7 @@ def make_runtime_wrapper(
             kwargs,
             handler,
             invocation,
+            _is_runtime_first_token,
             output_message_from_runtime_item,
         )
 

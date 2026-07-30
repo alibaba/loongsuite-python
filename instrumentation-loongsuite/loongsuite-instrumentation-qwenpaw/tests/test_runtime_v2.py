@@ -28,6 +28,7 @@ from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
+    GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN,
     GEN_AI_SESSION_ID,
     GEN_AI_USER_ID,
 )
@@ -210,6 +211,51 @@ async def test_runtime_entry_captures_v2_input_and_output(
 
 
 @pytest.mark.asyncio
+async def test_runtime_ttft_ignores_protocol_and_heartbeat_envelopes(
+    runtime_module,
+    tracer_provider,
+    span_exporter,
+    monkeypatch,
+):
+    created = SimpleNamespace(object="response", status="created", output=[])
+    heartbeat = SimpleNamespace(
+        object="response",
+        status="in_progress",
+        output=[],
+    )
+    first_delta = SimpleNamespace(delta=True, text="first token")
+    expected = _completed_message("done")
+
+    async def fake_run(self, request):
+        del self, request
+        yield created
+        yield heartbeat
+        yield first_delta
+        yield expected
+
+    timer_values = iter((10.0, 10.5, 11.0))
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.qwenpaw.patch.timeit.default_timer",
+        lambda: next(timer_values),
+    )
+    monkeypatch.setattr(runtime_module.Runtime, "run", fake_run)
+    instrumentor = _instrument(tracer_provider)
+    try:
+        chunks = [
+            item
+            async for item in _runtime(runtime_module).run(
+                _request("ttft-session")
+            )
+        ]
+    finally:
+        instrumentor.uninstrument()
+
+    assert chunks == [created, heartbeat, first_delta, expected]
+    [entry] = _entry_spans(span_exporter)
+    assert entry.attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN] == 500_000_000
+
+
+@pytest.mark.asyncio
 async def test_runtime_preserves_business_error_when_fail_callback_fails(
     runtime_module,
     tracer_provider,
@@ -297,6 +343,45 @@ async def test_runtime_start_failure_preserves_business_chunks(
     assert chunks == [expected]
     assert clean_chunks == [expected]
     assert len(_entry_spans(span_exporter)) == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_start_failure_aclose_closes_business_stream_once(
+    runtime_module,
+    tracer_provider,
+    span_exporter,
+    monkeypatch,
+):
+    expected = _completed_message("first")
+    closed = 0
+
+    async def fake_run(self, request):
+        nonlocal closed
+        del self, request
+        try:
+            yield expected
+            yield _completed_message("second")
+        finally:
+            closed += 1
+
+    monkeypatch.setattr(runtime_module.Runtime, "run", fake_run)
+    instrumentor = _instrument(tracer_provider)
+
+    def start_entry(*args, **kwargs):
+        del args, kwargs
+        raise ValueError("probe start failure")
+
+    monkeypatch.setattr(instrumentor._handler, "start_entry", start_entry)
+    try:
+        stream = _runtime(runtime_module).run(_request("start-failure-close"))
+        assert await stream.__anext__() is expected
+        await asyncio.create_task(stream.aclose())
+    finally:
+        instrumentor.uninstrument()
+
+    assert closed == 1
+    assert len(_entry_spans(span_exporter)) == 0
+    assert not trace.get_current_span().get_span_context().is_valid
 
 
 @pytest.mark.asyncio
@@ -398,12 +483,13 @@ async def test_runtime_aclose_closes_business_stream_once(
     try:
         stream = _runtime(runtime_module).run(_request("close-session"))
         assert await stream.__anext__() is expected
-        await stream.aclose()
+        await asyncio.create_task(stream.aclose())
     finally:
         instrumentor.uninstrument()
 
     assert closed == 1
     assert len(_entry_spans(span_exporter)) == 1
+    assert not trace.get_current_span().get_span_context().is_valid
 
 
 @pytest.mark.asyncio

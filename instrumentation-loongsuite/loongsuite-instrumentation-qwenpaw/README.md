@@ -124,7 +124,8 @@ then active without modifying QwenPaw source code.
 If you control an embedding process and prefer not to use site-bootstrap, you
 can call `QwenPawInstrumentor().instrument()` (and `uninstrument()` when done)
 before QwenPaw runs in that process—the hook point is still
-`AgentRunner.query_handler`. You must still configure the global
+`AgentRunner.query_handler` on QwenPaw 1 / CoPaw or `Runtime.run` on QwenPaw 2.
+You must still configure the global
 `TracerProvider` / export (for example via OpenTelemetry env vars) consistently
 with the rest of your app.
 

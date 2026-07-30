@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preserving the QwenPaw 1 and legacy CoPaw entry points.
 - Added task-safe stream context handoff so QwenPaw heartbeat tasks inherit the
   Entry span without keeping an attached context token across yields.
+- Records QwenPaw 2 Entry TTFT only after user-visible output and preserves
+  business stream cleanup when Entry telemetry setup fails.
 
 ## Version 0.7.0 (2026-07-03)
 
