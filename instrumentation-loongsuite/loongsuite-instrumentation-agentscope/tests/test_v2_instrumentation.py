@@ -269,10 +269,183 @@ async def test_v2_streaming_model_call_starts_llm_span_before_model_handler(
     assert len(spans) == 1
     llm_span_id = spans[0].context.span_id
     assert observed_current_span_ids == [llm_span_id, llm_span_id, llm_span_id]
-    assert consumer_current_span_ids == [llm_span_id, llm_span_id]
+    assert consumer_current_span_ids == [0, 0]
     assert (
         trace_api.get_current_span().get_span_context().span_id != llm_span_id
     )
+
+
+async def test_v2_streaming_model_aclose_is_normal_across_tasks(
+    instrument,
+    span_exporter,
+    caplog,
+):
+    caplog.set_level("DEBUG", logger="opentelemetry.util.genai.handler")
+    agent = Agent(
+        name="stream_close_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=True),
+    )
+    middleware = _middleware(agent._model_call_middlewares)
+    expected = ChatResponse(
+        content=[TextBlock(text="partial")],
+        is_last=False,
+    )
+    closed = 0
+
+    async def business_stream():
+        nonlocal closed
+        try:
+            yield expected
+            yield ChatResponse(
+                content=[TextBlock(text="unused")],
+                is_last=True,
+            )
+        finally:
+            closed += 1
+
+    async def stream_handler(**kwargs):
+        del kwargs
+        return business_stream()
+
+    stream = await asyncio.create_task(
+        middleware.on_model_call(
+            agent,
+            {
+                "current_model": agent.model,
+                "messages": [UserMsg(name="user", content="hello")],
+            },
+            stream_handler,
+        )
+    )
+    assert not trace_api.get_current_span().get_span_context().is_valid
+    assert await _heartbeat_next(stream) is expected
+    await asyncio.create_task(stream.aclose())
+
+    [span] = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "chat",
+    )
+    assert closed == 1
+    assert span.status.status_code == StatusCode.UNSET
+    assert "error.type" not in span.attributes
+    assert "gen_ai.response.finish_reasons" not in span.attributes
+    assert not any(
+        "Context detach failed" in record.getMessage()
+        or "Failed to detach context" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not trace_api.get_current_span().get_span_context().is_valid
+
+
+async def test_v2_streaming_model_aclose_error_preserves_original_exception(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="stream_close_error_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=True),
+    )
+    middleware = _middleware(agent._model_call_middlewares)
+    close_error = ValueError("business close failure")
+
+    async def business_stream():
+        try:
+            yield ChatResponse(
+                content=[TextBlock(text="partial")],
+                is_last=False,
+            )
+        finally:
+            raise close_error
+
+    async def stream_handler(**kwargs):
+        del kwargs
+        return business_stream()
+
+    stream = await asyncio.create_task(
+        middleware.on_model_call(
+            agent,
+            {
+                "current_model": agent.model,
+                "messages": [UserMsg(name="user", content="hello")],
+            },
+            stream_handler,
+        )
+    )
+    await _heartbeat_next(stream)
+    try:
+        await asyncio.create_task(stream.aclose())
+    except ValueError as exc:
+        assert exc is close_error
+    else:
+        pytest.fail("business close error was not raised")
+
+    [span] = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "chat",
+    )
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["error.type"] == "ValueError"
+    assert not trace_api.get_current_span().get_span_context().is_valid
+
+
+async def test_v2_streaming_model_cancellation_cleans_cross_task_context(
+    instrument,
+    span_exporter,
+    caplog,
+):
+    caplog.set_level("DEBUG", logger="opentelemetry.util.genai.handler")
+    agent = Agent(
+        name="stream_cancel_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=True),
+    )
+    middleware = _middleware(agent._model_call_middlewares)
+    started = asyncio.Event()
+    never = asyncio.Event()
+
+    async def business_stream():
+        started.set()
+        await never.wait()
+        yield ChatResponse(
+            content=[TextBlock(text="unreachable")],
+            is_last=True,
+        )
+
+    async def stream_handler(**kwargs):
+        del kwargs
+        return business_stream()
+
+    stream = await asyncio.create_task(
+        middleware.on_model_call(
+            agent,
+            {
+                "current_model": agent.model,
+                "messages": [UserMsg(name="user", content="hello")],
+            },
+            stream_handler,
+        )
+    )
+    task = asyncio.create_task(stream.__anext__())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    [span] = _spans_by_operation(
+        span_exporter.get_finished_spans(),
+        "chat",
+    )
+    assert task.cancelled()
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.attributes["error.type"] == "CancelledError"
+    assert not any(
+        "Context detach failed" in record.getMessage()
+        or "Failed to detach context" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not trace_api.get_current_span().get_span_context().is_valid
 
 
 async def test_v2_streaming_model_call_captures_input_and_output_content(

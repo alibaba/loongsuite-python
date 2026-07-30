@@ -15,8 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore Agent, ReAct, and tool span contexts for each stream advance so
   cross-task QwenPaw handoffs preserve parentage, and treat `GeneratorExit` as
   a successful stream close instead of a tool failure.
-- Start AgentScope v2 streaming LLM spans before invoking the underlying model
-  call so TTFT and stream lifecycle are recorded on the framework LLM span.
+- Start AgentScope v2 streaming LLM spans before invoking the underlying model,
+  restore their context for each stream operation, and treat cross-task
+  `GeneratorExit` as a successful close while preserving TTFT.
 - Capture AgentScope v2 string message content as text parts so LLM input and
   output message attributes are populated when content capture is enabled.
 

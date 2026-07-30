@@ -636,6 +636,122 @@ async def test_runtime_aclose_preserves_agentscope_tree_and_success_status(
 
 
 @pytest.mark.asyncio
+async def test_runtime_aclose_preserves_streaming_llm_success_status(
+    runtime_module,
+    tracer_provider,
+    span_exporter,
+    monkeypatch,
+    caplog,
+):
+    caplog.set_level("DEBUG", logger="opentelemetry.util.genai.handler")
+    model = object.__new__(ChatModelBase)
+    model.model = "test-model"
+    model.parameters = None
+    agent = SimpleNamespace(
+        name="streaming-agent",
+        model=model,
+        state=SimpleNamespace(cur_iter=0, session_id="streaming-session"),
+        _system_prompt="Reply briefly.",
+    )
+    first_chunk = ChatResponse(
+        content=[TextBlock(text="partial")],
+        is_last=False,
+    )
+    agent_middleware = None
+    closed = 0
+
+    async def business_model_stream():
+        nonlocal closed
+        try:
+            yield first_chunk
+            yield ChatResponse(
+                content=[TextBlock(text="unused")],
+                is_last=True,
+            )
+        finally:
+            closed += 1
+
+    async def model_handler(**kwargs):
+        del kwargs
+        return business_model_stream()
+
+    async def reply_handler(**kwargs):
+        del kwargs
+        assert agent_middleware is not None
+        model_stream = await agent_middleware.on_model_call(
+            agent,
+            {
+                "current_model": model,
+                "messages": [],
+            },
+            model_handler,
+        )
+        try:
+            async for item in model_stream:
+                yield item
+        except GeneratorExit:
+            await model_stream.aclose()
+            raise
+
+    async def fake_run(self, request):
+        del self, request
+        assert agent_middleware is not None
+        reply_stream = agent_middleware.on_reply(
+            agent,
+            {"inputs": []},
+            reply_handler,
+        )
+        try:
+            async for item in reply_stream:
+                yield item
+        except GeneratorExit:
+            await reply_stream.aclose()
+            raise
+
+    monkeypatch.setattr(runtime_module.Runtime, "run", fake_run)
+    instrumentor = _instrument(tracer_provider)
+    monkeypatch.setattr(
+        instrumentor._handler,
+        "process_multimodal_stop",
+        lambda *args, **kwargs: False,
+    )
+    agent_middleware = AgentScopeV2Middleware(lambda: instrumentor._handler)
+    try:
+        stream = _runtime(runtime_module).run(
+            _request("combined-streaming-close")
+        )
+        assert await asyncio.create_task(stream.__anext__()) is first_chunk
+        await asyncio.create_task(stream.aclose())
+    finally:
+        instrumentor.uninstrument()
+
+    spans = span_exporter.get_finished_spans()
+    [entry] = _entry_spans(span_exporter)
+    [agent_span] = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == "invoke_agent"
+    ]
+    [llm_span] = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == "chat"
+    ]
+    assert closed == 1
+    assert agent_span.parent.span_id == entry.context.span_id
+    assert llm_span.parent.span_id == agent_span.context.span_id
+    for span in (entry, agent_span, llm_span):
+        assert span.status.status_code.name == "UNSET"
+        assert "error.type" not in span.attributes
+    assert not any(
+        "Context detach failed" in record.getMessage()
+        or "Failed to detach context" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not trace.get_current_span().get_span_context().is_valid
+
+
+@pytest.mark.asyncio
 async def test_runtime_aclose_error_still_finishes_entry(
     runtime_module,
     tracer_provider,

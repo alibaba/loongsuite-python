@@ -79,6 +79,16 @@ class _AgentState:
 
 
 @dataclass
+class _LLMState:
+    handler: ExtendedTelemetryHandler
+    invocation: LLMInvocation
+    context: Context
+    first_token_seen: bool = False
+    last_chunk: ChatResponse | None = None
+    finalized: bool = False
+
+
+@dataclass
 class _ActingState:
     handler: ExtendedTelemetryHandler
     react_invocation: ReactStepInvocation
@@ -97,6 +107,83 @@ def _abandon_invocation(invocation: Any) -> None:
     span = invocation.span
     if span is not None and span.is_recording():
         span.end()
+
+
+@hook_advice("agentscope", "start_llm")
+def _start_llm(
+    handler: ExtendedTelemetryHandler,
+    invocation: LLMInvocation,
+    context: Context,
+) -> _LLMState:
+    """Start LLM and capture its Context before stream ownership transfer."""
+
+    try:
+        handler.start_llm(invocation, context=context)
+        llm_context = get_current()
+    except Exception:
+        _abandon_invocation(invocation)
+        raise
+
+    return _LLMState(
+        handler=handler,
+        invocation=invocation,
+        context=llm_context,
+    )
+
+
+@hook_advice("agentscope", "release_llm_context")
+def _release_llm_context(state: _LLMState) -> bool:
+    """Detach the start token in its creation Task before returning a stream."""
+
+    token = state.invocation.context_token
+    state.invocation.context_token = None
+    _safe_detach(token)
+    return True
+
+
+@hook_advice("agentscope", "record_llm_chunk")
+def _record_llm_chunk(state: _LLMState, chunk: ChatResponse) -> None:
+    if not state.first_token_seen:
+        state.invocation.monotonic_first_token_s = timeit.default_timer()
+        state.first_token_seen = True
+    state.last_chunk = chunk
+
+
+@hook_advice("agentscope", "finish_llm")
+def _finish_llm(
+    state: _LLMState,
+    error: BaseException | None = None,
+) -> None:
+    if state.finalized:
+        return
+    state.finalized = True
+
+    invocation = state.invocation
+    token = None
+    callback_completed = False
+    span = invocation.span
+    try:
+        token = otel_context.attach(state.context)
+        invocation.context_token = token
+        if error is None or isinstance(error, GeneratorExit):
+            if error is None or getattr(state.last_chunk, "is_last", False):
+                _finish_llm_invocation(invocation, state.last_chunk)
+            state.handler.stop_llm(invocation)
+        else:
+            state.handler.fail_llm(
+                invocation,
+                Error(
+                    message=str(error) or type(error).__name__,
+                    type=type(error),
+                ),
+            )
+        callback_completed = True
+    finally:
+        invocation.context_token = None
+        if get_current() is state.context:
+            _safe_detach(token)
+        if not callback_completed and span is not None and span.is_recording():
+            span.end()
 
 
 @hook_advice("agentscope", "start_invoke_agent")
@@ -438,57 +525,63 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return await next_handler(**input_kwargs)
 
         invocation = _create_llm_invocation(model, input_kwargs)
-        span_context = get_current()
-        handler.start_llm(invocation, context=span_context)
+        state = _start_llm(handler, invocation, get_current())
         try:
             result = await next_handler(**input_kwargs)
-            if inspect.isasyncgen(result):
-                return self._wrap_model_stream(
-                    result,
-                    invocation,
-                    handler,
-                )
-
-            _finish_llm_invocation(invocation, result)
-            handler.stop_llm(invocation)
-            return result
         except BaseException as exc:
-            handler.fail_llm(
-                invocation,
-                Error(message=str(exc) or type(exc).__name__, type=type(exc)),
-            )
+            if state is not None:
+                if _release_llm_context(state):
+                    _finish_llm(state, exc)
+                else:
+                    _abandon_invocation(invocation)
             raise
+        if state is None:
+            return result
+        if not _release_llm_context(state):
+            _abandon_invocation(invocation)
+            return result
+        if inspect.isasyncgen(result):
+            return self._wrap_model_stream(result, state)
+
+        state.last_chunk = result
+        _finish_llm(state)
+        return result
 
     async def _wrap_model_stream(
         self,
         result: AsyncGenerator[ChatResponse, None],
-        invocation: LLMInvocation,
-        handler: ExtendedTelemetryHandler,
+        state: _LLMState,
     ) -> AsyncGenerator[ChatResponse, None]:
-        first_token_seen = False
-        last_chunk = None
-        closed = False
+        iterator = result.__aiter__()
         try:
-            async for chunk in result:
-                if not first_token_seen:
-                    invocation.monotonic_first_token_s = timeit.default_timer()
-                    first_token_seen = True
-                last_chunk = chunk
+            while True:
+                token = _attach_stream_context(state.context)
+                try:
+                    chunk = await iterator.__anext__()
+                except StopAsyncIteration:
+                    break
+                finally:
+                    _detach_stream_context(token)
+
+                _record_llm_chunk(state, chunk)
                 yield chunk
-        except BaseException as exc:
-            handler.fail_llm(
-                invocation,
-                Error(message=str(exc) or type(exc).__name__, type=type(exc)),
-            )
-            closed = True
+        except GeneratorExit as exc:
+            token = _attach_stream_context(state.context)
+            try:
+                await _close_iterator(iterator)
+            except BaseException as close_error:
+                _finish_llm(state, close_error)
+                raise
+            finally:
+                _detach_stream_context(token)
+            _finish_llm(state, exc)
             raise
-        else:
-            _finish_llm_invocation(invocation, last_chunk)
-            handler.stop_llm(invocation)
-            closed = True
+        except BaseException as exc:
+            _finish_llm(state, exc)
+            raise
         finally:
-            if not closed:
-                handler.stop_llm(invocation)
+            if not state.finalized:
+                _finish_llm(state)
 
     async def on_acting(
         self,
