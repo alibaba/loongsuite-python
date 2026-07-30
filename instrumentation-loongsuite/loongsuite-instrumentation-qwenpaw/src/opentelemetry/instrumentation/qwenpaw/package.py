@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from typing import Collection, Iterator
 
@@ -21,32 +22,71 @@ from packaging.requirements import Requirement
 
 _instruments = ()
 _instruments_copaw = "copaw >= 0.1.0, <= 1.0.2"
+_instruments_qwenpaw_v1 = "qwenpaw >= 1.1.0, < 2.0.0"
+_instruments_qwenpaw_v2 = "qwenpaw >= 2.0.0"
 _instruments_qwenpaw = "qwenpaw >= 1.1.0"
 _instruments_any = (_instruments_qwenpaw, _instruments_copaw)
+
+
+@dataclass(frozen=True)
+class RuntimeTarget:
+    requirement: str
+    distribution_name: str
+    module_name: str
+    class_name: str
+    method_name: str
+    wrapper_kind: str
+
+
 _runtime_targets = (
-    (_instruments_qwenpaw, "qwenpaw", "qwenpaw.app.runner.runner"),
-    (_instruments_copaw, "copaw", "copaw.app.runner.runner"),
+    RuntimeTarget(
+        _instruments_qwenpaw_v2,
+        "qwenpaw",
+        "qwenpaw.runtime.runtime",
+        "Runtime",
+        "run",
+        "runtime",
+    ),
+    RuntimeTarget(
+        _instruments_qwenpaw_v1,
+        "qwenpaw",
+        "qwenpaw.app.runner.runner",
+        "AgentRunner",
+        "query_handler",
+        "query_handler",
+    ),
+    RuntimeTarget(
+        _instruments_copaw,
+        "copaw",
+        "copaw.app.runner.runner",
+        "AgentRunner",
+        "query_handler",
+        "query_handler",
+    ),
 )
 
 
-def _get_matched_runtime_targets() -> Iterator[tuple[str, str, str]]:
+def get_installed_runtime_targets() -> Iterator[RuntimeTarget]:
     for runtime_target in _runtime_targets:
-        requirement, distribution_name, _ = runtime_target
         try:
-            installed_version = version(distribution_name)
+            installed_version = version(runtime_target.distribution_name)
         except PackageNotFoundError:
             continue
-        if Requirement(requirement).specifier.contains(installed_version):
+        if Requirement(runtime_target.requirement).specifier.contains(
+            installed_version
+        ):
             yield runtime_target
 
 
 def get_installed_instrumentation_dependencies() -> Collection[str]:
     return tuple(
-        requirement for requirement, _, _ in _get_matched_runtime_targets()
+        target.requirement for target in get_installed_runtime_targets()
     )
 
 
 def get_installed_runner_modules() -> Collection[str]:
+    """Return matched module names for compatibility with older callers."""
+
     return tuple(
-        module_name for _, _, module_name in _get_matched_runtime_targets()
+        target.module_name for target in get_installed_runtime_targets()
     )

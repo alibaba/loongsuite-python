@@ -16,6 +16,7 @@
 # the oldest supported version of external dependencies.
 
 agentscope>=1.0.0,<2.0.0
+mcp<2
 pytest
 pytest-asyncio
 pytest-cov

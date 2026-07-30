@@ -5,7 +5,9 @@ LoongSuite instrumentation for
 on AgentScope.
 
 Compatibility note: CoPaw was renamed to QwenPaw. Installations pinned to
-`copaw<=1.0.2` are still supported during the transition.
+`copaw<=1.0.2` are still supported during the transition. QwenPaw 1 uses
+`AgentRunner.query_handler` as its request entry point; QwenPaw 2 uses
+`Runtime.run`.
 
 ## Getting Started
 
@@ -113,15 +115,17 @@ With Site-bootstrap enabled in the same shell/session, start the app as usual:
 qwenpaw app
 ```
 
-Telemetry for `AgentRunner.query_handler` (Entry span) is then active without
-modifying QwenPaw source code.
+Telemetry for the installed runtime's request entry point
+(`AgentRunner.query_handler` on QwenPaw 1, or `Runtime.run` on QwenPaw 2) is
+then active without modifying QwenPaw source code.
 
 ### Optional: programmatic hook
 
 If you control an embedding process and prefer not to use site-bootstrap, you
 can call `QwenPawInstrumentor().instrument()` (and `uninstrument()` when done)
 before QwenPaw runs in that process—the hook point is still
-`AgentRunner.query_handler`. You must still configure the global
+`AgentRunner.query_handler` on QwenPaw 1 / CoPaw or `Runtime.run` on QwenPaw 2.
+You must still configure the global
 `TracerProvider` / export (for example via OpenTelemetry env vars) consistently
 with the rest of your app.
 
