@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.8.0 (2026-07-31)
+
 ### Added
 
 - Added QwenPaw 2 Entry telemetry around each `Runtime.run` request while

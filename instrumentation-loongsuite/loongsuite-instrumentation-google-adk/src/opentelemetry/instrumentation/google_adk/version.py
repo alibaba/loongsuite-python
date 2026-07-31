@@ -14,4 +14,4 @@
 
 """Version information for OpenTelemetry Google ADK Instrumentation."""
 
-__version__ = "0.8.0.dev"
+__version__ = "0.9.0.dev"
