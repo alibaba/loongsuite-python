@@ -16,12 +16,9 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import timeit
-from importlib import import_module
-from pathlib import Path
 
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
@@ -34,6 +31,7 @@ from opentelemetry.util.genai.extended_types import ExecuteToolInvocation
 from opentelemetry.util.genai.span_utils import _apply_error_attributes
 from opentelemetry.util.genai.types import Error
 
+from ._skill import _enrich_skill_metadata
 from .utils import (
     apply_entry_baggage_identity,
     entry_baggage_identity_attributes,
@@ -113,109 +111,6 @@ def _resolves_to_skill_md(
         return False
 
     return False
-
-
-def _enrich_skill_metadata(skill):
-    """Enrich a matched skill dict with version and id from SKILL.md.
-
-    AgentScope's ``AgentSkill`` only stores ``name``, ``description``,
-    and ``dir``. This function best-effort extracts ``version`` from
-    SKILL.md/frontmatter-related sources and builds a
-    **runtime / deployment-scoped** ``id`` when ``dir`` is available.
-
-    The enrichment is best-effort: if frontmatter/version data cannot be
-    read (e.g. file missing, parse error, or running without CoPaw), the
-    returned dict may still include a path-derived ``id`` when possible,
-    but ``version`` is only added when successfully determined.
-
-    When CoPaw is available, its ``_read_frontmatter_safe`` and
-    ``_extract_version`` helpers are preferred because they are the
-    canonical source of truth.  Otherwise we fall back to a lightweight
-    ``frontmatter`` parse.
-
-    Returns a new dict (never mutates the original).
-    """
-    skill_dir = skill.get("dir", "")
-    skill_name = skill.get("name", "")
-    if not skill_dir:
-        return dict(skill)
-
-    enriched = dict(skill)
-
-    # --- Extract version ---
-    version_text = None
-
-    # Prefer CoPaw's own helpers (canonical source of truth). If that
-    # path fails at runtime for any reason, continue to lightweight
-    # frontmatter/manifest fallbacks instead of dropping version entirely.
-    try:
-        skills_manager = import_module("copaw.agents.skills_manager")
-
-        post = skills_manager._read_frontmatter_safe(
-            Path(skill_dir), skill_name
-        )
-        version_text = skills_manager._extract_version(post)
-    except Exception:
-        version_text = None
-
-    if not version_text:
-        try:
-            frontmatter = import_module("frontmatter")
-
-            skill_md_path = os.path.join(skill_dir, _SKILL_MANIFEST)
-            with open(skill_md_path, "r", encoding="utf-8") as fh:
-                post = frontmatter.load(fh)
-            metadata = post.get("metadata") or {}
-            for value in (
-                post.get("version"),
-                metadata.get("version"),
-                metadata.get("builtin_skill_version"),
-            ):
-                if value not in (None, ""):
-                    version_text = str(value)
-                    break
-        except Exception:
-            version_text = None
-
-    if not version_text:
-        try:
-            skill_path = Path(skill_dir)
-            skill_json_path = skill_path.parent.parent / "skill.json"
-            if skill_json_path.exists():
-                # CoPaw-specific runtime fallback: workspace skill.json may
-                # already contain normalized version_text even when direct
-                # helper/frontmatter extraction is unavailable in-process.
-                payload = json.loads(
-                    skill_json_path.read_text(encoding="utf-8")
-                )
-                entry = payload.get("skills", {}).get(skill_name, {})
-                metadata = entry.get("metadata", {}) or {}
-                value = metadata.get("version_text")
-                if value not in (None, ""):
-                    version_text = str(value)
-        except Exception:
-            version_text = None
-
-    if version_text:
-        enriched["version"] = str(version_text)
-
-    # --- Build runtime/deployment-scoped skill ID ---
-    # Format: workspace:{workspace_name}:{skill_name}
-    # NOT a globally canonical ID — stable within one workspace.
-    try:
-        parts = skill_dir.replace("\\", "/").split("/")
-        workspace_name = "default"
-        try:
-            skills_idx = len(parts) - 1 - parts[::-1].index("skills")
-            if skills_idx >= 1:
-                workspace_name = parts[skills_idx - 1]
-        except ValueError:
-            pass
-        enriched["id"] = f"workspace:{workspace_name}:{skill_name}"
-    except Exception:
-        pass
-
-    return enriched
 
 
 def _match_skill_for_tool(instance, tool_args):
