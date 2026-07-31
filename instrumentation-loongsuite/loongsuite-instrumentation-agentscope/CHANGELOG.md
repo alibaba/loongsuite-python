@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.8.0 (2026-07-31)
+
 ### Fixed
 
 - Derive AgentScope v2 ReAct rounds from the agent iteration state instead of
