@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Prefer provider-supplied OpenAI-compatible response IDs (including
+  DashScope-style `request_id` values) for `gen_ai.response.id` on Hermes LLM
+  spans, while retaining Hermes's response ID as a fallback.
+- Align the Hermes plugin with the OpenTelemetry 1.39.1/0.60b1 release set used
+  by LoongSuite releases so its standard PyPI dependencies resolve consistently.
+
 ## Version 0.7.0 (2026-07-03)
 
 ### Fixed
