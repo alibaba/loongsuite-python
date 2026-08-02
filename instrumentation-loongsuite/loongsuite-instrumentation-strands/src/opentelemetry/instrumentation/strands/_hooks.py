@@ -17,6 +17,7 @@ import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
 from strands.hooks import (
     AfterInvocationEvent,
@@ -426,15 +427,15 @@ def _provider_name(agent: Any) -> str:
     if model is None:
         return "strands"
     client_args = getattr(model, "client_args", {})
-    base_url = (
-        str(client_args.get("base_url", "")).lower()
+    base_url_host = (
+        (urlparse(str(client_args.get("base_url", ""))).hostname or "").lower()
         if isinstance(client_args, dict)
         else ""
     )
     model_name = (_model_name(agent) or "").lower()
     if (
-        "dashscope" in base_url
-        or "aliyuncs.com" in base_url
+        base_url_host
+        in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
         or "qwen" in model_name
     ):
         return "dashscope"

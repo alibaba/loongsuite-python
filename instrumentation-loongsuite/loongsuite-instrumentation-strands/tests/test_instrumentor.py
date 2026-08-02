@@ -607,3 +607,12 @@ def test_openai_compatible_dashscope_provider_is_detected():
     }
     agent = type("Agent", (), {"model": model})()
     assert _provider_name(agent) == "dashscope"
+
+
+def test_dashscope_text_in_url_path_does_not_spoof_provider():
+    model = DeterministicModel([])
+    model.client_args = {
+        "base_url": "https://example.invalid/dashscope.aliyuncs.com/v1"
+    }
+    agent = type("Agent", (), {"model": model})()
+    assert _provider_name(agent) != "dashscope"
