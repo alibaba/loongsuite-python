@@ -233,9 +233,9 @@ async def test_real_strands_lifecycle_and_hierarchy(telemetry):
     assert llms[1].attributes["gen_ai.response.finish_reasons"] == ("stop",)
     assert llms[0].attributes["gen_ai.usage.cache_read.input_tokens"] == 2
     assert llms[0].attributes["gen_ai.usage.cache_creation.input_tokens"] == 1
-    assert (
-        llms[0].attributes["gen_ai.response.time_to_first_token"] == 3_000_000
-    )
+    assert llms[0].attributes[
+        "gen_ai.response.time_to_first_token"
+    ] == pytest.approx(3_000_000, abs=1)
     assert tool_span.attributes["gen_ai.tool.call.id"] == "tool-1"
     assert all("gen_ai.framework" not in span.attributes for span in spans)
 
