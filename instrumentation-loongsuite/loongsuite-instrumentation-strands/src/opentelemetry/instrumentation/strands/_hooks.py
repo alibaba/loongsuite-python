@@ -1,6 +1,35 @@
-import logging
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os
+import threading
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any
 
+from strands.hooks import (
+    AfterInvocationEvent,
+    AfterModelCallEvent,
+    AfterToolCallEvent,
+    BeforeInvocationEvent,
+    BeforeModelCallEvent,
+    BeforeToolCallEvent,
+)
+
+from opentelemetry import context as otel_context
+from opentelemetry.trace import Status, StatusCode, set_span_in_context
+from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation,
@@ -9,6 +38,7 @@ from opentelemetry.util.genai.extended_types import (
 )
 from opentelemetry.util.genai.types import (
     Error,
+    FunctionToolDefinition,
     InputMessage,
     LLMInvocation,
     OutputMessage,
@@ -17,343 +47,547 @@ from opentelemetry.util.genai.types import (
     ToolCallResponse,
 )
 
-logger = logging.getLogger(__name__)
+_CURRENT_INVOCATION_KEY: ContextVar[int | None] = ContextVar(
+    "loongsuite_strands_invocation_key", default=None
+)
+
+
+@dataclass
+class _InvocationState:
+    agent: InvokeAgentInvocation
+    agent_error: BaseException | None = None
+    cycle_id: Any = None
+    round: int = 0
+    step: ReactStepInvocation | None = None
+    step_error: Exception | None = None
+    llm: LLMInvocation | None = None
+    tool_invocations: dict[str, ExecuteToolInvocation] = field(
+        default_factory=dict
+    )
 
 
 class LoongsuiteHook:
-    """Hook that creates loongsuite-conformant spans for Strands Agent execution.
-
-    Leverages the Strands hooks system to observe agent invocations, model calls,
-    and tool executions, producing spans that follow the OTel GenAI semantic
-    conventions as extended by loongsuite.
-
-    Correlates before/after events using invocation_state identity (shared object
-    passed to both before and after events in the Strands hooks system).
-    """
+    """Create LoongSuite GenAI spans from the public Strands hook API."""
 
     def __init__(self, handler: ExtendedTelemetryHandler):
         self._handler = handler
-        self._agent_invocations: dict[int, InvokeAgentInvocation] = {}
-        self._model_invocations: dict[int, LLMInvocation] = {}
-        self._tool_invocations: list[ExecuteToolInvocation] = []
-        self._react_invocations: dict[int, ReactStepInvocation] = {}
-        self._cycle_counters: dict[int, int] = {}
+        self._states: dict[int, _InvocationState] = {}
+        self._lock = threading.RLock()
 
-    def __call__(self, event: Any) -> None:
-        event_type = type(event).__name__
-        handler_method = getattr(self, f"_on_{_camel_to_snake(event_type)}", None)
-        if handler_method:
-            try:
-                handler_method(event)
-            except Exception:
-                logger.debug("Error handling strands event %s", event_type, exc_info=True)
+    def register_hooks(self, registry: Any) -> None:
+        registry.add_callback(BeforeInvocationEvent, self._before_invocation)
+        registry.add_callback(BeforeModelCallEvent, self._before_model)
+        registry.add_callback(AfterModelCallEvent, self._after_model)
+        registry.add_callback(BeforeToolCallEvent, self._before_tool)
+        registry.add_callback(AfterToolCallEvent, self._after_tool)
+        registry.add_callback(AfterInvocationEvent, self._after_invocation)
 
-    def _on_before_invocation_event(self, event: Any) -> None:
-        agent = getattr(event, "agent", None)
-        agent_name = _get_agent_name(agent)
-        agent_id = _get_agent_id(agent)
-        model_name = _get_model_name(agent)
-
-        input_messages = _extract_input_messages(event)
-
+    @hook_advice("strands", "before_invocation")
+    def _before_invocation(self, event: BeforeInvocationEvent) -> None:
+        agent = event.agent
         invocation = InvokeAgentInvocation(
-            provider="strands",
-            agent_name=agent_name,
-            agent_id=agent_id,
-            request_model=model_name,
-            input_messages=input_messages,
+            provider=_provider_name(agent),
+            agent_name=getattr(agent, "name", None) or "Strands Agents",
+            agent_id=getattr(agent, "agent_id", None),
+            agent_description=getattr(agent, "description", None),
+            request_model=_model_name(agent),
+            input_messages=_convert_messages(event.messages or []),
+            system_instruction=_system_instruction(agent),
+            tool_definitions=_tool_definitions(agent),
+            conversation_id=_conversation_id(event.invocation_state),
         )
         self._handler.start_invoke_agent(invocation)
+        state_key = id(event.invocation_state)
+        with self._lock:
+            self._states[state_key] = _InvocationState(agent=invocation)
+        _CURRENT_INVOCATION_KEY.set(state_key)
 
-        key = _invocation_key(event)
-        self._agent_invocations[key] = invocation
-        self._cycle_counters[key] = 0
-
-    def _on_after_invocation_event(self, event: Any) -> None:
-        key = _invocation_key(event)
-        invocation = self._agent_invocations.pop(key, None)
-        self._cycle_counters.pop(key, None)
-
-        if invocation is None:
+    @hook_advice("strands", "before_model")
+    def _before_model(self, event: BeforeModelCallEvent) -> None:
+        state = self._state(event.invocation_state)
+        if state is None:
             return
+        cycle_id = event.invocation_state.get("event_loop_cycle_id")
+        if state.step is None or cycle_id != state.cycle_id:
+            self._finish_step(state)
+            state.round += 1
+            state.cycle_id = cycle_id
+            state.step = ReactStepInvocation(
+                round=state.round,
+            )
+            state.step_error = None
+            self._handler.start_react_step(
+                state.step, context=set_span_in_context(state.agent.span)
+            )
 
-        result = getattr(event, "result", None)
-        if result is not None:
-            invocation.output_messages = _extract_output_messages_from_result(result)
-            invocation.finish_reasons = [_get_stop_reason(result)]
-
-        self._handler.stop_invoke_agent(invocation)
-
-    def _on_before_model_call_event(self, event: Any) -> None:
-        agent = getattr(event, "agent", None)
-        model_name = _get_model_name(agent)
-
+        if not _create_llm_span(event.agent):
+            return
         invocation = LLMInvocation(
-            request_model=model_name,
+            request_model=_model_name(event.agent),
+            provider=_provider_name(event.agent),
             operation_name="chat",
+            input_messages=_convert_messages(
+                event.invocation_state.get("messages", [])
+            ),
+            system_instruction=_system_instruction(event.agent),
+            tool_definitions=_tool_definitions(event.agent),
+            conversation_id=_conversation_id(event.invocation_state),
+        )
+        self._handler.start_llm(
+            invocation, context=set_span_in_context(state.step.span)
+        )
+        state.llm = invocation
+
+    @hook_advice("strands", "after_model")
+    def _after_model(self, event: AfterModelCallEvent) -> None:
+        state = self._state(event.invocation_state)
+        if state is None or state.llm is None:
+            return
+        invocation, state.llm = state.llm, None
+        response = event.stop_response
+        if response is not None:
+            reason = _finish_reason(response.stop_reason)
+            invocation.finish_reasons = [reason]
+            invocation.output_messages = _convert_output_message(
+                response.message, reason
+            )
+            _apply_usage(invocation, response.message.get("metadata", {}))
+            if state.step is not None:
+                state.step.finish_reason = reason
+        if event.exception is not None:
+            state.agent_error = event.exception
+            if state.step is not None:
+                state.step.finish_reason = "error"
+                state.step_error = event.exception
+            self._finalize(
+                self._handler.fail_llm,
+                invocation,
+                _error(event.exception),
+            )
+        else:
+            self._finalize(self._handler.stop_llm, invocation)
+
+    @hook_advice("strands", "before_tool")
+    def _before_tool(self, event: BeforeToolCallEvent) -> None:
+        state = self._state(event.invocation_state)
+        if state is None:
+            return
+        tool_use = event.tool_use
+        tool_id = str(tool_use.get("toolUseId", ""))
+        invocation = ExecuteToolInvocation(
+            tool_name=tool_use.get("name", "unknown"),
+            tool_call_id=tool_id or None,
+            tool_call_arguments=tool_use.get("input"),
+            tool_description=_tool_description(event.selected_tool),
+            tool_type="function",
             provider="strands",
         )
+        parent = (
+            state.step.span if state.step is not None else state.agent.span
+        )
+        self._handler.start_execute_tool(
+            invocation, context=set_span_in_context(parent)
+        )
+        with self._lock:
+            state.tool_invocations[tool_id] = invocation
 
-        invocation_state = getattr(event, "invocation_state", None)
-        if invocation_state is not None:
-            messages = getattr(invocation_state, "messages", None)
-            if messages:
-                invocation.input_messages = _convert_strands_messages(messages)
+    @hook_advice("strands", "after_tool")
+    def _after_tool(self, event: AfterToolCallEvent) -> None:
+        state = self._state(event.invocation_state)
+        if state is None:
+            return
+        tool_id = str(event.tool_use.get("toolUseId", ""))
+        with self._lock:
+            invocation = state.tool_invocations.pop(tool_id, None)
+        if invocation is None:
+            return
+        invocation.tool_call_result = event.result
+        if event.exception is not None:
+            self._finalize(
+                self._handler.fail_execute_tool,
+                invocation,
+                _error(event.exception),
+            )
+        else:
+            self._finalize(self._handler.stop_execute_tool, invocation)
 
-        self._handler.start_llm(invocation)
+    @hook_advice("strands", "after_invocation")
+    def _after_invocation(self, event: AfterInvocationEvent) -> None:
+        state_key = id(event.invocation_state)
+        with self._lock:
+            state = self._states.pop(state_key, None)
+        if _CURRENT_INVOCATION_KEY.get() == state_key:
+            _CURRENT_INVOCATION_KEY.set(None)
+        if state is None:
+            return
+        if state.llm is not None:
+            unfinished_error = RuntimeError("model call did not finish")
+            self._finalize(
+                self._handler.fail_llm,
+                state.llm,
+                _error(unfinished_error),
+            )
+            state.llm = None
+            state.step_error = unfinished_error
+            state.agent_error = unfinished_error
+        for invocation in list(state.tool_invocations.values()):
+            self._finalize(
+                self._handler.fail_execute_tool,
+                invocation,
+                _error(RuntimeError("tool call did not finish")),
+            )
+        state.tool_invocations.clear()
+        self._finish_step(state)
 
-        key = _invocation_key(event)
-        self._model_invocations[key] = invocation
+        result = event.result
+        if result is not None:
+            reason = _finish_reason(result.stop_reason)
+            state.agent.finish_reasons = [reason]
+            state.agent.output_messages = _convert_output_message(
+                result.message, reason
+            )
+            _apply_usage(
+                state.agent, {"usage": result.metrics.accumulated_usage}
+            )
+            self._finalize(self._handler.stop_invoke_agent, state.agent)
+        else:
+            self._finalize(
+                self._handler.fail_invoke_agent,
+                state.agent,
+                _error(
+                    state.agent_error
+                    or RuntimeError(
+                        "Strands agent invocation did not produce a result"
+                    )
+                ),
+            )
 
-        self._start_react_step(key)
+    def current_invocation_key(self) -> int | None:
+        return _CURRENT_INVOCATION_KEY.get()
 
-    def _on_after_model_call_event(self, event: Any) -> None:
-        key = _invocation_key(event)
-        invocation = self._model_invocations.pop(key, None)
+    @hook_advice("strands", "stream_context_attach")
+    def attach_stream_contexts(self, state_key: int | None) -> None:
+        state = self._state_by_key(state_key)
+        if state is None:
+            return
+        invocations = [state.agent, state.step, state.llm]
+        invocations.extend(state.tool_invocations.values())
+        for invocation in invocations:
+            if (
+                invocation is not None
+                and invocation.span is not None
+                and invocation.context_token is None
+            ):
+                invocation.context_token = otel_context.attach(
+                    set_span_in_context(invocation.span)
+                )
 
-        if invocation is not None:
-            stop_response = getattr(event, "stop_response", None)
-            exception = getattr(event, "exception", None)
+    @hook_advice("strands", "stream_context_detach")
+    def detach_stream_contexts(self, state_key: int | None) -> None:
+        state = self._state_by_key(state_key)
+        if state is None:
+            return
+        invocations = list(state.tool_invocations.values())
+        invocations.extend([state.llm, state.step, state.agent])
+        for invocation in invocations:
+            if invocation is not None and invocation.context_token is not None:
+                token, invocation.context_token = (
+                    invocation.context_token,
+                    None,
+                )
+                otel_context.detach(token)
+        if _CURRENT_INVOCATION_KEY.get() == state_key:
+            _CURRENT_INVOCATION_KEY.set(None)
 
-            if exception is not None:
-                self._handler.fail_llm(
-                    invocation, Error(message=str(exception), type=type(exception))
+    def abandon_stream_context_tokens(self, state_key: int | None) -> None:
+        """Drop unusable tokens after a failed cross-context detach."""
+        state = self._state_by_key(state_key)
+        if state is None:
+            return
+        invocations = [state.agent, state.step, state.llm]
+        invocations.extend(state.tool_invocations.values())
+        for invocation in invocations:
+            if invocation is not None:
+                invocation.context_token = None
+        if _CURRENT_INVOCATION_KEY.get() == state_key:
+            _CURRENT_INVOCATION_KEY.set(None)
+
+    @hook_advice("strands", "stream_close")
+    def finish_closed_stream(self, state_key: int | None) -> None:
+        if state_key is None:
+            return
+        with self._lock:
+            state = self._states.pop(state_key, None)
+        if _CURRENT_INVOCATION_KEY.get() == state_key:
+            _CURRENT_INVOCATION_KEY.set(None)
+        if state is None:
+            return
+
+        close_error = RuntimeError(
+            "Strands stream closed before invocation completed"
+        )
+        if state.llm is not None:
+            self._finalize(
+                self._handler.fail_llm, state.llm, _error(close_error)
+            )
+            state.llm = None
+        for invocation in list(state.tool_invocations.values()):
+            self._finalize(
+                self._handler.fail_execute_tool,
+                invocation,
+                _error(close_error),
+            )
+        state.tool_invocations.clear()
+        state.step_error = state.step_error or close_error
+        state.agent_error = state.agent_error or close_error
+        self._finish_step(state)
+        self._finalize(
+            self._handler.fail_invoke_agent,
+            state.agent,
+            _error(state.agent_error),
+        )
+
+    def _state(
+        self, invocation_state: dict[str, Any]
+    ) -> _InvocationState | None:
+        return self._state_by_key(id(invocation_state))
+
+    def _state_by_key(self, state_key: int | None) -> _InvocationState | None:
+        if state_key is None:
+            return None
+        with self._lock:
+            return self._states.get(state_key)
+
+    def _finish_step(self, state: _InvocationState) -> None:
+        if state.step is not None:
+            if state.step_error is not None:
+                self._finalize(
+                    self._handler.fail_react_step,
+                    state.step,
+                    _error(state.step_error),
                 )
             else:
-                if stop_response is not None:
-                    invocation.output_messages = _extract_output_from_stop_response(stop_response)
-                    invocation.finish_reasons = [_get_stop_reason_from_response(stop_response)]
-                    usage = getattr(stop_response, "usage", None)
-                    if usage:
-                        invocation.input_tokens = getattr(usage, "input_tokens", None)
-                        invocation.output_tokens = getattr(usage, "output_tokens", None)
-                self._handler.stop_llm(invocation)
+                self._finalize(self._handler.stop_react_step, state.step)
+            state.step = None
+            state.step_error = None
 
-        self._stop_react_step(key, event)
-
-    def _on_before_tool_call_event(self, event: Any) -> None:
-        tool_use = getattr(event, "tool_use", None)
-        selected_tool = getattr(event, "selected_tool", None)
-
-        tool_name = "unknown"
-        tool_call_id = None
-        tool_arguments = None
-
-        if tool_use:
-            tool_name = getattr(tool_use, "name", None) or tool_name
-            tool_call_id = getattr(tool_use, "tool_use_id", None)
-            tool_arguments = getattr(tool_use, "input", None)
-        elif selected_tool:
-            tool_name = getattr(selected_tool, "name", None) or tool_name
-
-        invocation = ExecuteToolInvocation(
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-            tool_call_arguments=tool_arguments,
-            provider="strands",
-        )
-        self._handler.start_execute_tool(invocation)
-        self._tool_invocations.append(invocation)
-
-    def _on_after_tool_call_event(self, event: Any) -> None:
-        if not self._tool_invocations:
-            return
-        invocation = self._tool_invocations.pop()
-
-        result = getattr(event, "result", None)
-        if result is not None:
-            invocation.tool_call_result = _serialize_tool_result(result)
-
-        self._handler.stop_execute_tool(invocation)
-
-    def _start_react_step(self, key: int) -> None:
-        count = self._cycle_counters.get(key, 0) + 1
-        self._cycle_counters[key] = count
-
-        invocation = ReactStepInvocation(round=count)
-        self._handler.start_react_step(invocation)
-        self._react_invocations[key] = invocation
-
-    def _stop_react_step(self, key: int, event: Any) -> None:
-        invocation = self._react_invocations.pop(key, None)
-
-        if invocation is None:
-            return
-
-        stop_response = getattr(event, "stop_response", None)
-        if stop_response:
-            invocation.finish_reason = _get_stop_reason_from_response(stop_response)
-
-        self._handler.stop_react_step(invocation)
+    @staticmethod
+    def _finalize(callback: Any, invocation: Any, *args: Any) -> None:
+        """End a span if a util finalizer fails before cleaning its context."""
+        try:
+            callback(invocation, *args)
+        except Exception as exc:
+            token, invocation.context_token = invocation.context_token, None
+            if token is not None:
+                otel_context.detach(token)
+            span = invocation.span
+            if span is not None and span.is_recording():
+                span.set_attribute(
+                    "gen_ai.span.kind", _fallback_span_kind(invocation)
+                )
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                span.end()
+            raise
 
 
-def _invocation_key(event: Any) -> int:
-    invocation_state = getattr(event, "invocation_state", None)
-    if invocation_state is not None:
-        return id(invocation_state)
-    return id(event)
+def _error(exception: BaseException) -> Error:
+    return Error(message=str(exception), type=type(exception))
 
 
-def _camel_to_snake(name: str) -> str:
-    result = []
-    for i, c in enumerate(name):
-        if c.isupper() and i > 0:
-            result.append("_")
-        result.append(c.lower())
-    return "".join(result)
+def _fallback_span_kind(invocation: Any) -> str:
+    if isinstance(invocation, InvokeAgentInvocation):
+        return "AGENT"
+    if isinstance(invocation, ReactStepInvocation):
+        return "STEP"
+    if isinstance(invocation, ExecuteToolInvocation):
+        return "TOOL"
+    return "LLM"
 
 
-def _get_agent_name(agent: Any) -> str:
-    if agent is None:
-        return "strands_agent"
-    name = getattr(agent, "name", None)
-    if name:
-        return str(name)
-    return "strands_agent"
-
-
-def _get_agent_id(agent: Any) -> str | None:
-    if agent is None:
-        return None
-    return getattr(agent, "agent_id", None)
-
-
-def _get_model_name(agent: Any) -> str | None:
-    if agent is None:
-        return None
+def _model_name(agent: Any) -> str | None:
     model = getattr(agent, "model", None)
     if model is None:
         return None
-    model_id = getattr(model, "model_id", None)
-    if model_id:
-        return str(model_id)
-    return getattr(model, "name", None)
+    config = model.get_config()
+    if isinstance(config, dict):
+        for name in ("model_id", "modelId", "model", "model_name"):
+            value = config.get(name)
+            if value:
+                return str(value)
+    for name in ("model_id", "model_name", "name"):
+        value = getattr(model, name, None)
+        if value:
+            return str(value)
+    return type(model).__name__
 
 
-def _extract_input_messages(event: Any) -> list[InputMessage]:
-    invocation_state = getattr(event, "invocation_state", None)
-    if invocation_state is not None:
-        raw_messages = getattr(invocation_state, "messages", None)
-        if raw_messages:
-            return _convert_strands_messages(raw_messages)
-
-    raw_messages = getattr(event, "messages", None)
-    if raw_messages:
-        return _convert_strands_messages(raw_messages)
-    return []
-
-
-def _convert_strands_messages(messages: list) -> list[InputMessage]:
-    result = []
-    for msg in messages:
-        if isinstance(msg, dict):
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                result.append(InputMessage(role=role, parts=[Text(content=content)]))
-            elif isinstance(content, list):
-                parts = _convert_content_blocks(content)
-                result.append(InputMessage(role=role, parts=parts))
-        else:
-            role = getattr(msg, "role", "user")
-            content = getattr(msg, "content", "")
-            if isinstance(content, str):
-                result.append(InputMessage(role=role, parts=[Text(content=content)]))
-            elif isinstance(content, list):
-                parts = _convert_content_blocks(content)
-                result.append(InputMessage(role=role, parts=parts))
-    return result
+def _provider_name(agent: Any) -> str:
+    model = getattr(agent, "model", None)
+    if model is None:
+        return "strands"
+    client_args = getattr(model, "client_args", {})
+    base_url = (
+        str(client_args.get("base_url", "")).lower()
+        if isinstance(client_args, dict)
+        else ""
+    )
+    model_name = (_model_name(agent) or "").lower()
+    if (
+        "dashscope" in base_url
+        or "aliyuncs.com" in base_url
+        or "qwen" in model_name
+    ):
+        return "dashscope"
+    module = type(model).__module__.lower()
+    class_name = type(model).__name__.lower()
+    for needle, provider in (
+        ("bedrock", "aws.bedrock"),
+        ("anthropic", "anthropic"),
+        ("openai", "openai"),
+        ("gemini", "gcp.gemini"),
+        ("ollama", "ollama"),
+    ):
+        if needle in module or needle in class_name:
+            return provider
+    return module.split(".")[0] or "strands"
 
 
-def _convert_content_blocks(blocks: list) -> list:
+def _create_llm_span(agent: Any) -> bool:
+    mode = os.getenv(
+        "OTEL_INSTRUMENTATION_STRANDS_LLM_SPAN_MODE", "auto"
+    ).lower()
+    if mode == "never":
+        return False
+    if mode == "always":
+        return True
+    model = getattr(agent, "model", None)
+    return not bool(
+        getattr(model, "_is_instrumented_by_opentelemetry", False)
+        or getattr(type(model), "_is_instrumented_by_opentelemetry", False)
+    )
+
+
+def _conversation_id(invocation_state: dict[str, Any]) -> str | None:
+    for key in ("conversation_id", "session_id", "thread_id"):
+        value = invocation_state.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _system_instruction(agent: Any) -> list[Any]:
+    prompt = getattr(agent, "_system_prompt", None)
+    return [Text(content=prompt)] if isinstance(prompt, str) and prompt else []
+
+
+def _tool_definitions(agent: Any) -> list[FunctionToolDefinition]:
+    registry = getattr(agent, "tool_registry", None)
+    if registry is None:
+        return []
+    try:
+        specs = registry.get_all_tool_specs()
+    except (AttributeError, TypeError):
+        return []
+    return [
+        FunctionToolDefinition(
+            name=spec.get("name", "unknown"),
+            description=spec.get("description"),
+            parameters=spec.get("inputSchema", {}).get("json", {}),
+        )
+        for spec in specs
+    ]
+
+
+def _tool_description(selected_tool: Any) -> str | None:
+    spec = getattr(selected_tool, "tool_spec", None)
+    return spec.get("description") if isinstance(spec, dict) else None
+
+
+def _convert_messages(messages: list[Any]) -> list[InputMessage]:
+    converted = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        converted.append(
+            InputMessage(
+                role=str(message.get("role", "user")),
+                parts=_convert_content(message.get("content", [])),
+            )
+        )
+    return converted
+
+
+def _convert_output_message(message: Any, reason: str) -> list[OutputMessage]:
+    if not isinstance(message, dict):
+        return []
+    return [
+        OutputMessage(
+            role=str(message.get("role", "assistant")),
+            parts=_convert_content(message.get("content", [])),
+            finish_reason=reason,
+        )
+    ]
+
+
+def _convert_content(blocks: Any) -> list[Any]:
+    if isinstance(blocks, str):
+        return [Text(content=blocks)]
     parts = []
-    for block in blocks:
-        if isinstance(block, dict):
-            block_type = block.get("type", "text")
-            if block_type == "text":
-                parts.append(Text(content=block.get("text", "")))
-            elif block_type == "tool_use":
-                parts.append(
-                    ToolCall(
-                        name=block.get("name", ""),
-                        arguments=block.get("input"),
-                        id=block.get("id"),
-                    )
-                )
-            elif block_type == "tool_result":
-                parts.append(
-                    ToolCallResponse(
-                        response=block.get("content", ""),
-                        id=block.get("tool_use_id"),
-                    )
-                )
-        elif isinstance(block, str):
+    for block in blocks or []:
+        if isinstance(block, str):
             parts.append(Text(content=block))
+        elif "text" in block:
+            parts.append(Text(content=block["text"]))
+        elif "toolUse" in block:
+            tool_use = block["toolUse"]
+            parts.append(
+                ToolCall(
+                    name=tool_use.get("name", ""),
+                    arguments=tool_use.get("input"),
+                    id=tool_use.get("toolUseId"),
+                )
+            )
+        elif "toolResult" in block:
+            tool_result = block["toolResult"]
+            parts.append(
+                ToolCallResponse(
+                    response=tool_result.get("content"),
+                    id=tool_result.get("toolUseId"),
+                )
+            )
+        else:
+            parts.append(block)
     return parts
 
 
-def _extract_output_messages_from_result(result: Any) -> list[OutputMessage]:
-    messages = []
-    if isinstance(result, dict):
-        content = result.get("content", "")
-        if isinstance(content, str) and content:
-            messages.append(
-                OutputMessage(role="assistant", parts=[Text(content=content)], finish_reason="stop")
-            )
-    elif isinstance(result, str) and result:
-        messages.append(
-            OutputMessage(role="assistant", parts=[Text(content=result)], finish_reason="stop")
+def _finish_reason(reason: Any) -> str:
+    value = str(reason or "stop")
+    if value == "tool_use":
+        return "tool_calls"
+    if value in {"max_tokens", "limit_output_tokens", "limit_total_tokens"}:
+        return "length"
+    if value in {"content_filtered", "guardrail_intervened"}:
+        return "content_filter"
+    return "stop" if value in {"end_turn", "stop_sequence"} else value
+
+
+def _apply_usage(invocation: Any, metadata: Any) -> None:
+    if not isinstance(metadata, dict):
+        return
+    usage = metadata.get("usage", {})
+    if isinstance(usage, dict):
+        invocation.input_tokens = usage.get("inputTokens")
+        invocation.output_tokens = usage.get("outputTokens")
+        invocation.usage_cache_read_input_tokens = usage.get(
+            "cacheReadInputTokens"
         )
-    else:
-        message = getattr(result, "message", None)
-        if message:
-            content = getattr(message, "content", None) or getattr(message, "text", None)
-            if content and isinstance(content, str):
-                messages.append(
-                    OutputMessage(
-                        role="assistant", parts=[Text(content=content)], finish_reason="stop"
-                    )
-                )
-    return messages
-
-
-def _extract_output_from_stop_response(stop_response: Any) -> list[OutputMessage]:
-    messages = []
-    message = getattr(stop_response, "message", None)
-    if message:
-        content = getattr(message, "content", None)
-        if content and isinstance(content, str):
-            messages.append(
-                OutputMessage(role="assistant", parts=[Text(content=content)], finish_reason="stop")
+        invocation.usage_cache_creation_input_tokens = usage.get(
+            "cacheWriteInputTokens"
+        )
+    metrics = metadata.get("metrics", {})
+    if isinstance(metrics, dict) and invocation.monotonic_start_s is not None:
+        ttft_ms = metrics.get("timeToFirstByteMs")
+        if ttft_ms is not None:
+            invocation.monotonic_first_token_s = (
+                invocation.monotonic_start_s + float(ttft_ms) / 1000
             )
-        elif content and isinstance(content, list):
-            parts = _convert_content_blocks(content)
-            messages.append(OutputMessage(role="assistant", parts=parts, finish_reason="stop"))
-    return messages
-
-
-def _get_stop_reason(result: Any) -> str:
-    if isinstance(result, dict):
-        return result.get("stop_reason", "stop") or "stop"
-    stop_reason = getattr(result, "stop_reason", None)
-    return str(stop_reason) if stop_reason else "stop"
-
-
-def _get_stop_reason_from_response(stop_response: Any) -> str:
-    stop_reason = getattr(stop_response, "stop_reason", None)
-    if stop_reason:
-        return str(stop_reason)
-    return "stop"
-
-
-def _serialize_tool_result(result: Any) -> Any:
-    if isinstance(result, (str, int, float, bool, type(None))):
-        return result
-    if isinstance(result, dict):
-        return result
-    if isinstance(result, list):
-        return [_serialize_tool_result(item) for item in result]
-    content = getattr(result, "content", None)
-    if content is not None:
-        return _serialize_tool_result(content)
-    return str(result)

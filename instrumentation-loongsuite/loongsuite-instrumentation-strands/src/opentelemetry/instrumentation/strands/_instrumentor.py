@@ -1,13 +1,32 @@
-import logging
-from typing import Collection
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+import logging
+from collections.abc import AsyncGenerator
+from typing import Any, Collection
+
+from wrapt import wrap_function_wrapper
+
+from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.strands._hooks import LoongsuiteHook
+from opentelemetry.instrumentation.strands._native_telemetry import (
+    NativeTelemetrySuppression,
+)
 from opentelemetry.instrumentation.strands.package import _instruments
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
-from wrapt import wrap_function_wrapper
-
-from opentelemetry.instrumentation.strands._hooks import LoongsuiteHook
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +47,8 @@ class StrandsInstrumentor(BaseInstrumentor):
         )
 
         self._hook = LoongsuiteHook(handler)
+        self._native_telemetry = NativeTelemetrySuppression()
+        self._native_telemetry.install()
 
         try:
             wrap_function_wrapper(
@@ -35,19 +56,82 @@ class StrandsInstrumentor(BaseInstrumentor):
                 name="Agent.__init__",
                 wrapper=self._agent_init_wrapper,
             )
+            wrap_function_wrapper(
+                module="strands.agent.agent",
+                name="Agent.stream_async",
+                wrapper=self._stream_async_wrapper,
+            )
         except Exception:
-            logger.debug("Failed to wrap strands Agent.__init__", exc_info=True)
+            logger.debug(
+                "Failed to wrap strands Agent lifecycle", exc_info=True
+            )
 
     def _agent_init_wrapper(self, wrapped, instance, args, kwargs):
         wrapped(*args, **kwargs)
         try:
-            instance.add_hook(self._hook)
+            if getattr(instance, "_loongsuite_strands_hook", None) is None:
+                instance.hooks.add_hook(self._hook)
+                instance._loongsuite_strands_hook = self._hook
         except Exception:
-            logger.debug("Failed to register loongsuite hook on Agent", exc_info=True)
+            logger.debug(
+                "Failed to register loongsuite hook on Agent", exc_info=True
+            )
+
+    def _stream_async_wrapper(self, wrapped, instance, args, kwargs):
+        return self._forward_stream(wrapped(*args, **kwargs))
+
+    async def _forward_stream(self, stream: Any) -> AsyncGenerator[Any, None]:
+        state_key = None
+        iterator = stream.__aiter__()
+        try:
+            while True:
+                baseline_context = otel_context.get_current()
+                self._safe_hook_call(
+                    self._hook.attach_stream_contexts, state_key
+                )
+                try:
+                    event = await iterator.__anext__()
+                except StopAsyncIteration:
+                    return
+                finally:
+                    state_key = (
+                        state_key or self._hook.current_invocation_key()
+                    )
+                    self._safe_hook_call(
+                        self._hook.detach_stream_contexts, state_key
+                    )
+                    if otel_context.get_current() is not baseline_context:
+                        self._hook.abandon_stream_context_tokens(state_key)
+                        otel_context.attach(baseline_context)
+                yield event
+        finally:
+            try:
+                close = getattr(iterator, "aclose", None)
+                if callable(close):
+                    await close()
+            finally:
+                self._safe_hook_call(
+                    self._hook.attach_stream_contexts, state_key
+                )
+                self._safe_hook_call(
+                    self._hook.finish_closed_stream, state_key
+                )
+
+    @staticmethod
+    def _safe_hook_call(callback: Any, *args: Any) -> None:
+        try:
+            callback(*args)
+        except Exception:
+            logger.debug("Failed to run strands telemetry hook", exc_info=True)
 
     def _uninstrument(self, **kwargs):
         try:
-            import strands.agent.agent as agent_module
+            import strands.agent.agent as agent_module  # noqa: PLC0415
+
             unwrap(agent_module.Agent, "__init__")
+            unwrap(agent_module.Agent, "stream_async")
         except Exception:
             pass
+        native_telemetry = getattr(self, "_native_telemetry", None)
+        if native_telemetry is not None:
+            native_telemetry.restore()

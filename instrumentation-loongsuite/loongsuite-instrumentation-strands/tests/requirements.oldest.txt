@@ -1,4 +1,4 @@
-strands-agents>=0.1.0
+strands-agents==1.50.2
 opentelemetry-api==1.37.0
 opentelemetry-sdk==1.37.0
 opentelemetry-instrumentation==0.58b0

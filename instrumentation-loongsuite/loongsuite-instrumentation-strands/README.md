@@ -4,6 +4,10 @@ OpenTelemetry instrumentation for [Strands Agents](https://github.com/strands-ag
 
 This package leverages the Strands SDK's native hooks system to produce spans conforming to the OpenTelemetry GenAI semantic conventions as extended by LoongSuite.
 
+The hook adapter delegates span lifecycle, attributes, content capture, and
+metrics to `opentelemetry-util-genai`, keeping the framework-specific code
+limited to translating Strands events.
+
 ## Installation
 
 ```bash
@@ -38,5 +42,16 @@ invoke_agent <agent_name>       (INTERNAL, gen_ai.span.kind=AGENT)
 ## Requirements
 
 - Python >= 3.10
-- strands-agents >= 0.1.0
+- strands-agents >= 1.50.2, < 2.0.0
 - opentelemetry-api ~= 1.37
+
+## Configuration
+
+- `OTEL_INSTRUMENTATION_STRANDS_LLM_SPAN_MODE=auto|always|never` controls the
+  framework LLM span. `auto` is the default and avoids it when the model object
+  reports that a provider instrumentor is already active.
+- `OTEL_INSTRUMENTATION_STRANDS_SUPPRESS_NATIVE=true|false` controls suppression
+  of duplicate Strands SDK-native spans. The default is `true` and does not
+  suppress model-provider instrumentation.
+- Standard LoongSuite content-capture settings control prompt and response
+  attributes; content is not captured by default.

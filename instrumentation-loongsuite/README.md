@@ -25,6 +25,7 @@
 | [loongsuite-instrumentation-qwen-agent](./loongsuite-instrumentation-qwen-agent) | qwen-agent >= 0.0.20 | No | development
 | [loongsuite-instrumentation-qwenpaw](./loongsuite-instrumentation-qwenpaw) | qwenpaw >= 1.1.0; copaw >= 0.1.0, <= 1.0.2 (legacy) | No | development
 | [loongsuite-instrumentation-slop-code](./loongsuite-instrumentation-slop-code) | slop-code-bench >= 0.1 | No | development
+| [loongsuite-instrumentation-strands](./loongsuite-instrumentation-strands) | strands-agents >= 1.50.2, < 2.0.0 | No | development
 | [loongsuite-instrumentation-terminus2](./loongsuite-instrumentation-terminus2) | terminal-bench >= 0.1.0 | No | development
 | [loongsuite-instrumentation-vita](./loongsuite-instrumentation-vita) | vita >= 0.0.1 | No | development
 | [loongsuite-instrumentation-webarena](./loongsuite-instrumentation-webarena) | webarena >= 0.0.1 | No | development
