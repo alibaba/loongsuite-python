@@ -473,7 +473,7 @@ async def test_model_error_is_reraised_and_spans_fail(telemetry):
 async def test_cancellation_cleans_state_and_spans(telemetry):
     instrumentor, exporter, _ = telemetry
     agent = Agent(model=SlowModel(), retry_strategy=None)
-    with pytest.raises(TimeoutError):
+    with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(agent.invoke_async("wait"), timeout=0.01)
 
     assert instrumentor._hook._states == {}
