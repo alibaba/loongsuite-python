@@ -16,6 +16,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from google.genai import types
 
 from opentelemetry import trace
 from opentelemetry._logs import get_logger_provider
@@ -28,6 +29,9 @@ from opentelemetry.instrumentation.google_genai.allowlist_util import AllowList
 from opentelemetry.instrumentation.google_genai.generate_content import (
     _create_instrumented_generate_content,
     _create_instrumented_generate_content_stream,
+)
+from opentelemetry.instrumentation.google_genai.message import (
+    StreamOutputMessageAccumulator,
 )
 from opentelemetry.instrumentation.google_genai.tool_call_wrapper import (
     _wrap_tool_function,
@@ -293,6 +297,102 @@ def test_stream_wrapper_construction_failure_returns_original_stream(
             {"model": "gemini-test", "contents": "hello"},
         )
         assert actual is raw_stream
+        assert len(otel.get_finished_spans()) == 1
+        assert not trace.get_current_span().get_span_context().is_valid
+    finally:
+        otel.uninstall()
+
+
+def test_stream_accumulator_failure_preserves_chunks_and_ends_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler, otel = _handler()
+    wrapped = _create_instrumented_generate_content_stream(
+        handler,
+        AllowList(),
+    )
+    chunks = [
+        types.GenerateContentResponse(
+            candidates=[
+                types.Candidate(
+                    index=0,
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part(text="business output")],
+                    ),
+                )
+            ]
+        )
+    ]
+
+    def sdk_call(*args, **kwargs):
+        return iter(chunks)
+
+    def fail_accumulation(self, candidates):
+        raise RuntimeError("probe accumulation failed")
+
+    monkeypatch.setattr(
+        StreamOutputMessageAccumulator,
+        "add_candidates",
+        fail_accumulation,
+    )
+    try:
+        actual = list(
+            wrapped(
+                sdk_call,
+                object(),
+                (),
+                {"model": "gemini-test", "contents": "hello"},
+            )
+        )
+        assert actual[0] is chunks[0]
+        assert len(otel.get_finished_spans()) == 1
+        assert not trace.get_current_span().get_span_context().is_valid
+    finally:
+        otel.uninstall()
+
+
+def test_stream_output_mapping_failure_still_ends_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler, otel = _handler()
+    wrapped = _create_instrumented_generate_content_stream(
+        handler,
+        AllowList(),
+    )
+    chunk = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                index=0,
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text="business output")],
+                ),
+            )
+        ]
+    )
+
+    def sdk_call(*args, **kwargs):
+        return iter([chunk])
+
+    def fail_output_mapping(self):
+        raise RuntimeError("probe output mapping failed")
+
+    monkeypatch.setattr(
+        StreamOutputMessageAccumulator,
+        "to_output_messages",
+        fail_output_mapping,
+    )
+    try:
+        actual = list(
+            wrapped(
+                sdk_call,
+                object(),
+                (),
+                {"model": "gemini-test", "contents": "hello"},
+            )
+        )
+        assert actual == [chunk]
         assert len(otel.get_finished_spans()) == 1
         assert not trace.get_current_span().get_span_context().is_valid
     finally:

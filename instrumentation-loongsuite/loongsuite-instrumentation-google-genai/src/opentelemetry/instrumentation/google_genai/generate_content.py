@@ -59,6 +59,7 @@ from .client_info import get_client_info as _get_client_info
 from .custom_semconv import GCP_GENAI_OPERATION_CONFIG
 from .dict_util import flatten_dict
 from .message import (
+    StreamOutputMessageAccumulator,
     to_input_messages,
     to_output_messages,
     to_system_instructions,
@@ -685,7 +686,7 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
         self._self_finish_reasons: list[str] = []
-        self._self_candidates = []
+        self._self_output_accumulator = StreamOutputMessageAccumulator()
 
     def _process_chunk(self, chunk: GenerateContentResponse) -> None:
         self._self_invocation.record_first_token()
@@ -695,17 +696,16 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
             self._self_invocation,
         )
         if chunk.candidates:
-            self._self_candidates.extend(chunk.candidates)
+            self._self_output_accumulator.add_candidates(chunk.candidates)
 
     def _on_stream_end(self) -> None:
-        if (
-            self._self_telemetry_handler.should_capture_content()
-            and self._self_candidates
-        ):
-            self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
-            )
-        self._self_invocation.stop()
+        try:
+            if self._self_telemetry_handler.should_capture_content():
+                self._self_invocation.output_messages = (
+                    self._self_output_accumulator.to_output_messages()
+                )
+        finally:
+            self._self_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._self_invocation.fail(error)
@@ -726,7 +726,7 @@ class AsyncGenerateContentStreamWrapper(
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
         self._self_finish_reasons: list[str] = []
-        self._self_candidates = []
+        self._self_output_accumulator = StreamOutputMessageAccumulator()
 
     def _process_chunk(self, chunk: GenerateContentResponse) -> None:
         self._self_invocation.record_first_token()
@@ -736,17 +736,16 @@ class AsyncGenerateContentStreamWrapper(
             self._self_invocation,
         )
         if chunk.candidates:
-            self._self_candidates.extend(chunk.candidates)
+            self._self_output_accumulator.add_candidates(chunk.candidates)
 
     def _on_stream_end(self) -> None:
-        if (
-            self._self_telemetry_handler.should_capture_content()
-            and self._self_candidates
-        ):
-            self._self_invocation.output_messages = to_output_messages(
-                candidates=self._self_candidates
-            )
-        self._self_invocation.stop()
+        try:
+            if self._self_telemetry_handler.should_capture_content():
+                self._self_invocation.output_messages = (
+                    self._self_output_accumulator.to_output_messages()
+                )
+        finally:
+            self._self_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._self_invocation.fail(error)

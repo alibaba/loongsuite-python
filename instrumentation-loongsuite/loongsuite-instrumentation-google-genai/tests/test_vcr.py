@@ -14,6 +14,7 @@
 
 """Recorded real-API coverage for every instrumented Google GenAI method."""
 
+import json
 import os
 from importlib.metadata import version
 
@@ -72,7 +73,12 @@ def client():
         value.close()
 
 
-def _assert_generation_telemetry(span_exporter, metric_reader):
+def _assert_generation_telemetry(
+    span_exporter,
+    metric_reader,
+    *,
+    expected_output=None,
+):
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
     span = spans[0]
@@ -80,6 +86,13 @@ def _assert_generation_telemetry(span_exporter, metric_reader):
     assert span.attributes["gen_ai.response.id"]
     assert span.attributes["gen_ai.usage.input_tokens"] > 0
     assert span.attributes["gen_ai.usage.output_tokens"] > 0
+    if expected_output is not None:
+        messages = json.loads(span.attributes["gen_ai.output.messages"])
+        assert len(messages) == 1
+        assert messages[0]["parts"] == [
+            {"content": expected_output, "type": "text"}
+        ]
+        assert messages[0]["finish_reason"] == "stop"
     _assert_standard_metrics(metric_reader)
 
 
@@ -139,7 +152,10 @@ def test_sync_generate_content_stream(client, telemetry):
         )
     )
     assert any(chunk.text for chunk in chunks)
-    _assert_generation_telemetry(*telemetry)
+    _assert_generation_telemetry(
+        *telemetry,
+        expected_output="sync stream ok",
+    )
 
 
 @pytest.mark.vcr
@@ -173,7 +189,10 @@ async def test_async_generate_content_stream(client, telemetry):
     )
     chunks = [chunk async for chunk in stream]
     assert any(chunk.text for chunk in chunks)
-    _assert_generation_telemetry(*telemetry)
+    _assert_generation_telemetry(
+        *telemetry,
+        expected_output="async stream ok",
+    )
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@
 """Opt-in smoke test against the real Gemini Developer API."""
 
 import asyncio
+import json
 import os
 
 import pytest
@@ -217,6 +218,29 @@ def test_live_google_genai_all_instrumented_methods():
         span.attributes["gen_ai.response.time_to_first_token"] > 0
         for span in streaming_spans
     )
+    generation_streaming_spans = [
+        span
+        for span in generation_spans
+        if "gen_ai.response.time_to_first_token" in span.attributes
+    ]
+    assert len(generation_streaming_spans) == 2
+    expected_stream_outputs = {
+        "".join(chunk.text or "" for chunk in sync_stream),
+        "".join(chunk.text or "" for chunk in async_stream),
+    }
+    observed_stream_outputs = set()
+    for span in generation_streaming_spans:
+        messages = json.loads(span.attributes["gen_ai.output.messages"])
+        assert len(messages) == 1
+        assert messages[0]["finish_reason"] == "stop"
+        observed_stream_outputs.add(
+            "".join(
+                part["content"]
+                for part in messages[0]["parts"]
+                if part["type"] == "text"
+            )
+        )
+    assert observed_stream_outputs == expected_stream_outputs
 
     metric_names = {
         metric.name

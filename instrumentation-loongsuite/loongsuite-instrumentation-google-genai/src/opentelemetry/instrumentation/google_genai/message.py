@@ -18,7 +18,9 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from google.genai import types as genai_types
 
@@ -46,6 +48,135 @@ class Role(str, Enum):
 
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _StreamCandidateState:
+    role: str = ""
+    finish_reason: FinishReason | str = ""
+    parts: list[MessagePart] = field(default_factory=list)
+    position_slots: dict[int, tuple[int, str]] = field(default_factory=dict)
+
+
+class StreamOutputMessageAccumulator:
+    """Merge Google GenAI streaming candidates into logical output messages."""
+
+    def __init__(self) -> None:
+        self._candidate_states: dict[int, _StreamCandidateState] = {}
+
+    def add_candidates(
+        self,
+        candidates: list[genai_types.Candidate],
+    ) -> None:
+        for fallback_index, candidate in enumerate(candidates):
+            candidate_index = candidate.index
+            if not isinstance(candidate_index, int):
+                candidate_index = fallback_index
+            state = self._candidate_states.setdefault(
+                candidate_index,
+                _StreamCandidateState(),
+            )
+            self._add_candidate(state, candidate)
+
+    def to_output_messages(self) -> list[OutputMessage]:
+        messages = []
+        for candidate_index in sorted(self._candidate_states):
+            state = self._candidate_states[candidate_index]
+            if not state.parts:
+                continue
+            messages.append(
+                OutputMessage(
+                    role=state.role,
+                    parts=state.parts,
+                    finish_reason=state.finish_reason,
+                )
+            )
+        return messages
+
+    @staticmethod
+    def _add_candidate(
+        state: _StreamCandidateState,
+        candidate: genai_types.Candidate,
+    ) -> None:
+        finish_reason = _to_finish_reason(candidate.finish_reason)
+        if finish_reason:
+            state.finish_reason = finish_reason
+
+        content = candidate.content
+        if content is None:
+            return
+        role = _to_role(content.role)
+        if role:
+            state.role = role
+
+        for position, provider_part in enumerate(content.parts or []):
+            part = _to_part(provider_part, position)
+            if part is None:
+                continue
+            part_kind = getattr(part, "type", type(part).__name__)
+            previous = state.position_slots.get(position)
+            if previous is not None:
+                slot, previous_kind = previous
+                if previous_kind == part_kind and _merge_stream_parts(
+                    state.parts[slot],
+                    part,
+                ):
+                    continue
+
+            slot = len(state.parts)
+            state.parts.append(part)
+            state.position_slots[position] = (slot, part_kind)
+
+
+def _merge_stream_parts(existing: MessagePart, incoming: MessagePart) -> bool:
+    if isinstance(existing, Text) and isinstance(incoming, Text):
+        existing.content += incoming.content
+        return True
+    if isinstance(existing, Reasoning) and isinstance(incoming, Reasoning):
+        existing.content += incoming.content
+        return True
+    if isinstance(existing, ToolCallRequest) and isinstance(
+        incoming, ToolCallRequest
+    ):
+        if (existing.id and incoming.id and existing.id != incoming.id) or (
+            existing.name and incoming.name and existing.name != incoming.name
+        ):
+            return False
+        existing.id = incoming.id or existing.id
+        existing.name = incoming.name or existing.name
+        existing.arguments = _merge_stream_values(
+            existing.arguments,
+            incoming.arguments,
+        )
+        return True
+    if isinstance(existing, ToolCallResponse) and isinstance(
+        incoming, ToolCallResponse
+    ):
+        if existing.id and incoming.id and existing.id != incoming.id:
+            return False
+        existing.id = incoming.id or existing.id
+        existing.response = _merge_stream_values(
+            existing.response,
+            incoming.response,
+        )
+        return True
+    if isinstance(existing, Blob) and isinstance(incoming, Blob):
+        return existing == incoming
+    if isinstance(existing, Uri) and isinstance(incoming, Uri):
+        return existing == incoming
+    return False
+
+
+def _merge_stream_values(existing: Any, incoming: Any) -> Any:
+    if incoming in (None, "", {}, []):
+        return existing
+    if existing in (None, "", {}, []):
+        return incoming
+    if isinstance(existing, dict) and isinstance(incoming, dict):
+        return {**existing, **incoming}
+    if isinstance(existing, str) and isinstance(incoming, str):
+        return existing + incoming
+    return incoming
 
 
 def to_input_messages(

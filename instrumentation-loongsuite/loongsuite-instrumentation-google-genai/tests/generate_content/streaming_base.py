@@ -15,7 +15,10 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import unittest
+
+from google.genai import types
 
 from opentelemetry import context as context_api
 from opentelemetry.instrumentation.google_genai import (
@@ -95,6 +98,54 @@ class StreamingTestCase(TestCase):
         span = self.otel.get_span_named("generate_content gemini-2.0-flash")
         self.assertGreater(
             span.attributes["gen_ai.response.time_to_first_token"], 0
+        )
+
+    def test_stream_aggregates_chunks_into_one_output_message(self):
+        self.configure_valid_response(
+            candidate=types.Candidate(
+                index=0,
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text="stream")],
+                ),
+            )
+        )
+        self.configure_valid_response(
+            candidate=types.Candidate(
+                index=0,
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text=" output")],
+                ),
+            )
+        )
+        self.configure_valid_response(
+            candidate=types.Candidate(
+                index=0,
+                finish_reason=types.FinishReason.STOP,
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text="")],
+                ),
+            )
+        )
+
+        self.generate_content(
+            model="gemini-2.0-flash",
+            contents="Some input",
+        )
+
+        span = self.otel.get_span_named("generate_content gemini-2.0-flash")
+        messages = json.loads(span.attributes["gen_ai.output.messages"])
+        self.assertEqual(
+            messages,
+            [
+                {
+                    "role": "assistant",
+                    "parts": [{"content": "stream output", "type": "text"}],
+                    "finish_reason": "stop",
+                }
+            ],
         )
 
     def test_includes_token_counts_in_span_not_aggregated_from_responses(self):
