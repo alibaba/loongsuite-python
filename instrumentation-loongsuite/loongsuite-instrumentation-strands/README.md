@@ -47,11 +47,18 @@ invoke_agent <agent_name>       (INTERNAL, gen_ai.span.kind=AGENT)
 
 ## Configuration
 
-- `OTEL_INSTRUMENTATION_STRANDS_LLM_SPAN_MODE=auto|always|never` controls the
-  framework LLM span. `auto` is the default and avoids it when the model object
-  reports that a provider instrumentor is already active.
+- LoongSuite always emits the framework-level LLM span. An independently
+  instrumented model provider may emit its own nested LLM span; the OSS package
+  does not suppress either span.
 - `OTEL_INSTRUMENTATION_STRANDS_SUPPRESS_NATIVE=true|false` controls suppression
   of duplicate Strands SDK-native spans. The default is `true` and does not
   suppress model-provider instrumentation.
 - Standard LoongSuite content-capture settings control prompt and response
   attributes; content is not captured by default.
+- Stream cleanup failures are isolated from application control flow. If an
+  invocation closes before Strands emits its normal after-events, unfinished
+  spans use a synthetic `RuntimeError` describing that incomplete lifecycle.
+  If a telemetry failure reporter also fails, that individual span can record
+  the reporter error while its parent spans retain the original business error.
+- Strands-native `strands.*` metrics remain available, while the LoongSuite OSS
+  product contract derives its unified GenAI metrics from the emitted spans.

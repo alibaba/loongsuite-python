@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import builtins
 import json
 import os
 from collections.abc import AsyncGenerator, Sequence
@@ -32,8 +33,22 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 
 os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai_latest_experimental"
 
-from opentelemetry.instrumentation.strands import StrandsInstrumentor
-from opentelemetry.instrumentation.strands._hooks import _provider_name
+from opentelemetry.instrumentation.strands import (
+    StrandsInstrumentor,
+)
+from opentelemetry.instrumentation.strands import (
+    _hooks as hooks_module,
+)
+from opentelemetry.instrumentation.strands import (
+    _instrumentor as instrumentor_module,
+)
+from opentelemetry.instrumentation.strands._hooks import (
+    _agent_invocation_usage,
+    _model_provider,
+)
+from opentelemetry.instrumentation.strands._native_telemetry import (
+    NativeTelemetrySuppression,
+)
 
 
 class DeterministicModel(Model):
@@ -144,6 +159,40 @@ class SlowModel(DeterministicModel):
             yield {}
 
 
+class FailingCloseStream:
+    def __init__(self, stream: Any):
+        self.stream = stream
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await self.stream.__anext__()
+
+    async def aclose(self):
+        await self.stream.aclose()
+        raise RuntimeError("injected aclose failure")
+
+
+class ProviderInstrumentedModel(DeterministicModel):
+    _is_instrumented_by_opentelemetry = True
+
+    def __init__(self, responses: Sequence[dict[str, Any]], tracer: Any):
+        super().__init__(responses)
+        self.tracer = tracer
+
+    async def stream(
+        self, *args: Any, **kwargs: Any
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        with self.tracer.start_as_current_span("provider chat"):
+            async for event in super().stream(*args, **kwargs):
+                yield event
+
+
+class OllamaQwenModel(DeterministicModel):
+    pass
+
+
 @tool
 def calculator(expression: str) -> str:
     """Evaluate the bounded test expression."""
@@ -194,7 +243,11 @@ def _agent() -> Agent:
 @pytest.mark.asyncio
 async def test_real_strands_lifecycle_and_hierarchy(telemetry):
     _, exporter, _ = telemetry
-    result = await _agent().invoke_async("Calculate 2+2")
+    agent_instance = _agent()
+    agent_instance.model.client_args = {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    }
+    result = await agent_instance.invoke_async("Calculate 2+2")
     assert str(result).strip() == "The answer is 4."
 
     spans = exporter.get_finished_spans()
@@ -237,6 +290,13 @@ async def test_real_strands_lifecycle_and_hierarchy(telemetry):
         "gen_ai.response.time_to_first_token"
     ] == pytest.approx(3_000_000, abs=1)
     assert tool_span.attributes["gen_ai.tool.call.id"] == "tool-1"
+    assert agent.attributes["gen_ai.provider.name"] == "strands-agents"
+    assert all(
+        span.attributes["gen_ai.provider.name"] == "dashscope" for span in llms
+    )
+    assert all(
+        "gen_ai.tool.json_schema" not in span.attributes for span in spans
+    )
     assert all("gen_ai.framework" not in span.attributes for span in spans)
 
 
@@ -283,16 +343,25 @@ async def test_capture_content_is_disabled_by_default(telemetry):
 
 
 @pytest.mark.asyncio
-async def test_llm_span_can_be_disabled(monkeypatch, telemetry):
-    monkeypatch.setenv("OTEL_INSTRUMENTATION_STRANDS_LLM_SPAN_MODE", "never")
-    _, exporter, _ = telemetry
-    await _agent().invoke_async("Calculate 2+2")
-    kinds = [
-        span.attributes["gen_ai.span.kind"]
-        for span in exporter.get_finished_spans()
-    ]
-    assert "LLM" not in kinds
-    assert kinds.count("STEP") == 2
+async def test_framework_and_provider_llm_spans_can_coexist(telemetry):
+    instrumentor, exporter, _ = telemetry
+    model = ProviderInstrumentedModel(
+        [{"content": [{"text": "provider result"}]}],
+        instrumentor._hook._handler._tracer,
+    )
+    result = await Agent(model=model, retry_strategy=None).invoke_async(
+        "hello"
+    )
+    assert str(result).strip() == "provider result"
+
+    spans = exporter.get_finished_spans()
+    framework_llm = next(
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.span.kind") == "LLM"
+    )
+    provider_llm = next(span for span in spans if span.name == "provider chat")
+    assert provider_llm.parent.span_id == framework_llm.context.span_id
 
 
 @pytest.mark.asyncio
@@ -362,12 +431,51 @@ async def test_probe_callback_failure_does_not_change_business_result(
     ).throw(RuntimeError("injected probe failure"))
     result = await _agent().invoke_async("Calculate 2+2")
     assert str(result).strip() == "The answer is 4."
-    kinds = [
-        span.attributes["gen_ai.span.kind"]
-        for span in exporter.get_finished_spans()
-    ]
+    spans = exporter.get_finished_spans()
+    kinds = [span.attributes["gen_ai.span.kind"] for span in spans]
     assert "AGENT" in kinds
     assert "LLM" not in kinds
+    degraded_step = next(
+        span for span in spans if span.attributes["gen_ai.span.kind"] == "STEP"
+    )
+    assert degraded_step.status.status_code.name == "ERROR"
+    assert degraded_step.attributes["error.type"] == "RuntimeError"
+    assert degraded_step.status.description == "injected probe failure"
+
+
+@pytest.mark.asyncio
+async def test_react_step_start_failure_does_not_leave_partial_state(
+    telemetry, monkeypatch
+):
+    instrumentor, exporter, _ = telemetry
+    handler = instrumentor._hook._handler
+    original_start_react_step = handler.start_react_step
+    monkeypatch.setattr(
+        handler,
+        "start_react_step",
+        lambda invocation, context=None: (_ for _ in ()).throw(
+            RuntimeError("injected start_react_step failure")
+        ),
+    )
+
+    result = await _agent().invoke_async("Calculate 2+2 with step fault")
+    assert str(result).strip() == "The answer is 4."
+    assert instrumentor._hook._states == {}
+
+    monkeypatch.setattr(handler, "start_react_step", original_start_react_step)
+    clean_result = await _agent().invoke_async("Calculate 2+2 clean sibling")
+    assert str(clean_result).strip() == "The answer is 4."
+    clean_agent = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes["gen_ai.span.kind"] == "AGENT"
+    ][-1]
+    clean_spans = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.context.trace_id == clean_agent.context.trace_id
+    ]
+    assert len(clean_spans) == 6
 
 
 @pytest.mark.asyncio
@@ -423,8 +531,59 @@ async def test_finalize_callback_failure_preserves_business_and_next_sibling(
     result = await _agent().invoke_async("Calculate 2+2 with probe fault")
     assert str(result).strip() == "The answer is 4."
     assert instrumentor._hook._states == {}
+    fault_spans = exporter.get_finished_spans()
+    assert all(
+        "gen_ai.operation.name" in span.attributes for span in fault_spans
+    )
+    fallback_span = next(
+        span
+        for span in fault_spans
+        if span.status.description == f"injected {callback_name} failure"
+    )
+    assert fallback_span.attributes["error.type"] == "RuntimeError"
+    assert "gen_ai.provider.name" in fallback_span.attributes
 
     setattr(handler, callback_name, original_callback)
+    clean_result = await _agent().invoke_async("Calculate 2+2 clean sibling")
+    assert str(clean_result).strip() == "The answer is 4."
+    clean_agent = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes["gen_ai.span.kind"] == "AGENT"
+    ][-1]
+    clean_spans = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.context.trace_id == clean_agent.context.trace_id
+    ]
+    assert clean_agent.parent is None
+    assert len(clean_spans) == 6
+
+
+@pytest.mark.asyncio
+async def test_response_mapping_failure_cleans_spans_and_next_sibling(
+    telemetry, monkeypatch
+):
+    instrumentor, exporter, _ = telemetry
+    original_mapping = hooks_module._convert_output_message
+
+    def fail_mapping(*args, **kwargs):
+        raise RuntimeError("injected response mapping failure")
+
+    monkeypatch.setattr(hooks_module, "_convert_output_message", fail_mapping)
+    result = await _agent().invoke_async("Calculate 2+2 with mapping fault")
+    assert str(result).strip() == "The answer is 4."
+    assert instrumentor._hook._states == {}
+    fault_spans = exporter.get_finished_spans()
+    assert any(
+        span.status.description == "injected response mapping failure"
+        for span in fault_spans
+    )
+    assert all(span.end_time is not None for span in fault_spans)
+
+    monkeypatch.setattr(
+        hooks_module, "_convert_output_message", original_mapping
+    )
     clean_result = await _agent().invoke_async("Calculate 2+2 clean sibling")
     assert str(clean_result).strip() == "The answer is 4."
     clean_agent = [
@@ -460,6 +619,13 @@ async def test_failure_reporter_failure_preserves_exception_and_next_sibling(
         ).invoke_async("hello")
     assert raised.value is original
     assert instrumentor._hook._states == {}
+    fault_llm = next(
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes["gen_ai.span.kind"] == "LLM"
+    )
+    assert fault_llm.attributes["error.type"] == "ValueError"
+    assert fault_llm.status.description == "provider unavailable"
 
     handler.fail_llm = original_callback
     clean_result = await _agent().invoke_async("Calculate 2+2 clean sibling")
@@ -476,6 +642,61 @@ async def test_failure_reporter_failure_preserves_exception_and_next_sibling(
     ]
     assert clean_agent.parent is None
     assert len(clean_spans) == 6
+
+
+def test_unfinished_llm_reporter_failure_still_finalizes_step_and_agent(
+    telemetry,
+):
+    instrumentor, exporter, _ = telemetry
+    hook = instrumentor._hook
+    agent = _agent()
+    invocation_state = {
+        "messages": [{"role": "user", "content": [{"text": "hello"}]}],
+        "event_loop_cycle_id": "unfinished-cycle",
+    }
+    hook._before_invocation(
+        hooks_module.BeforeInvocationEvent(
+            agent=agent,
+            invocation_state=invocation_state,
+            messages=invocation_state["messages"],
+        )
+    )
+    hook._before_model(
+        hooks_module.BeforeModelCallEvent(
+            agent=agent,
+            invocation_state=invocation_state,
+        )
+    )
+
+    original_callback = hook._handler.fail_llm
+
+    def failing_callback(*args, **kwargs):
+        raise RuntimeError("injected unfinished fail_llm failure")
+
+    hook._handler.fail_llm = failing_callback
+    hook._after_invocation(
+        hooks_module.AfterInvocationEvent(
+            agent=agent,
+            invocation_state=invocation_state,
+            result=None,
+        )
+    )
+
+    assert hook._states == {}
+    spans = exporter.get_finished_spans()
+    assert {span.attributes["gen_ai.span.kind"] for span in spans} == {
+        "LLM",
+        "STEP",
+        "AGENT",
+    }
+    assert all(span.end_time is not None for span in spans)
+    assert all(span.status.status_code.name == "ERROR" for span in spans)
+    llm = next(
+        span for span in spans if span.attributes["gen_ai.span.kind"] == "LLM"
+    )
+    assert llm.status.description == "model call did not finish"
+    assert llm.attributes["error.type"] == "RuntimeError"
+    hook._handler.fail_llm = original_callback
 
 
 @pytest.mark.asyncio
@@ -517,10 +738,13 @@ async def test_cancellation_cleans_state_and_spans(telemetry):
         "AGENT",
     }
     assert all(span.status.status_code.name == "ERROR" for span in spans)
+    assert all(
+        span.attributes["error.type"] == "CancelledError" for span in spans
+    )
 
 
 @pytest.mark.asyncio
-async def test_early_break_cross_task_stream_close_cleans_state_and_next_sibling(
+async def test_generator_exit_from_early_break_cleans_state_and_next_sibling(
     telemetry, caplog
 ):
     instrumentor, exporter, _ = telemetry
@@ -540,10 +764,7 @@ async def test_early_break_cross_task_stream_close_cleans_state_and_next_sibling
     ]
     closed_agent, clean_agent = agents
     assert closed_agent.status.status_code.name == "ERROR"
-    assert (
-        closed_agent.status.description
-        == "Strands stream closed before invocation completed"
-    )
+    assert closed_agent.attributes["error.type"] == "GeneratorExit"
     clean_spans = [
         span
         for span in exporter.get_finished_spans()
@@ -556,6 +777,44 @@ async def test_early_break_cross_task_stream_close_cleans_state_and_next_sibling
         or "Failed to detach context" in record.getMessage()
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_aclose_failure_is_isolated_and_next_sibling_is_clean(
+    telemetry,
+):
+    instrumentor, exporter, _ = telemetry
+    stream = instrumentor._forward_stream(
+        FailingCloseStream(_agent().stream_async("Calculate 2+2"))
+    )
+    async for _ in stream:
+        if instrumentor._hook._states:
+            break
+    await stream.aclose()
+
+    assert instrumentor._hook._states == {}
+    closed_agents = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes["gen_ai.span.kind"] == "AGENT"
+    ]
+    assert len(closed_agents) == 1
+    assert closed_agents[0].status.status_code.name == "ERROR"
+
+    clean_result = await _agent().invoke_async("Calculate 2+2 clean sibling")
+    assert str(clean_result).strip() == "The answer is 4."
+    clean_agent = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes["gen_ai.span.kind"] == "AGENT"
+    ][-1]
+    clean_spans = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.context.trace_id == clean_agent.context.trace_id
+    ]
+    assert clean_agent.parent is None
+    assert len(clean_spans) == 6
 
 
 @pytest.mark.asyncio
@@ -633,13 +892,116 @@ def test_instrumentation_dependencies():
     )
 
 
+def test_missing_per_invocation_usage_does_not_use_lifetime_totals():
+    metrics = type(
+        "Metrics",
+        (),
+        {"accumulated_usage": {"inputTokens": 999}},
+    )()
+    result = type("Result", (), {"metrics": metrics})()
+    assert _agent_invocation_usage(result) == {}
+
+
+def test_native_suppression_install_failure_is_fail_open(monkeypatch, caplog):
+    wrap_calls = []
+
+    def fail_install(self):
+        raise RuntimeError("private Strands telemetry API moved")
+
+    monkeypatch.setattr(NativeTelemetrySuppression, "install", fail_install)
+    monkeypatch.setattr(
+        instrumentor_module,
+        "wrap_function_wrapper",
+        lambda *args, **kwargs: wrap_calls.append((args, kwargs)),
+    )
+
+    instrumentor = StrandsInstrumentor()
+    instrumentor._instrument(tracer_provider=TracerProvider())
+    assert len(wrap_calls) == 2
+    assert "LoongSuite instrumentation will continue" in caplog.text
+
+
+def test_agent_wrapper_install_failure_restores_native_telemetry(
+    monkeypatch, caplog
+):
+    wrap_calls = 0
+    restore_calls = []
+    unwrap_calls = []
+
+    def fail_second_wrap(*args, **kwargs):
+        nonlocal wrap_calls
+        wrap_calls += 1
+        if wrap_calls == 2:
+            raise RuntimeError("injected stream wrapper failure")
+
+    monkeypatch.setattr(
+        NativeTelemetrySuppression, "install", lambda self: None
+    )
+    monkeypatch.setattr(
+        NativeTelemetrySuppression,
+        "restore",
+        lambda self: restore_calls.append(True),
+    )
+    monkeypatch.setattr(
+        instrumentor_module, "wrap_function_wrapper", fail_second_wrap
+    )
+    monkeypatch.setattr(
+        StrandsInstrumentor,
+        "_unwrap_agent_lifecycle",
+        staticmethod(lambda: unwrap_calls.append(True)),
+    )
+
+    instrumentor = StrandsInstrumentor()
+    instrumentor._instrument(tracer_provider=TracerProvider())
+    assert wrap_calls == 2
+    assert unwrap_calls == [True]
+    assert restore_calls == [True]
+    assert "Failed to wrap strands Agent lifecycle" in caplog.text
+
+
+def test_agent_hook_registration_failure_preserves_construction(telemetry):
+    instrumentor, _, _ = telemetry
+    wrapped_calls = []
+
+    class FailingHooks:
+        def add_hook(self, hook):
+            raise RuntimeError("injected hook registration failure")
+
+    instance = type("AgentLike", (), {"hooks": FailingHooks()})()
+
+    def wrapped(*args, **kwargs):
+        wrapped_calls.append((args, kwargs))
+
+    instrumentor._agent_init_wrapper(wrapped, instance, (), {})
+    assert len(wrapped_calls) == 1
+    assert not hasattr(instance, "_loongsuite_strands_hook")
+
+
+def test_partial_native_suppression_install_can_be_restored(monkeypatch):
+    native = get_tracer()
+    original_tracer = native.tracer
+    original_import = builtins.__import__
+
+    def fail_event_loop_import(name, *args, **kwargs):
+        if name == "strands.event_loop":
+            raise ImportError("injected private module move")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fail_event_loop_import)
+    suppression = NativeTelemetrySuppression()
+    with pytest.raises(ImportError, match="private module move"):
+        suppression.install()
+    suppression.restore()
+    assert native.tracer is original_tracer
+
+
 def test_openai_compatible_dashscope_provider_is_detected():
     model = DeterministicModel([])
     model.client_args = {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
     }
     agent = type("Agent", (), {"model": model})()
-    assert _provider_name(agent) == "dashscope"
+    assert _model_provider(agent) == "dashscope"
 
 
 def test_dashscope_text_in_url_path_does_not_spoof_provider():
@@ -648,4 +1010,18 @@ def test_dashscope_text_in_url_path_does_not_spoof_provider():
         "base_url": "https://example.invalid/dashscope.aliyuncs.com/v1"
     }
     agent = type("Agent", (), {"model": model})()
-    assert _provider_name(agent) != "dashscope"
+    assert _model_provider(agent) != "dashscope"
+
+
+def test_qwen_model_served_by_ollama_keeps_ollama_provider():
+    model = OllamaQwenModel([])
+    model.config["model_id"] = "qwen3:8b"
+    agent = type("Agent", (), {"model": model})()
+    assert _model_provider(agent) == "ollama"
+
+
+def test_qwen_model_without_provider_evidence_is_not_dashscope():
+    model = DeterministicModel([])
+    model.config["model_id"] = "qwen3:8b"
+    agent = type("Agent", (), {"model": model})()
+    assert _model_provider(agent) != "dashscope"

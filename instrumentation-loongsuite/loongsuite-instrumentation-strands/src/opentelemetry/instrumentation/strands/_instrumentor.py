@@ -48,7 +48,16 @@ class StrandsInstrumentor(BaseInstrumentor):
 
         self._hook = LoongsuiteHook(handler)
         self._native_telemetry = NativeTelemetrySuppression()
-        self._native_telemetry.install()
+
+        try:
+            self._native_telemetry.install()
+        except Exception:
+            self._native_telemetry.restore()
+            logger.warning(
+                "Failed to suppress Strands native telemetry; "
+                "LoongSuite instrumentation will continue",
+                exc_info=True,
+            )
 
         try:
             wrap_function_wrapper(
@@ -62,9 +71,21 @@ class StrandsInstrumentor(BaseInstrumentor):
                 wrapper=self._stream_async_wrapper,
             )
         except Exception:
-            logger.debug(
+            self._unwrap_agent_lifecycle()
+            self._native_telemetry.restore()
+            logger.warning(
                 "Failed to wrap strands Agent lifecycle", exc_info=True
             )
+
+    @staticmethod
+    def _unwrap_agent_lifecycle() -> None:
+        try:
+            import strands.agent.agent as agent_module  # noqa: PLC0415
+
+            unwrap(agent_module.Agent, "__init__")
+            unwrap(agent_module.Agent, "stream_async")
+        except Exception:
+            pass
 
     def _agent_init_wrapper(self, wrapped, instance, args, kwargs):
         wrapped(*args, **kwargs)
@@ -101,14 +122,27 @@ class StrandsInstrumentor(BaseInstrumentor):
                         self._hook.detach_stream_contexts, state_key
                     )
                     if otel_context.get_current() is not baseline_context:
-                        self._hook.abandon_stream_context_tokens(state_key)
+                        self._safe_hook_call(
+                            self._hook.abandon_stream_context_tokens, state_key
+                        )
                         otel_context.attach(baseline_context)
                 yield event
+        except BaseException as exc:
+            self._safe_hook_call(self._hook.attach_stream_contexts, state_key)
+            self._safe_hook_call(
+                self._hook.finish_failed_stream, state_key, exc
+            )
+            raise
         finally:
             try:
                 close = getattr(iterator, "aclose", None)
                 if callable(close):
                     await close()
+            except Exception:
+                logger.debug(
+                    "Failed to close strands stream during telemetry cleanup",
+                    exc_info=True,
+                )
             finally:
                 self._safe_hook_call(
                     self._hook.attach_stream_contexts, state_key
@@ -125,13 +159,7 @@ class StrandsInstrumentor(BaseInstrumentor):
             logger.debug("Failed to run strands telemetry hook", exc_info=True)
 
     def _uninstrument(self, **kwargs):
-        try:
-            import strands.agent.agent as agent_module  # noqa: PLC0415
-
-            unwrap(agent_module.Agent, "__init__")
-            unwrap(agent_module.Agent, "stream_async")
-        except Exception:
-            pass
+        self._unwrap_agent_lifecycle()
         native_telemetry = getattr(self, "_native_telemetry", None)
         if native_telemetry is not None:
             native_telemetry.restore()

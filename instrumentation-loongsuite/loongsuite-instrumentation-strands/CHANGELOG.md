@@ -13,3 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spans using the shared LoongSuite GenAI telemetry utility.
 - Preserve application parent context while suppressing duplicate Strands SDK
   native spans.
+
+### Changed
+
+- Report `strands-agents` as the framework provider on agent spans while
+  keeping the model provider on LLM spans.
+- Always emit framework-level LLM spans without suppressing nested provider
+  instrumentation in the open-source package.
+- Finalize remaining LLM, tool, step, and agent spans best-effort when one
+  telemetry finalizer fails during invocation or stream cleanup.
+- Isolate failures raised by an underlying stream's `aclose()` while still
+  finalizing the active invocation and restoring application context.
+- Preserve cancellation and generator-exit error types, retain the original
+  model error when a failure reporter also fails, and mark model-span startup
+  failures as an explicit ReAct-step telemetry error.

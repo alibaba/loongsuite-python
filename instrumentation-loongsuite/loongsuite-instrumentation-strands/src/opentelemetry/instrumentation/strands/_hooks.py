@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
+import asyncio
+import sys
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -51,16 +52,18 @@ from opentelemetry.util.genai.types import (
 _CURRENT_INVOCATION_KEY: ContextVar[int | None] = ContextVar(
     "loongsuite_strands_invocation_key", default=None
 )
+_FRAMEWORK_PROVIDER = "strands-agents"
 
 
 @dataclass
 class _InvocationState:
     agent: InvokeAgentInvocation
+    invocation_state: Any
     agent_error: BaseException | None = None
     cycle_id: Any = None
     round: int = 0
     step: ReactStepInvocation | None = None
-    step_error: Exception | None = None
+    step_error: BaseException | None = None
     llm: LLMInvocation | None = None
     tool_invocations: dict[str, ExecuteToolInvocation] = field(
         default_factory=dict
@@ -87,7 +90,7 @@ class LoongsuiteHook:
     def _before_invocation(self, event: BeforeInvocationEvent) -> None:
         agent = event.agent
         invocation = InvokeAgentInvocation(
-            provider=_provider_name(agent),
+            provider=_FRAMEWORK_PROVIDER,
             agent_name=getattr(agent, "name", None) or "Strands Agents",
             agent_id=getattr(agent, "agent_id", None),
             agent_description=getattr(agent, "description", None),
@@ -100,7 +103,10 @@ class LoongsuiteHook:
         self._handler.start_invoke_agent(invocation)
         state_key = id(event.invocation_state)
         with self._lock:
-            self._states[state_key] = _InvocationState(agent=invocation)
+            self._states[state_key] = _InvocationState(
+                agent=invocation,
+                invocation_state=event.invocation_state,
+            )
         _CURRENT_INVOCATION_KEY.set(state_key)
 
     @hook_advice("strands", "before_model")
@@ -111,21 +117,19 @@ class LoongsuiteHook:
         cycle_id = event.invocation_state.get("event_loop_cycle_id")
         if state.step is None or cycle_id != state.cycle_id:
             self._finish_step(state)
-            state.round += 1
-            state.cycle_id = cycle_id
-            state.step = ReactStepInvocation(
-                round=state.round,
-            )
-            state.step_error = None
+            next_round = state.round + 1
+            step = ReactStepInvocation(round=next_round)
             self._handler.start_react_step(
-                state.step, context=set_span_in_context(state.agent.span)
+                step, context=set_span_in_context(state.agent.span)
             )
+            state.round = next_round
+            state.cycle_id = cycle_id
+            state.step = step
+            state.step_error = None
 
-        if not _create_llm_span(event.agent):
-            return
         invocation = LLMInvocation(
             request_model=_model_name(event.agent),
-            provider=_provider_name(event.agent),
+            provider=_model_provider(event.agent),
             operation_name="chat",
             input_messages=_convert_messages(
                 event.invocation_state.get("messages", [])
@@ -134,10 +138,18 @@ class LoongsuiteHook:
             tool_definitions=_tool_definitions(event.agent),
             conversation_id=_conversation_id(event.invocation_state),
         )
-        self._handler.start_llm(
-            invocation, context=set_span_in_context(state.step.span)
-        )
-        state.llm = invocation
+        try:
+            self._handler.start_llm(
+                invocation, context=set_span_in_context(state.step.span)
+            )
+        except Exception as exc:
+            # The util start callback failed before it could create an LLM
+            # span. Keep the business call fail-open, but make the telemetry
+            # degradation visible on the enclosing ReAct step.
+            state.step_error = exc
+            raise
+        else:
+            state.llm = invocation
 
     @hook_advice("strands", "after_model")
     def _after_model(self, event: AfterModelCallEvent) -> None:
@@ -146,15 +158,23 @@ class LoongsuiteHook:
             return
         invocation, state.llm = state.llm, None
         response = event.stop_response
-        if response is not None:
-            reason = _finish_reason(response.stop_reason)
-            invocation.finish_reasons = [reason]
-            invocation.output_messages = _convert_output_message(
-                response.message, reason
+        try:
+            if response is not None:
+                reason = _finish_reason(response.stop_reason)
+                invocation.finish_reasons = [reason]
+                invocation.output_messages = _convert_output_message(
+                    response.message, reason
+                )
+                _apply_usage(invocation, response.message.get("metadata", {}))
+                if state.step is not None:
+                    state.step.finish_reason = reason
+        except Exception as exc:
+            self._finalize(
+                self._handler.fail_llm,
+                invocation,
+                _error(exc),
             )
-            _apply_usage(invocation, response.message.get("metadata", {}))
-            if state.step is not None:
-                state.step.finish_reason = reason
+            return
         if event.exception is not None:
             state.agent_error = event.exception
             if state.step is not None:
@@ -181,7 +201,7 @@ class LoongsuiteHook:
             tool_call_arguments=tool_use.get("input"),
             tool_description=_tool_description(event.selected_tool),
             tool_type="function",
-            provider="strands",
+            provider=_FRAMEWORK_PROVIDER,
         )
         parent = (
             state.step.span if state.step is not None else state.agent.span
@@ -221,47 +241,71 @@ class LoongsuiteHook:
             _CURRENT_INVOCATION_KEY.set(None)
         if state is None:
             return
+        finalize_errors: list[Exception] = []
         if state.llm is not None:
-            unfinished_error = RuntimeError("model call did not finish")
-            self._finalize(
-                self._handler.fail_llm,
-                state.llm,
-                _error(unfinished_error),
-            )
-            state.llm = None
+            unfinished_error = _unfinished_model_error()
+            invocation, state.llm = state.llm, None
             state.step_error = unfinished_error
             state.agent_error = unfinished_error
-        for invocation in list(state.tool_invocations.values()):
-            self._finalize(
+            self._finalize_best_effort(
+                finalize_errors,
+                self._handler.fail_llm,
+                invocation,
+                _error(unfinished_error),
+            )
+        tool_invocations = list(state.tool_invocations.values())
+        state.tool_invocations.clear()
+        for invocation in tool_invocations:
+            self._finalize_best_effort(
+                finalize_errors,
                 self._handler.fail_execute_tool,
                 invocation,
                 _error(RuntimeError("tool call did not finish")),
             )
-        state.tool_invocations.clear()
-        self._finish_step(state)
+        try:
+            self._finish_step(state)
+        except Exception as exc:
+            finalize_errors.append(exc)
 
         result = event.result
-        if result is not None:
-            reason = _finish_reason(result.stop_reason)
-            state.agent.finish_reasons = [reason]
-            state.agent.output_messages = _convert_output_message(
-                result.message, reason
-            )
-            _apply_usage(
-                state.agent, {"usage": _agent_invocation_usage(result)}
-            )
-            self._finalize(self._handler.stop_invoke_agent, state.agent)
-        else:
-            self._finalize(
+        try:
+            if result is not None:
+                reason = _finish_reason(result.stop_reason)
+                state.agent.finish_reasons = [reason]
+                state.agent.output_messages = _convert_output_message(
+                    result.message, reason
+                )
+                _apply_usage(
+                    state.agent, {"usage": _agent_invocation_usage(result)}
+                )
+        except Exception as exc:
+            self._finalize_best_effort(
+                finalize_errors,
                 self._handler.fail_invoke_agent,
                 state.agent,
-                _error(
-                    state.agent_error
-                    or RuntimeError(
-                        "Strands agent invocation did not produce a result"
-                    )
-                ),
+                _error(exc),
             )
+        else:
+            if result is not None:
+                self._finalize_best_effort(
+                    finalize_errors,
+                    self._handler.stop_invoke_agent,
+                    state.agent,
+                )
+            else:
+                self._finalize_best_effort(
+                    finalize_errors,
+                    self._handler.fail_invoke_agent,
+                    state.agent,
+                    _error(
+                        state.agent_error
+                        or RuntimeError(
+                            "Strands agent invocation did not produce a result"
+                        )
+                    ),
+                )
+        if finalize_errors:
+            raise finalize_errors[0]
 
     def current_invocation_key(self) -> int | None:
         return _CURRENT_INVOCATION_KEY.get()
@@ -315,6 +359,15 @@ class LoongsuiteHook:
 
     @hook_advice("strands", "stream_close")
     def finish_closed_stream(self, state_key: int | None) -> None:
+        self.finish_failed_stream(
+            state_key,
+            RuntimeError("Strands stream closed before invocation completed"),
+        )
+
+    @hook_advice("strands", "stream_failure")
+    def finish_failed_stream(
+        self, state_key: int | None, close_error: BaseException
+    ) -> None:
         if state_key is None:
             return
         with self._lock:
@@ -324,29 +377,38 @@ class LoongsuiteHook:
         if state is None:
             return
 
-        close_error = RuntimeError(
-            "Strands stream closed before invocation completed"
-        )
+        finalize_errors: list[Exception] = []
         if state.llm is not None:
-            self._finalize(
-                self._handler.fail_llm, state.llm, _error(close_error)
+            invocation, state.llm = state.llm, None
+            self._finalize_best_effort(
+                finalize_errors,
+                self._handler.fail_llm,
+                invocation,
+                _error(close_error),
             )
-            state.llm = None
-        for invocation in list(state.tool_invocations.values()):
-            self._finalize(
+        tool_invocations = list(state.tool_invocations.values())
+        state.tool_invocations.clear()
+        for invocation in tool_invocations:
+            self._finalize_best_effort(
+                finalize_errors,
                 self._handler.fail_execute_tool,
                 invocation,
                 _error(close_error),
             )
-        state.tool_invocations.clear()
         state.step_error = state.step_error or close_error
         state.agent_error = state.agent_error or close_error
-        self._finish_step(state)
-        self._finalize(
+        try:
+            self._finish_step(state)
+        except Exception as exc:
+            finalize_errors.append(exc)
+        self._finalize_best_effort(
+            finalize_errors,
             self._handler.fail_invoke_agent,
             state.agent,
             _error(state.agent_error),
         )
+        if finalize_errors:
+            raise finalize_errors[0]
 
     def _state(
         self, invocation_state: dict[str, Any]
@@ -361,16 +423,25 @@ class LoongsuiteHook:
 
     def _finish_step(self, state: _InvocationState) -> None:
         if state.step is not None:
-            if state.step_error is not None:
+            invocation, state.step = state.step, None
+            step_error, state.step_error = state.step_error, None
+            if step_error is not None:
                 self._finalize(
                     self._handler.fail_react_step,
-                    state.step,
-                    _error(state.step_error),
+                    invocation,
+                    _error(step_error),
                 )
             else:
-                self._finalize(self._handler.stop_react_step, state.step)
-            state.step = None
-            state.step_error = None
+                self._finalize(self._handler.stop_react_step, invocation)
+
+    @staticmethod
+    def _finalize_best_effort(
+        errors: list[Exception], callback: Any, invocation: Any, *args: Any
+    ) -> None:
+        try:
+            LoongsuiteHook._finalize(callback, invocation, *args)
+        except Exception as exc:
+            errors.append(exc)
 
     @staticmethod
     def _finalize(callback: Any, invocation: Any, *args: Any) -> None:
@@ -378,15 +449,27 @@ class LoongsuiteHook:
         try:
             callback(invocation, *args)
         except Exception as exc:
+            reported_error = next(
+                (arg for arg in args if isinstance(arg, Error)), None
+            )
             token, invocation.context_token = invocation.context_token, None
             if token is not None:
                 otel_context.detach(token)
             span = invocation.span
             if span is not None and span.is_recording():
-                span.set_attribute(
-                    "gen_ai.span.kind", _fallback_span_kind(invocation)
+                span.set_attributes(
+                    _fallback_span_attributes(
+                        invocation, exc, reported_error=reported_error
+                    )
                 )
-                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                span.set_status(
+                    Status(
+                        StatusCode.ERROR,
+                        reported_error.message
+                        if reported_error is not None
+                        else str(exc),
+                    )
+                )
                 span.end()
             raise
 
@@ -395,14 +478,52 @@ def _error(exception: BaseException) -> Error:
     return Error(message=str(exception), type=type(exception))
 
 
-def _fallback_span_kind(invocation: Any) -> str:
+def _unfinished_model_error() -> BaseException:
+    """Preserve cancellation semantics when Strands reports no result."""
+    active_error = sys.exc_info()[1]
+    if isinstance(active_error, (asyncio.CancelledError, GeneratorExit)):
+        return active_error
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        task = None
+    cancelling = getattr(task, "cancelling", None)
+    if callable(cancelling) and cancelling():
+        return asyncio.CancelledError("model call cancelled")
+    return RuntimeError("model call did not finish")
+
+
+def _fallback_span_attributes(
+    invocation: Any,
+    exception: Exception,
+    reported_error: Error | None = None,
+) -> dict[str, Any]:
     if isinstance(invocation, InvokeAgentInvocation):
-        return "AGENT"
-    if isinstance(invocation, ReactStepInvocation):
-        return "STEP"
-    if isinstance(invocation, ExecuteToolInvocation):
-        return "TOOL"
-    return "LLM"
+        span_kind, operation_name = "AGENT", "invoke_agent"
+    elif isinstance(invocation, ReactStepInvocation):
+        span_kind, operation_name = "STEP", "react"
+    elif isinstance(invocation, ExecuteToolInvocation):
+        span_kind, operation_name = "TOOL", "execute_tool"
+    else:
+        span_kind = "LLM"
+        operation_name = getattr(invocation, "operation_name", None) or "chat"
+
+    attributes = {
+        "gen_ai.span.kind": span_kind,
+        "gen_ai.operation.name": operation_name,
+        "error.type": (
+            reported_error.type.__name__
+            if reported_error is not None
+            else type(exception).__name__
+        ),
+    }
+    provider = getattr(invocation, "provider", None)
+    if provider:
+        attributes["gen_ai.provider.name"] = provider
+    request_model = getattr(invocation, "request_model", None)
+    if request_model:
+        attributes["gen_ai.request.model"] = request_model
+    return attributes
 
 
 def _model_name(agent: Any) -> str | None:
@@ -422,22 +543,20 @@ def _model_name(agent: Any) -> str | None:
     return type(model).__name__
 
 
-def _provider_name(agent: Any) -> str:
+def _model_provider(agent: Any) -> str:
     model = getattr(agent, "model", None)
     if model is None:
-        return "strands"
+        return "unknown"
     client_args = getattr(model, "client_args", {})
     base_url_host = (
         (urlparse(str(client_args.get("base_url", ""))).hostname or "").lower()
         if isinstance(client_args, dict)
         else ""
     )
-    model_name = (_model_name(agent) or "").lower()
-    if (
-        base_url_host
-        in {"dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com"}
-        or "qwen" in model_name
-    ):
+    if base_url_host in {
+        "dashscope.aliyuncs.com",
+        "dashscope-intl.aliyuncs.com",
+    }:
         return "dashscope"
     module = type(model).__module__.lower()
     class_name = type(model).__name__.lower()
@@ -450,22 +569,7 @@ def _provider_name(agent: Any) -> str:
     ):
         if needle in module or needle in class_name:
             return provider
-    return module.split(".")[0] or "strands"
-
-
-def _create_llm_span(agent: Any) -> bool:
-    mode = os.getenv(
-        "OTEL_INSTRUMENTATION_STRANDS_LLM_SPAN_MODE", "auto"
-    ).lower()
-    if mode == "never":
-        return False
-    if mode == "always":
-        return True
-    model = getattr(agent, "model", None)
-    return not bool(
-        getattr(model, "_is_instrumented_by_opentelemetry", False)
-        or getattr(type(model), "_is_instrumented_by_opentelemetry", False)
-    )
+    return module.split(".")[0] or "unknown"
 
 
 def _conversation_id(invocation_state: dict[str, Any]) -> str | None:
@@ -537,9 +641,9 @@ def _convert_content(blocks: Any) -> list[Any]:
     for block in blocks or []:
         if isinstance(block, str):
             parts.append(Text(content=block))
-        elif "text" in block:
+        elif isinstance(block, dict) and "text" in block:
             parts.append(Text(content=block["text"]))
-        elif "toolUse" in block:
+        elif isinstance(block, dict) and "toolUse" in block:
             tool_use = block["toolUse"]
             parts.append(
                 ToolCall(
@@ -548,7 +652,7 @@ def _convert_content(blocks: Any) -> list[Any]:
                     id=tool_use.get("toolUseId"),
                 )
             )
-        elif "toolResult" in block:
+        elif isinstance(block, dict) and "toolResult" in block:
             tool_result = block["toolResult"]
             parts.append(
                 ToolCallResponse(
@@ -601,4 +705,4 @@ def _agent_invocation_usage(result: Any) -> Any:
     usage = getattr(latest, "usage", None)
     if isinstance(usage, dict):
         return usage
-    return getattr(metrics, "accumulated_usage", {})
+    return {}

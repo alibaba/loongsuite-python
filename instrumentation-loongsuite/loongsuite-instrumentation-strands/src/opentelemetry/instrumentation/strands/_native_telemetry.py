@@ -55,6 +55,9 @@ class NativeTelemetrySuppression:
         native = get_tracer()
         original = native.tracer
         replacement = _ContextPreservingNoOpTracer()
+        self._native = native
+        self._original = original
+        self._replacement = replacement
         native.tracer = replacement
         from strands.agent import agent as agent_module  # noqa: PLC0415
         from strands.event_loop import event_loop  # noqa: PLC0415
@@ -67,9 +70,6 @@ class NativeTelemetrySuppression:
             self._trace_api_bindings.append(
                 (module, original_trace_api, proxy)
             )
-        self._native = native
-        self._original = original
-        self._replacement = replacement
 
     def restore(self) -> None:
         if (
@@ -92,6 +92,11 @@ class _TraceApiProxy:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._original, name)
+
+    @staticmethod
+    def get_current_span(context: Context | None = None) -> Span:
+        del context
+        return INVALID_SPAN
 
     @contextmanager
     def use_span(self, span: Span, **kwargs: Any) -> Iterator[Span]:
