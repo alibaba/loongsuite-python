@@ -241,6 +241,39 @@ async def test_real_strands_lifecycle_and_hierarchy(telemetry):
 
 
 @pytest.mark.asyncio
+async def test_agent_usage_is_per_invocation_across_multiple_turns(telemetry):
+    _, exporter, _ = telemetry
+    agent = Agent(
+        model=DeterministicModel(
+            [
+                {"content": [{"text": "turn one"}]},
+                {"content": [{"text": "turn two"}]},
+            ]
+        ),
+        name="multi_turn_agent",
+        retry_strategy=None,
+    )
+
+    await agent.invoke_async("first")
+    await agent.invoke_async("second")
+
+    agent_spans = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes["gen_ai.span.kind"] == "AGENT"
+    ]
+    assert [
+        span.attributes["gen_ai.usage.input_tokens"] for span in agent_spans
+    ] == [12, 12]
+    assert [
+        span.attributes["gen_ai.usage.output_tokens"] for span in agent_spans
+    ] == [6, 6]
+    assert [
+        span.attributes["gen_ai.usage.total_tokens"] for span in agent_spans
+    ] == [18, 18]
+
+
+@pytest.mark.asyncio
 async def test_capture_content_is_disabled_by_default(telemetry):
     _, exporter, _ = telemetry
     await _agent().invoke_async("Calculate 2+2")

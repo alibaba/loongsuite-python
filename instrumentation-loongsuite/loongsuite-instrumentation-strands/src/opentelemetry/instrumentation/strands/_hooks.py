@@ -248,7 +248,7 @@ class LoongsuiteHook:
                 result.message, reason
             )
             _apply_usage(
-                state.agent, {"usage": result.metrics.accumulated_usage}
+                state.agent, {"usage": _agent_invocation_usage(result)}
             )
             self._finalize(self._handler.stop_invoke_agent, state.agent)
         else:
@@ -592,3 +592,13 @@ def _apply_usage(invocation: Any, metadata: Any) -> None:
             invocation.monotonic_first_token_s = (
                 invocation.monotonic_start_s + float(ttft_ms) / 1000
             )
+
+
+def _agent_invocation_usage(result: Any) -> Any:
+    """Return usage for this invocation, not the agent's lifetime total."""
+    metrics = getattr(result, "metrics", None)
+    latest = getattr(metrics, "latest_agent_invocation", None)
+    usage = getattr(latest, "usage", None)
+    if isinstance(usage, dict):
+        return usage
+    return getattr(metrics, "accumulated_usage", {})
