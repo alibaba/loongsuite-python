@@ -14,7 +14,7 @@ LoongSuite 包含以下核心组件：
 * [LoongCollector](https://github.com/alibaba/loongcollector)：通用节点 Agent，基于 eBPF 提供日志采集、Prometheus 指标采集以及网络与安全采集能力。
 * [LoongSuite Python Agent](https://github.com/alibaba/loongsuite-python)：为 Python 应用提供埋点能力的进程 Agent。
 * [LoongSuite Go Agent](https://github.com/alibaba/loongsuite-go)：支持编译期埋点的 Golang 进程 Agent。
-* [LoongSuite Java Agent](https://github.com/alibaba/loongsuite-java-agent)：面向 Java 应用的进程 Agent。
+* [LoongSuite Java](https://github.com/alibaba/loongsuite-java)：面向 Java GenAI 埋点的共享遥测工具库。
 * 其他语言 Agent 正在建设中。
 
 LoongSuite Python Agent 同时也是上游 [OTel Python Agent](https://github.com/open-telemetry/opentelemetry-python-contrib) 的定制化发行版，增强了对主流 AI Agent 框架的支持。
