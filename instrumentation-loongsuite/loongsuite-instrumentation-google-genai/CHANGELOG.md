@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Detach streaming context before returning SDK streams, make finalization
   idempotent across close/aclose/error/GC paths, and cover cross-Context and
   one-fault-among-many isolation.
+- Keep OSS package metadata at Python 3.9 while avoiding Python 3.9/3.10-only
+  typing syntax so Robin can repackage the instrumentation wheel for its
+  Python 3.8 commercial install floor.
 
 ### Fixed
 

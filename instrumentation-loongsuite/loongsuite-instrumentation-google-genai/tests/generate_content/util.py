@@ -15,17 +15,17 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 import google.genai.types as genai_types
 
 
 def create_response(
     part: Optional[genai_types.Part] = None,
-    parts: Optional[list[genai_types.Part]] = None,
+    parts: Optional[List[genai_types.Part]] = None,
     content: Optional[genai_types.Content] = None,
     candidate: Optional[genai_types.Candidate] = None,
-    candidates: Optional[list[genai_types.Candidate]] = None,
+    candidates: Optional[List[genai_types.Candidate]] = None,
     text: Optional[str] = None,
     input_tokens: Optional[int] = 0,
     thinking_tokens: Optional[int] = None,

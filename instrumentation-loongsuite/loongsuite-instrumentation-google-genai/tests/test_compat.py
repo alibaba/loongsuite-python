@@ -14,6 +14,7 @@
 
 import asyncio
 import os
+from typing import Tuple
 from unittest.mock import patch
 
 from google.genai import types as genai_types
@@ -43,7 +44,7 @@ from opentelemetry.util.genai.types import Reasoning, Text
 from .common.otel_mocker import OTelMocker
 
 
-def _handler() -> tuple[TelemetryHandler, OTelMocker]:
+def _handler() -> Tuple[TelemetryHandler, OTelMocker]:
     otel = OTelMocker()
     otel.install()
     return (

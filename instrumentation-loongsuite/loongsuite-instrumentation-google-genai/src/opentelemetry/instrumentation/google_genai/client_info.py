@@ -17,11 +17,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional, Tuple
 from urllib.parse import urlsplit
 
 
-def get_client_info(instance: Any) -> tuple[bool, str | None]:
+def get_client_info(instance: Any) -> Tuple[bool, Optional[str]]:
     is_vertex = False
     server_address = None
 

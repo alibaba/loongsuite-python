@@ -28,7 +28,9 @@ from typing import (
     Generic,
     Iterable,
     Literal,
+    Optional,
     Protocol,
+    Type,
     TypeVar,
 )
 
@@ -107,9 +109,9 @@ class SyncStreamWrapper(
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
     ) -> Literal[False]:
         if exc_val is not None:
             self._finalize_failure(exc_val)
@@ -223,9 +225,9 @@ class AsyncStreamWrapper(
 
     async def __aexit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
     ) -> Literal[False]:
         if exc_val is not None:
             self._finalize_failure(exc_val)

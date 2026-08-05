@@ -28,7 +28,7 @@ import os
 import timeit
 from dataclasses import asdict, dataclass
 from types import TracebackType
-from typing import Any
+from typing import Any, Dict, List, Optional, Type, Union
 
 from opentelemetry import context as context_api
 from opentelemetry._logs import LogRecord, get_logger
@@ -120,9 +120,9 @@ class _InvocationLifecycle:
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[TracebackType],
     ) -> None:
         if exc_value is not None:
             self.fail(exc_value)
@@ -138,10 +138,10 @@ class InferenceInvocation(LLMInvocation, _InvocationLifecycle):
         owner: TelemetryHandler,
         provider: str,
         *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-        operation_name: str | None = None,
+        request_model: Optional[str] = None,
+        server_address: Optional[str] = None,
+        server_port: Optional[int] = None,
+        operation_name: Optional[str] = None,
         **_: Any,
     ) -> None:
         super().__init__(
@@ -153,39 +153,39 @@ class InferenceInvocation(LLMInvocation, _InvocationLifecycle):
         )
         self._owner = owner
         self._finished = False
-        self.thinking_tokens: int | None = None
+        self.thinking_tokens: Optional[int] = None
         if not _is_suppressed():
             owner._handler.start_llm(self)
 
     @property
-    def request_choice_count(self) -> int | None:
+    def request_choice_count(self) -> Optional[int]:
         return self.choice_count
 
     @request_choice_count.setter
-    def request_choice_count(self, value: int | None) -> None:
+    def request_choice_count(self, value: Optional[int]) -> None:
         self.choice_count = value
 
     @property
-    def cache_creation_input_tokens(self) -> int | None:
+    def cache_creation_input_tokens(self) -> Optional[int]:
         return self.usage_cache_creation_input_tokens
 
     @cache_creation_input_tokens.setter
-    def cache_creation_input_tokens(self, value: int | None) -> None:
+    def cache_creation_input_tokens(self, value: Optional[int]) -> None:
         self.usage_cache_creation_input_tokens = value
 
     @property
-    def cache_read_input_tokens(self) -> int | None:
+    def cache_read_input_tokens(self) -> Optional[int]:
         return self.usage_cache_read_input_tokens
 
     @cache_read_input_tokens.setter
-    def cache_read_input_tokens(self, value: int | None) -> None:
+    def cache_read_input_tokens(self, value: Optional[int]) -> None:
         self.usage_cache_read_input_tokens = value
 
     def record_first_token(self) -> None:
         if self.monotonic_first_token_s is None:
             self.monotonic_first_token_s = timeit.default_timer()
 
-    def _finish_reasons(self) -> list[str]:
+    def _finish_reasons(self) -> List[str]:
         if self.finish_reasons is not None:
             return self.finish_reasons
         return [
@@ -195,7 +195,7 @@ class InferenceInvocation(LLMInvocation, _InvocationLifecycle):
         ]
 
     def _prepare_finish(
-        self, error: Error | BaseException | None = None
+        self, error: Optional[Union[Error, BaseException]] = None
     ) -> None:
         custom_attributes = dict(self.attributes)
         if self.thinking_tokens is not None:
@@ -240,13 +240,13 @@ class InferenceInvocation(LLMInvocation, _InvocationLifecycle):
         finally:
             self._owner._handler.stop_llm(self)
 
-    def fail(self, error: Error | BaseException) -> None:
+    def fail(self, error: Union[Error, BaseException]) -> None:
         if self._finished:
             return
         self._finished = True
         if self.span is None:
             return
-        converted_error: Error | None = None
+        converted_error: Optional[Error] = None
         try:
             converted_error = (
                 error
@@ -269,9 +269,9 @@ class EmbeddingInvocation(LegacyEmbeddingInvocation, _InvocationLifecycle):
         owner: TelemetryHandler,
         provider: str,
         *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
+        request_model: Optional[str] = None,
+        server_address: Optional[str] = None,
+        server_port: Optional[int] = None,
     ) -> None:
         super().__init__(
             request_model=request_model or "",
@@ -281,7 +281,7 @@ class EmbeddingInvocation(LegacyEmbeddingInvocation, _InvocationLifecycle):
         )
         self._owner = owner
         self._finished = False
-        self.metric_attributes: dict[str, Any] = {}
+        self.metric_attributes: Dict[str, Any] = {}
         if not _is_suppressed():
             try:
                 owner._handler.start_embedding(self)
@@ -296,13 +296,13 @@ class EmbeddingInvocation(LegacyEmbeddingInvocation, _InvocationLifecycle):
         if self.span is not None:
             self._owner._finish_embedding(self)
 
-    def fail(self, error: Error | BaseException) -> None:
+    def fail(self, error: Union[Error, BaseException]) -> None:
         if self._finished:
             return
         self._finished = True
         if self.span is None:
             return
-        converted_error: Error | None = None
+        converted_error: Optional[Error] = None
         try:
             converted_error = (
                 error
@@ -324,9 +324,9 @@ class ToolInvocation(LegacyToolInvocation, _InvocationLifecycle):
         owner: TelemetryHandler,
         name: str,
         *,
-        tool_call_id: str | None = None,
-        tool_type: str | None = None,
-        tool_description: str | None = None,
+        tool_call_id: Optional[str] = None,
+        tool_type: Optional[str] = None,
+        tool_description: Optional[str] = None,
     ) -> None:
         super().__init__(
             tool_name=name,
@@ -337,7 +337,7 @@ class ToolInvocation(LegacyToolInvocation, _InvocationLifecycle):
         self._owner = owner
         self._finished = False
         self.should_capture_content_on_span = _captures_content_on_span()
-        self.metric_attributes: dict[str, Any] = {}
+        self.metric_attributes: Dict[str, Any] = {}
         if not _is_suppressed():
             try:
                 owner._handler.start_execute_tool(self)
@@ -368,13 +368,13 @@ class ToolInvocation(LegacyToolInvocation, _InvocationLifecycle):
         if self.span is not None:
             self._owner._finish_tool(self)
 
-    def fail(self, error: Error | BaseException) -> None:
+    def fail(self, error: Union[Error, BaseException]) -> None:
         if self._finished:
             return
         self._finished = True
         if self.span is None:
             return
-        converted_error: Error | None = None
+        converted_error: Optional[Error] = None
         try:
             converted_error = (
                 error
@@ -397,7 +397,7 @@ class TelemetryHandler:
         tracer_provider=None,
         meter_provider=None,
         logger_provider=None,
-        completion_hook: CompletionHook | None = None,
+        completion_hook: Optional[CompletionHook] = None,
     ) -> None:
         self._handler = ExtendedTelemetryHandler(
             tracer_provider=tracer_provider,
@@ -417,10 +417,10 @@ class TelemetryHandler:
         self,
         provider: str,
         *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
-        operation_name: str | None = None,
+        request_model: Optional[str] = None,
+        server_address: Optional[str] = None,
+        server_port: Optional[int] = None,
+        operation_name: Optional[str] = None,
         **kwargs: Any,
     ) -> InferenceInvocation:
         return InferenceInvocation(
@@ -437,9 +437,9 @@ class TelemetryHandler:
         self,
         provider: str,
         *,
-        request_model: str | None = None,
-        server_address: str | None = None,
-        server_port: int | None = None,
+        request_model: Optional[str] = None,
+        server_address: Optional[str] = None,
+        server_port: Optional[int] = None,
     ) -> EmbeddingInvocation:
         return EmbeddingInvocation(
             self,
@@ -453,9 +453,9 @@ class TelemetryHandler:
         self,
         name: str,
         *,
-        tool_call_id: str | None = None,
-        tool_type: str | None = None,
-        tool_description: str | None = None,
+        tool_call_id: Optional[str] = None,
+        tool_type: Optional[str] = None,
+        tool_description: Optional[str] = None,
     ) -> ToolInvocation:
         return ToolInvocation(
             self,
@@ -538,12 +538,12 @@ class TelemetryHandler:
         self,
         invocation: InferenceInvocation,
         *,
-        custom_attributes: dict[str, Any],
-        error: Error | BaseException | None,
-    ) -> LogRecord | None:
+        custom_attributes: Dict[str, Any],
+        error: Optional[Union[Error, BaseException]],
+    ) -> Optional[LogRecord]:
         if not should_emit_event():
             return None
-        attributes: dict[str, Any] = {}
+        attributes: Dict[str, Any] = {}
         attributes.update(_get_llm_common_attributes(invocation))
         attributes.update(_get_llm_request_attributes(invocation))
         attributes.update(_get_llm_response_attributes(invocation))
@@ -583,7 +583,7 @@ class TelemetryHandler:
         self,
         invocation: InferenceInvocation,
         *,
-        log_record: LogRecord | None,
+        log_record: Optional[LogRecord],
     ) -> None:
         if invocation.span is None:
             return

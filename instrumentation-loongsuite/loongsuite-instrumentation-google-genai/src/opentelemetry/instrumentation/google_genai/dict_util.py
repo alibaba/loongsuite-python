@@ -20,15 +20,16 @@ import logging
 from typing import (
     Any,
     Dict,
+    List,
     Set,
     Union,
 )
 
 Primitive = Union[bool, str, int, float]
-BoolList = list[bool]
-StringList = list[str]
-IntList = list[int]
-FloatList = list[float]
+BoolList = List[bool]
+StringList = List[str]
+IntList = List[int]
+FloatList = List[float]
 HomogenousPrimitiveList = Union[BoolList, StringList, IntList, FloatList]
 FlattenedValue = Union[Primitive, HomogenousPrimitiveList]
 FlattenedDict = Dict[str, FlattenedValue]

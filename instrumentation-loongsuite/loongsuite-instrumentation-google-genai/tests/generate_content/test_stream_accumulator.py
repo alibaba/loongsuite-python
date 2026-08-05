@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Optional
+
 from google.genai import types
 
 from opentelemetry.instrumentation.google_genai.message import (
@@ -23,7 +25,7 @@ from opentelemetry.util.genai.types import Reasoning, Text, ToolCall
 def _candidate(
     index: int,
     *parts: types.Part,
-    finish_reason: types.FinishReason | None = None,
+    finish_reason: Optional[types.FinishReason] = None,
 ) -> types.Candidate:
     return types.Candidate(
         index=index,

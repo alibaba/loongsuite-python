@@ -40,8 +40,14 @@ The intentional product delta is kept small and explicit:
   LoongSuite's own `opentelemetry-util-genai` implementation and
   `ExtendedTelemetryHandler`; the upstream 1.x GenAI util is not a runtime
   dependency of this package.
-- `_stream.py` is the upstream GenAI stream lifecycle helper with Python 3.9
-  compatibility and LoongSuite fail-open stream ownership.
+- `_stream.py` is the upstream GenAI stream lifecycle helper with Python 3.8
+  source compatibility and LoongSuite fail-open stream ownership.
+- provider source and tests avoid PEP 604 unions and PEP 585 built-in
+  generics. OSS metadata remains `requires-python >=3.9` because the supported
+  `google-genai>=1.32` SDK itself requires Python 3.9, while the source-level
+  compatibility lets Robin normalize the packaged instrumentation wheel to
+  its Python 3.8 commercial install floor without introducing import-time
+  syntax or annotation failures.
 - provider-owned prepare, response mapping, failure reporting, stream wrapping,
   chunk accumulation, finalization, embeddings, and automatic tool telemetry
   run through `hook_advice`; the Google SDK call, SDK stream iteration, and
@@ -198,7 +204,7 @@ independent changes:
     wrapping fails, isolate chunk/final callbacks, detach stream context before
     ownership transfer, and preserve cancellation/exception identity.
 
-Python 3.9 support, the 0.x-to-1.x compatibility facade, LoongSuite-specific
-metrics and asynchronous multimodal processing, release/bootstrap integration,
-and Robin's `_SUPPRESS_LLM_SDK_KEY` are product or compatibility concerns and
-are not direct upstream contribution candidates.
+Python 3.8 source compatibility, the 0.x-to-1.x compatibility facade,
+LoongSuite-specific metrics and asynchronous multimodal processing,
+release/bootstrap integration, and Robin's `_SUPPRESS_LLM_SDK_KEY` are product
+or compatibility concerns and are not direct upstream contribution candidates.

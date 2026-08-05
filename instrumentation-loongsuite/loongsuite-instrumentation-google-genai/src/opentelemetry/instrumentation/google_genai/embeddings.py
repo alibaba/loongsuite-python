@@ -21,7 +21,7 @@ import json
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Dict, Optional, Tuple, Union
 
 from google.genai._api_client import BaseApiClient
 from google.genai.models import AsyncModels, Models
@@ -38,7 +38,7 @@ from opentelemetry.util.genai import hook_advice
 
 from ._compat import EmbeddingInvocation, TelemetryHandler
 
-_RAW_RESPONSE_BODY: ContextVar[str | None] = ContextVar(
+_RAW_RESPONSE_BODY: ContextVar[Optional[str]] = ContextVar(
     "raw_response_body", default=None
 )
 _CAPTURE_RAW_RESPONSE: ContextVar[bool] = ContextVar(
@@ -121,8 +121,8 @@ class _EmbeddingAdviceState:
 @hook_advice("google-genai", "prepare_embedding")
 def _prepare_embedding_advice(
     telemetry_handler: TelemetryHandler,
-    instance: Models | AsyncModels,
-    kwargs: dict[str, Any],
+    instance: Union[Models, AsyncModels],
+    kwargs: Dict[str, Any],
 ) -> _EmbeddingAdviceState:
     raw_body_token = None
     capture_token = None
@@ -196,16 +196,16 @@ def _create_instrumented_embed_content(
     [
         Callable[..., EmbedContentResponse],
         Models,
-        tuple[Any, ...],
-        dict[str, Any],
+        Tuple[Any, ...],
+        Dict[str, Any],
     ],
     EmbedContentResponse,
 ]:
     def instrumented_embed_content(
         wrapped: Callable[..., EmbedContentResponse],
         instance: Models,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> EmbedContentResponse:
         state = _prepare_embedding_advice(
             telemetry_handler,
@@ -231,16 +231,16 @@ def _create_instrumented_async_embed_content(
     [
         Callable[..., Any],
         AsyncModels,
-        tuple[Any, ...],
-        dict[str, Any],
+        Tuple[Any, ...],
+        Dict[str, Any],
     ],
     Any,
 ]:
     async def instrumented_embed_content(
         wrapped: Callable[..., Any],
         instance: AsyncModels,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ) -> EmbedContentResponse:
         state = _prepare_embedding_advice(
             telemetry_handler,

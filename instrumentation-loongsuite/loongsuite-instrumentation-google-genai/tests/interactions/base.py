@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import unittest
 import unittest.mock
-from typing import Any
+from typing import Any, List, Optional
 from unittest.mock import patch
 
 try:
@@ -68,7 +68,7 @@ class TestCase(CommonTestCaseBase):
         self._create_mock = None
         self._original_create = InteractionsResource.create
         self._original_async_create = AsyncInteractionsResource.create
-        self._interactions: list[Any] = []
+        self._interactions: List[Any] = []
         self._interaction_index = 0
         self._completed_event_type = "interaction_completed"
 
@@ -87,7 +87,7 @@ class TestCase(CommonTestCaseBase):
     def configure_exception(self, e: Exception) -> None:
         self._create_and_install_mocks(e)
 
-    def _create_and_install_mocks(self, e: Exception | None = None) -> None:
+    def _create_and_install_mocks(self, e: Optional[Exception] = None) -> None:
         if self._create_mock is not None:
             return
         self.reset_client()
@@ -96,7 +96,7 @@ class TestCase(CommonTestCaseBase):
         self._install_mocks()
 
     def _create_mock_impl(
-        self, e: Exception | None = None
+        self, e: Optional[Exception] = None
     ) -> unittest.mock.MagicMock:
         mock = unittest.mock.MagicMock()
 
@@ -148,7 +148,7 @@ class TestCase(CommonTestCaseBase):
 
     def run_streaming_interaction(
         self, *args: Any, **kwargs: Any
-    ) -> list[Any]:
+    ) -> List[Any]:
         raise NotImplementedError()
 
     # The actual collapsed test cases:

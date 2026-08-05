@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, List
 
 from .base import TestCase
 
@@ -31,8 +31,8 @@ class TestInteractionsAsync(TestCase):
 
     def run_streaming_interaction(
         self, *args: Any, **kwargs: Any
-    ) -> list[Any]:
-        async def _run() -> list[Any]:
+    ) -> List[Any]:
+        async def _run() -> List[Any]:
             stream = await self.client.aio.interactions.create(*args, **kwargs)
             events = []
             async for event in stream:

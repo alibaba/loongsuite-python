@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterable, Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 try:
     # Google GenAI < 2.9.0
@@ -176,8 +176,8 @@ def _get_field(obj: Any, name: str) -> Any:
 # because this API doesn't take conversation history as input (unlike the generate_content API).
 # Conversation history is stored server-side and referenced via a interaction ID parameter.
 def _interactions_input_to_messages(
-    input_data: Input | None,
-) -> list[InputMessage]:
+    input_data: Optional[Input],
+) -> List[InputMessage]:
     # None will end up raising an exception by the SDK
     if input_data is None:
         return []
@@ -247,7 +247,7 @@ def _get_interaction_output_text(interaction: Interaction) -> str:
 # https://ai.google.dev/api/interactions-api#Resource:Step
 def _interactions_response_to_messages(
     interaction: Interaction,
-) -> list[OutputMessage]:
+) -> List[OutputMessage]:
     output_text = _get_interaction_output_text(interaction)
     return [
         OutputMessage(
@@ -268,7 +268,7 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
         super().__init__(stream)
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
-        self._self_last_interaction: Interaction | None = None
+        self._self_last_interaction: Optional[Interaction] = None
 
     def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
         self._self_invocation.record_first_token()
@@ -301,7 +301,7 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
         super().__init__(stream)
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
-        self._self_last_interaction: Interaction | None = None
+        self._self_last_interaction: Optional[Interaction] = None
 
     def _process_chunk(self, chunk: InteractionSSEEvent) -> None:
         self._self_invocation.record_first_token()
@@ -334,7 +334,7 @@ class _InteractionsAdviceState:
 def _prepare_interactions_advice(
     telemetry_handler: TelemetryHandler,
     instance: Any,
-    kwargs: dict[str, Any],
+    kwargs: Dict[str, Any],
 ) -> _InteractionsAdviceState:
     invocation = None
     try:
@@ -432,19 +432,21 @@ def _create_instrumented_interactions_create(
     telemetry_handler: TelemetryHandler,
 ) -> Callable[
     [
-        Callable[..., Interaction | Stream[InteractionSSEEvent]],
+        Callable[..., Union[Interaction, Stream[InteractionSSEEvent]]],
         InteractionsResource,
-        tuple[Any, ...],
-        dict[str, Any],
+        Tuple[Any, ...],
+        Dict[str, Any],
     ],
-    Interaction | InteractionsStreamWrapper,
+    Union[Interaction, InteractionsStreamWrapper],
 ]:
     def instrumented_interactions_create(
-        wrapped: Callable[..., Interaction | Stream[InteractionSSEEvent]],
+        wrapped: Callable[
+            ..., Union[Interaction, Stream[InteractionSSEEvent]]
+        ],
         instance: InteractionsResource,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Interaction | InteractionsStreamWrapper:
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ) -> Union[Interaction, InteractionsStreamWrapper]:
         state = _prepare_interactions_advice(
             telemetry_handler,
             instance,
@@ -491,17 +493,17 @@ def _create_instrumented_async_interactions_create(
     [
         Callable[..., Any],
         AsyncInteractionsResource,
-        tuple[Any, ...],
-        dict[str, Any],
+        Tuple[Any, ...],
+        Dict[str, Any],
     ],
     Any,
 ]:
     async def instrumented_interactions_create(
         wrapped: Callable[..., Any],
         instance: AsyncInteractionsResource,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
-    ) -> Interaction | AsyncInteractionsStreamWrapper:
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
+    ) -> Union[Interaction, AsyncInteractionsStreamWrapper]:
         state = _prepare_interactions_advice(
             telemetry_handler,
             instance,
@@ -551,7 +553,7 @@ def uninstrument_interactions(snapshot: object) -> None:
 
 def instrument_interactions(
     telemetry_handler: TelemetryHandler,
-) -> object | None:
+) -> Optional[object]:
     if not _HAS_INTERACTIONS:
         return None
 

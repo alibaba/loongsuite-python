@@ -22,7 +22,7 @@ import os
 from collections.abc import AsyncIterable, Callable, Iterable
 from copy import copy
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from google.genai.models import AsyncModels, Models
 from google.genai.models import t as transformers
@@ -228,7 +228,7 @@ def _clean_parameters(params: Any) -> Any:
         }
 
 
-def _tool_to_tool_definition(tool: Tool) -> list[ToolDefinition]:
+def _tool_to_tool_definition(tool: Tool) -> List[ToolDefinition]:
     definitions = []
     if tool.function_declarations:
         for fd in tool.function_declarations:
@@ -282,7 +282,7 @@ def _mcp_tool_to_tool_definition(tool: McpTool) -> ToolDefinition:
     )
 
 
-def _to_tool_definition_common(tool: ToolUnionDict) -> list[ToolDefinition]:
+def _to_tool_definition_common(tool: ToolUnionDict) -> List[ToolDefinition]:
     if isinstance(tool, Tool):
         return _tool_to_tool_definition(tool)
 
@@ -300,7 +300,7 @@ def _to_tool_definition_common(tool: ToolUnionDict) -> list[ToolDefinition]:
     ]
 
 
-def _to_tool_definition(tool: ToolUnionDict) -> list[ToolDefinition]:
+def _to_tool_definition(tool: ToolUnionDict) -> List[ToolDefinition]:
     if _is_mcp_imported and isinstance(tool, McpClientSession):
         return []
 
@@ -309,7 +309,7 @@ def _to_tool_definition(tool: ToolUnionDict) -> list[ToolDefinition]:
 
 async def _to_tool_definition_async(
     tool: ToolUnionDict,
-) -> list[ToolDefinition]:
+) -> List[ToolDefinition]:
     if _is_mcp_imported and isinstance(tool, McpClientSession):
         result = await tool.list_tools()
         return [_model_dump_to_tool_definition(t) for t in result.tools]
@@ -377,8 +377,8 @@ def _get_response_property(response: GenerateContentResponse, path: str):
 
 def _wrapped_config_with_tools(
     telemetry_handler: TelemetryHandler,
-    config: GenerateContentConfigOrDict | None,
-) -> tuple[GenerateContentConfig, bool]:
+    config: Optional[GenerateContentConfigOrDict],
+) -> Tuple[GenerateContentConfig, bool]:
     if config is None:
         return GenerateContentConfig(), False
     if isinstance(config, dict):
@@ -395,7 +395,7 @@ def _wrapped_config_with_tools(
     return config, True
 
 
-def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
+def _get_extra_generate_content_attributes() -> Dict[str, AttributeValue]:
     attrs = context_api.get_value(
         GENERATE_CONTENT_EXTRA_ATTRIBUTES_CONTEXT_KEY
     )
@@ -404,7 +404,7 @@ def _get_extra_generate_content_attributes() -> dict[str, AttributeValue]:
 
 def _apply_response_attributes(
     response: GenerateContentResponse,
-    finish_reasons: list[str],
+    finish_reasons: List[str],
     invocation: InferenceInvocation,
 ):
     if response.response_id:
@@ -440,7 +440,7 @@ def _apply_response_attributes(
 
 def _maybe_get_tool_definitions(
     config: GenerateContentConfig,
-) -> list[ToolDefinition]:
+) -> List[ToolDefinition]:
     return [
         de
         for tool in config.tools or []
@@ -451,7 +451,7 @@ def _maybe_get_tool_definitions(
 
 async def _maybe_get_tool_definitions_async(
     config: GenerateContentConfig,
-) -> list[ToolDefinition]:
+) -> List[ToolDefinition]:
     # Tool discovery is telemetry-only. Do not call MCP/application callbacks
     # before the real SDK operation; losing those definitions is preferable to
     # adding side effects or blocking the customer's request.
@@ -580,7 +580,7 @@ def _complete_generate_content_advice(
     state: _GenerateContentAdviceState,
     response: GenerateContentResponse,
 ) -> None:
-    finish_reasons: list[str] = []
+    finish_reasons: List[str] = []
     try:
         _apply_response_attributes(
             response,
@@ -627,8 +627,8 @@ def _create_instrumented_generate_content(
     def instrumented_generate_content(
         wrapped: Callable[..., Any],
         instance: Any,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ):
         def _execute(
             model: str,
@@ -685,7 +685,7 @@ class GenerateContentStreamWrapper(SyncStreamWrapper[GenerateContentResponse]):
         super().__init__(stream)
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
-        self._self_finish_reasons: list[str] = []
+        self._self_finish_reasons: List[str] = []
         self._self_output_accumulator = StreamOutputMessageAccumulator()
 
     def _process_chunk(self, chunk: GenerateContentResponse) -> None:
@@ -725,7 +725,7 @@ class AsyncGenerateContentStreamWrapper(
         # between attributes on the wrapped function and the original function.
         self._self_invocation = invocation
         self._self_telemetry_handler = telemetry_handler
-        self._self_finish_reasons: list[str] = []
+        self._self_finish_reasons: List[str] = []
         self._self_output_accumulator = StreamOutputMessageAccumulator()
 
     def _process_chunk(self, chunk: GenerateContentResponse) -> None:
@@ -778,8 +778,8 @@ def _create_instrumented_generate_content_stream(
     def instrumented_generate_content_stream(
         wrapped: Callable[..., Any],
         instance: Any,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ):
         def _execute(
             model: str,
@@ -850,8 +850,8 @@ def _create_instrumented_async_generate_content(
     async def instrumented_generate_content(
         wrapped: Callable[..., Any],
         instance: Any,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ):
         async def _execute(
             model: str,
@@ -905,8 +905,8 @@ def _create_instrumented_async_generate_content_stream(  # type: ignore
     async def instrumented_generate_content_stream(
         wrapped: Callable[..., Any],
         instance: Any,
-        args: tuple[Any, ...],
-        kwargs: dict[str, Any],
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any],
     ):
         async def _execute(
             model: str,

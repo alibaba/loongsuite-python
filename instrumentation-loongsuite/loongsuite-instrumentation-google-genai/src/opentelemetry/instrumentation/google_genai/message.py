@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from google.genai import types as genai_types
 
@@ -53,20 +53,20 @@ _logger = logging.getLogger(__name__)
 @dataclass
 class _StreamCandidateState:
     role: str = ""
-    finish_reason: FinishReason | str = ""
-    parts: list[MessagePart] = field(default_factory=list)
-    position_slots: dict[int, tuple[int, str]] = field(default_factory=dict)
+    finish_reason: Union[FinishReason, str] = ""
+    parts: List[MessagePart] = field(default_factory=list)
+    position_slots: Dict[int, Tuple[int, str]] = field(default_factory=dict)
 
 
 class StreamOutputMessageAccumulator:
     """Merge Google GenAI streaming candidates into logical output messages."""
 
     def __init__(self) -> None:
-        self._candidate_states: dict[int, _StreamCandidateState] = {}
+        self._candidate_states: Dict[int, _StreamCandidateState] = {}
 
     def add_candidates(
         self,
-        candidates: list[genai_types.Candidate],
+        candidates: List[genai_types.Candidate],
     ) -> None:
         for fallback_index, candidate in enumerate(candidates):
             candidate_index = candidate.index
@@ -78,7 +78,7 @@ class StreamOutputMessageAccumulator:
             )
             self._add_candidate(state, candidate)
 
-    def to_output_messages(self) -> list[OutputMessage]:
+    def to_output_messages(self) -> List[OutputMessage]:
         messages = []
         for candidate_index in sorted(self._candidate_states):
             state = self._candidate_states[candidate_index]
@@ -181,18 +181,18 @@ def _merge_stream_values(existing: Any, incoming: Any) -> Any:
 
 def to_input_messages(
     *,
-    contents: list[genai_types.Content],
-) -> list[InputMessage]:
+    contents: List[genai_types.Content],
+) -> List[InputMessage]:
     return [_to_input_message(content) for content in contents]
 
 
 def to_output_messages(
     *,
-    candidates: list[genai_types.Candidate],
-) -> list[OutputMessage]:
+    candidates: List[genai_types.Candidate],
+) -> List[OutputMessage]:
     def content_to_output_message(
         candidate: genai_types.Candidate,
-    ) -> OutputMessage | None:
+    ) -> Optional[OutputMessage]:
         if not candidate.content:
             return None
 
@@ -212,7 +212,7 @@ def to_output_messages(
 def to_system_instructions(
     *,
     content: genai_types.Content,
-) -> list[MessagePart]:
+) -> List[MessagePart]:
     parts = (
         _to_part(part, idx) for idx, part in enumerate(content.parts or [])
     )
@@ -232,8 +232,8 @@ def _to_input_message(
     )
 
 
-def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
-    def tool_call_id(name: str | None) -> str:
+def _to_part(part: genai_types.Part, idx: int) -> Optional[MessagePart]:
+    def tool_call_id(name: Optional[str]) -> str:
         if name:
             return f"{name}_{idx}"
         return f"{idx}"
@@ -278,7 +278,7 @@ def _to_part(part: genai_types.Part, idx: int) -> MessagePart | None:
     return None
 
 
-def _to_role(role: str | None) -> str:
+def _to_role(role: Optional[str]) -> str:
     if role == "user":
         return Role.USER.value
     if role == "model":
@@ -287,8 +287,8 @@ def _to_role(role: str | None) -> str:
 
 
 def _to_finish_reason(
-    finish_reason: genai_types.FinishReason | None,
-) -> FinishReason | str:
+    finish_reason: Optional[genai_types.FinishReason],
+) -> Union[FinishReason, str]:
     if finish_reason is None:
         return ""
     if (

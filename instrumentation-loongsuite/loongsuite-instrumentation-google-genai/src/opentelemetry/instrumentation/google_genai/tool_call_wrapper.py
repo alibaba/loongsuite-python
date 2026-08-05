@@ -19,7 +19,7 @@ import functools
 import inspect
 import json
 from dataclasses import dataclass
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 from google.genai.types import (
     ToolListUnion,
@@ -93,8 +93,8 @@ def _get_function_args(wrapped_function, function_args, function_kwargs):
 def _prepare_tool_advice(
     tool_function: ToolFunction,
     telemetry_handler: TelemetryHandler,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    args: Tuple[Any, ...],
+    kwargs: Dict[str, Any],
 ) -> _ToolAdviceState:
     invocation = None
     try:

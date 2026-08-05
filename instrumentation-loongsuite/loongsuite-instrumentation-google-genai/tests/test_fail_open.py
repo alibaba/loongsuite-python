@@ -14,6 +14,7 @@
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from typing import Tuple
 
 import pytest
 from google.genai import types
@@ -42,7 +43,7 @@ from opentelemetry.trace import get_tracer_provider
 from .common.otel_mocker import OTelMocker
 
 
-def _handler() -> tuple[TelemetryHandler, OTelMocker]:
+def _handler() -> Tuple[TelemetryHandler, OTelMocker]:
     otel = OTelMocker()
     otel.install()
     return (
