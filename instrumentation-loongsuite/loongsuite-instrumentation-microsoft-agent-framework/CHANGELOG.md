@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Enable native telemetry on Microsoft Agent Framework 1.0, whose
+  ``enable_instrumentation`` API does not yet accept ``force``.
+
+### Tests
+
+- Add replay-only VCR contracts against the real framework for content modes,
+  streaming, tools, provider errors, and concurrent trace isolation.
+
 ## Version 0.8.0 (2026-07-31)
 
 ### Fixed
