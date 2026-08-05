@@ -1,0 +1,19 @@
+interactions:
+- request:
+    body: '{"messages":[{"role":"system","content":"Return only the requested deterministic
+      token."},{"role":"user","content":"Reply with exactly MAF_VCR_NONSTREAM_OK"}],"model":"qwen-plus","stream":false}'
+    headers:
+      content-type:
+      - application/json
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: '{"model":"qwen-plus","id":"maf-vcr-response-id","choices":[{"message":{"content":"MAF_VCR_NONSTREAM_OK","role":"assistant"},"index":0,"finish_reason":"stop"}],"created":1700000000,"object":"chat.completion","usage":{"total_tokens":37,"completion_tokens":7,"prompt_tokens":30,"prompt_tokens_details":{"cached_tokens":0}}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

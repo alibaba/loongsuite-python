@@ -12,20 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Installed together with {[testenv]test_deps} from tox-loongsuite.ini
-# (opentelemetry-api/sdk/semantic-conventions from CORE_REPO).
-
 pytest==7.4.4
 pytest-asyncio==0.21.0
 pytest-vcr==1.0.2
 vcrpy==8.1.1
 wrapt>=1.14,<2.0.0
 opentelemetry-exporter-otlp-proto-http
-# Keep this stack exact: the replay cassettes strictly match serialized request
-# bodies, and the packages publish independently. These are the validated
-# versions; deliberately update all pins and re-record/replay together.
-agent-framework-core==1.13.0
-agent-framework-openai==1.12.0
+# Strict cassette body matching requires a fully reproducible serializer stack.
+agent-framework-core==1.0.0
+agent-framework-openai==1.0.0
 openai==2.53.0
 
 -e opentelemetry-instrumentation

@@ -1,0 +1,19 @@
+interactions:
+- request:
+    body: '{"messages":[{"role":"system","content":"Return a response."},{"role":"user","content":"Trigger
+      the provider failure."}],"model":"qwen-plus","stream":false}'
+    headers:
+      content-type:
+      - application/json
+    method: POST
+    uri: http://127.0.0.1:18765/v1/chat/completions
+  response:
+    body:
+      string: '{"error":{"message":"synthetic provider failure","type":"server_error","code":"maf_vcr_failure"}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 500
+      message: Internal Server Error
+version: 1
