@@ -216,6 +216,25 @@ def telemetry():
     native.tracer = original_native_tracer
 
 
+@pytest.fixture
+def content_telemetry(monkeypatch):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+    )
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    native = get_tracer()
+    original_native_tracer = native.tracer
+    native.tracer = provider.get_tracer(native.service_name)
+
+    instrumentor = StrandsInstrumentor()
+    instrumentor.instrument(tracer_provider=provider, skip_dep_check=True)
+    yield instrumentor, exporter, original_native_tracer
+    instrumentor.uninstrument()
+    native.tracer = original_native_tracer
+
+
 def _agent() -> Agent:
     return Agent(
         model=DeterministicModel(
@@ -340,6 +359,53 @@ async def test_capture_content_is_disabled_by_default(telemetry):
     for span in exporter.get_finished_spans():
         assert "gen_ai.input.messages" not in span.attributes
         assert "gen_ai.output.messages" not in span.attributes
+
+
+@pytest.mark.asyncio
+async def test_capture_content_includes_every_model_round(content_telemetry):
+    _, exporter, _ = content_telemetry
+    await _agent().invoke_async("Calculate 2+2")
+
+    spans = exporter.get_finished_spans()
+    llms = [
+        span for span in spans if span.attributes["gen_ai.span.kind"] == "LLM"
+    ]
+    agent = next(
+        span
+        for span in spans
+        if span.attributes["gen_ai.span.kind"] == "AGENT"
+    )
+    tool_span = next(
+        span for span in spans if span.attributes["gen_ai.span.kind"] == "TOOL"
+    )
+
+    first_input = json.loads(llms[0].attributes["gen_ai.input.messages"])
+    second_input = json.loads(llms[1].attributes["gen_ai.input.messages"])
+    assert first_input == [
+        {
+            "role": "user",
+            "parts": [{"content": "Calculate 2+2", "type": "text"}],
+        }
+    ]
+    assert [message["role"] for message in second_input] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert all("gen_ai.output.messages" in span.attributes for span in llms)
+    assert json.loads(agent.attributes["gen_ai.input.messages"]) == first_input
+    assert (
+        json.loads(agent.attributes["gen_ai.output.messages"])[0]["parts"][0][
+            "content"
+        ]
+        == "The answer is 4."
+    )
+    assert json.loads(tool_span.attributes["gen_ai.tool.call.arguments"]) == {
+        "expression": "2+2"
+    }
+    assert json.loads(tool_span.attributes["gen_ai.tool.call.result"])[
+        "content"
+    ] == [{"text": "4"}]
 
 
 @pytest.mark.asyncio
@@ -511,7 +577,10 @@ async def test_one_probe_fault_does_not_contaminate_concurrent_siblings(
         sum(span.context.trace_id == agent.context.trace_id for span in spans)
         for agent in agents
     )
-    assert span_counts == [5, 6, 6]
+    # The injected failure now matches the first model round because its input
+    # snapshot is available. That round loses both the LLM span and the empty
+    # standalone STEP that the previous late match left behind.
+    assert span_counts == [4, 6, 6]
 
 
 @pytest.mark.asyncio

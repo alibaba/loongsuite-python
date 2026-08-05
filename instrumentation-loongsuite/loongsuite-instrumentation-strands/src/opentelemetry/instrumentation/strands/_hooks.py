@@ -131,9 +131,7 @@ class LoongsuiteHook:
             request_model=_model_name(event.agent),
             provider=_model_provider(event.agent),
             operation_name="chat",
-            input_messages=_convert_messages(
-                event.invocation_state.get("messages", [])
-            ),
+            input_messages=_convert_messages(_model_input_messages(event)),
             system_instruction=_system_instruction(event.agent),
             tool_definitions=_tool_definitions(event.agent),
             conversation_id=_conversation_id(event.invocation_state),
@@ -541,6 +539,19 @@ def _model_name(agent: Any) -> str | None:
         if value:
             return str(value)
     return type(model).__name__
+
+
+def _model_input_messages(event: BeforeModelCallEvent) -> list[Any]:
+    """Return the message snapshot that Strands is about to send."""
+    messages = getattr(event.agent, "messages", None)
+    if isinstance(messages, list):
+        return messages
+
+    # Older Strands versions may expose the snapshot only through invocation
+    # state. Current Strands does not populate this key until tool execution,
+    # so it must not be the primary source for the first model call.
+    fallback = event.invocation_state.get("messages", [])
+    return fallback if isinstance(fallback, list) else []
 
 
 def _model_provider(agent: Any) -> str:

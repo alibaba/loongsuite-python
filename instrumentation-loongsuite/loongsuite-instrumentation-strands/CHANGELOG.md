@@ -27,3 +27,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve cancellation and generator-exit error types, retain the original
   model error when a failure reporter also fails, and mark model-span startup
   failures as an explicit ReAct-step telemetry error.
+- Capture the first model call's input from the Strands agent message snapshot,
+  before invocation state is populated by tool execution.
