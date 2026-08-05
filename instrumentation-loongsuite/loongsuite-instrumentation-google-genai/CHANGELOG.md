@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ``gen_ai.output.messages`` contains complete logical responses instead of
   one message per SSE chunk.
 
-## Version 0.8.0.dev
+## Version 0.9.0.dev
 
 ### Added
 
