@@ -50,6 +50,8 @@ Source tree: [`instrumentation-loongsuite/`](instrumentation-loongsuite).
 - **loongsuite-otel-util-genai** — [https://pypi.org/project/loongsuite-otel-util-genai/](https://pypi.org/project/loongsuite-otel-util-genai/)
 - **loongsuite-site-bootstrap** — [https://pypi.org/project/loongsuite-site-bootstrap/](https://pypi.org/project/loongsuite-site-bootstrap/).
 
+Runnable end-to-end samples are available in [Examples](examples/README.md).
+
 > **Package rename:** LoongSuite GenAI utilities are published as
 > **`loongsuite-otel-util-genai`** in new releases. The previous
 > **`loongsuite-util-genai`** distribution remains available for existing
