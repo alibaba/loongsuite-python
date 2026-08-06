@@ -153,10 +153,12 @@ def _apply_interaction_response_attributes(
 
     usage = response.usage or Usage()
 
-    invocation.input_tokens = usage.total_input_tokens
-    invocation.output_tokens = usage.total_output_tokens
-    invocation.thinking_tokens = usage.total_thought_tokens
-    invocation.cache_read_input_tokens = usage.total_cached_tokens
+    invocation.input_tokens = getattr(usage, "total_input_tokens", None)
+    invocation.output_tokens = getattr(usage, "total_output_tokens", None)
+    invocation.thinking_tokens = getattr(usage, "total_thought_tokens", None)
+    invocation.cache_read_input_tokens = getattr(
+        usage, "total_cached_tokens", None
+    )
 
     if telemetry_handler.should_capture_content():
         invocation.output_messages = _interactions_response_to_messages(
@@ -279,13 +281,15 @@ class InteractionsStreamWrapper(SyncStreamWrapper[InteractionSSEEvent]):
                 self._self_last_interaction = interaction
 
     def _on_stream_end(self) -> None:
-        if self._self_last_interaction:
-            _apply_interaction_response_attributes(
-                self._self_last_interaction,
-                self._self_invocation,
-                self._self_telemetry_handler,
-            )
-        self._self_invocation.stop()
+        try:
+            if self._self_last_interaction:
+                _apply_interaction_response_attributes(
+                    self._self_last_interaction,
+                    self._self_invocation,
+                    self._self_telemetry_handler,
+                )
+        finally:
+            self._self_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._self_invocation.fail(error)
@@ -312,13 +316,15 @@ class AsyncInteractionsStreamWrapper(AsyncStreamWrapper[InteractionSSEEvent]):
                 self._self_last_interaction = interaction
 
     def _on_stream_end(self) -> None:
-        if self._self_last_interaction:
-            _apply_interaction_response_attributes(
-                self._self_last_interaction,
-                self._self_invocation,
-                self._self_telemetry_handler,
-            )
-        self._self_invocation.stop()
+        try:
+            if self._self_last_interaction:
+                _apply_interaction_response_attributes(
+                    self._self_last_interaction,
+                    self._self_invocation,
+                    self._self_telemetry_handler,
+                )
+        finally:
+            self._self_invocation.stop()
 
     def _on_stream_error(self, error: BaseException) -> None:
         self._self_invocation.fail(error)

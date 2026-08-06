@@ -161,8 +161,10 @@ def _complete_embedding_advice(
     response: EmbedContentResponse,
 ) -> None:
     try:
-        _apply_embedding_response_attributes(response, state.invocation)
-        state.invocation.stop()
+        try:
+            _apply_embedding_response_attributes(response, state.invocation)
+        finally:
+            state.invocation.stop()
     finally:
         _RAW_RESPONSE_BODY.reset(state.raw_body_token)
         _CAPTURE_RAW_RESPONSE.reset(state.capture_token)

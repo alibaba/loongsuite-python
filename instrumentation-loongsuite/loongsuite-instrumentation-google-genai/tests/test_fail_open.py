@@ -27,9 +27,20 @@ from opentelemetry.instrumentation.google_genai._stream import (
     SyncStreamWrapper,
 )
 from opentelemetry.instrumentation.google_genai.allowlist_util import AllowList
+from opentelemetry.instrumentation.google_genai.embeddings import (
+    _CAPTURE_RAW_RESPONSE,
+    _RAW_RESPONSE_BODY,
+    _complete_embedding_advice,
+    _EmbeddingAdviceState,
+)
 from opentelemetry.instrumentation.google_genai.generate_content import (
     _create_instrumented_generate_content,
     _create_instrumented_generate_content_stream,
+)
+from opentelemetry.instrumentation.google_genai.interactions import (
+    AsyncInteractionsStreamWrapper,
+    InteractionsStreamWrapper,
+    _apply_interaction_response_attributes,
 )
 from opentelemetry.instrumentation.google_genai.message import (
     StreamOutputMessageAccumulator,
@@ -125,6 +136,113 @@ def test_response_mapping_failure_returns_original_and_ends_span(
         assert not trace.get_current_span().get_span_context().is_valid
     finally:
         otel.uninstall()
+
+
+def test_interaction_usage_missing_optional_fields_is_tolerated() -> None:
+    class Usage:
+        total_input_tokens = 3
+        total_output_tokens = 2
+
+    class Response:
+        model = "gemini-test"
+        usage = Usage()
+
+    class Invocation:
+        response_model_name = None
+        input_tokens = None
+        output_tokens = None
+        thinking_tokens = None
+        cache_read_input_tokens = None
+
+    class Handler:
+        @staticmethod
+        def should_capture_content() -> bool:
+            return False
+
+    invocation = Invocation()
+    _apply_interaction_response_attributes(Response(), invocation, Handler())
+
+    assert invocation.input_tokens == 3
+    assert invocation.output_tokens == 2
+    assert invocation.thinking_tokens is None
+    assert invocation.cache_read_input_tokens is None
+
+
+@pytest.mark.parametrize(
+    "wrapper_factory",
+    [
+        lambda invocation, handler: InteractionsStreamWrapper(
+            iter(()), invocation, handler
+        ),
+        lambda invocation, handler: AsyncInteractionsStreamWrapper(
+            _empty_async_stream(), invocation, handler
+        ),
+    ],
+)
+def test_interaction_stream_mapping_failure_still_stops_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+    wrapper_factory,
+) -> None:
+    class Invocation:
+        stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    def fail_mapping(*args, **kwargs):
+        raise RuntimeError("probe mapping failed")
+
+    invocation = Invocation()
+    wrapper = wrapper_factory(invocation, object())
+    wrapper._self_last_interaction = object()
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.google_genai.interactions."
+        "_apply_interaction_response_attributes",
+        fail_mapping,
+    )
+
+    with pytest.raises(RuntimeError, match="probe mapping failed"):
+        wrapper._on_stream_end()
+
+    assert invocation.stopped
+
+
+def test_embedding_mapping_failure_still_stops_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Invocation:
+        stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    def fail_mapping(*args, **kwargs):
+        raise RuntimeError("probe mapping failed")
+
+    invocation = Invocation()
+    raw_body_token = _RAW_RESPONSE_BODY.set(None)
+    capture_token = _CAPTURE_RAW_RESPONSE.set(True)
+    state = _EmbeddingAdviceState(
+        invocation=invocation,
+        raw_body_token=raw_body_token,
+        capture_token=capture_token,
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.google_genai.embeddings."
+        "_apply_embedding_response_attributes",
+        fail_mapping,
+    )
+
+    _complete_embedding_advice(state, object())
+
+    assert invocation.stopped
+    assert _RAW_RESPONSE_BODY.get() is None
+    assert not _CAPTURE_RAW_RESPONSE.get()
+
+
+async def _empty_async_stream():
+    if False:
+        yield None
 
 
 def test_failure_reporter_failure_preserves_original_exception(
