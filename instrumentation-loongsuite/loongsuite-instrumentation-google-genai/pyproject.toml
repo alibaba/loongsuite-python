@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loongsuite-instrumentation-google-genai"
+dynamic = ["version"]
+description = "LoongSuite Google GenAI SDK instrumentation"
+supports_metrics = true
+readme = "README.rst"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [
+  { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "opentelemetry-api >= 1.37.0",
+  "opentelemetry-instrumentation >= 0.58b0",
+  "opentelemetry-semantic-conventions >= 0.58b0",
+  "opentelemetry-util-genai",
+  "wrapt >= 1.17.0, < 3.0.0",
+]
+
+[project.optional-dependencies]
+instruments = ["google-genai >= 1.32.0, < 3"]
+
+[project.entry-points.opentelemetry_instrumentor]
+google-genai = "opentelemetry.instrumentation.google_genai:GoogleGenAiSdkInstrumentor"
+
+[project.urls]
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-google-genai"
+Repository = "https://github.com/alibaba/loongsuite-python"
+Upstream = "https://github.com/open-telemetry/opentelemetry-python-genai/tree/main/instrumentation/opentelemetry-instrumentation-google-genai"
+
+[tool.hatch.version]
+path = "src/opentelemetry/instrumentation/google_genai/version.py"
+
+[tool.hatch.build.targets.sdist]
+include = ["/examples", "/src", "/tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opentelemetry"]
