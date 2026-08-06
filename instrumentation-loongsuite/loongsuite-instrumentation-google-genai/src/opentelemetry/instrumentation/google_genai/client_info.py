@@ -41,7 +41,14 @@ def get_client_info(instance: Any) -> Tuple[bool, Optional[str]]:
         server_url = getattr(config, "server_url", "")
         if server_url:
             server_address = server_url
-            if "aiplatform.googleapis.com" in server_url:
+            server_url_string = str(server_url)
+            if "://" not in server_url_string:
+                server_url_string = "//" + server_url_string
+            server_hostname = urlsplit(server_url_string).hostname
+            if server_hostname and (
+                server_hostname == "aiplatform.googleapis.com"
+                or server_hostname.endswith("-aiplatform.googleapis.com")
+            ):
                 is_vertex = True
 
     if server_address and "://" in str(server_address):
