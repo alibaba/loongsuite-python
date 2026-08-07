@@ -1,4 +1,4 @@
-"""LangGraph workflow for a text-only e-commerce support example."""
+"""纯文字电商客服 LangGraph 工作流。"""
 
 import json
 from collections.abc import Callable, Sequence
@@ -13,23 +13,24 @@ from tools import AFTERSALES_TOOLS, PRESALES_TOOLS
 
 Route = Literal["presales", "aftersales", "clarify"]
 
-PRESALES_PROMPT = """You are the pre-sales specialist for a fictional store.
-Use only the supplied synthetic catalog, product knowledge, and inventory tools.
-Call at least one tool before answering. If a requested fact is unavailable, say so.
-Never invent prices, promotions, delivery promises, or product capabilities.
+PRESALES_PROMPT = """你是虚构电商店铺的售前客服。
+只能使用提供的虚构商品目录、商品知识和库存工具。
+回答前至少调用一个工具；工具未提供的信息要明确说明不知道。
+不得编造价格、促销、到货承诺或商品能力。
+请始终使用简体中文回复。
 """
 
-AFTERSALES_PROMPT = """You are the after-sales specialist for a fictional store.
-Use only the supplied synthetic order, policy, and issue-assessment tools.
-Call the order tool before discussing an order. Never promise a refund or replacement;
-describe the policy and the next verification step instead.
+AFTERSALES_PROMPT = """你是虚构电商店铺的售后客服。
+只能使用提供的虚构订单、售后政策和问题评估工具。
+讨论订单前必须先调用订单查询工具。不得直接承诺退款或换货，
+只能说明政策依据和下一步核验流程。
+请始终使用简体中文回复。
 """
 
-REVIEW_PROMPT = """You are the final response reviewer for a fictional store.
-Rewrite the draft as a concise, helpful customer reply. Preserve only facts supported
-by the tool evidence. Do not add prices, stock, policy, order status, guarantees, or
-actions that are absent from the evidence. If evidence is missing, keep the uncertainty.
-Return only the final customer-facing answer.
+REVIEW_PROMPT = """你是虚构电商店铺的最终回复审核员。
+请把草稿润色成简洁、友善的中文客服回复，只保留工具证据支持的事实。
+不得补充证据中没有的价格、库存、政策、订单状态、保证或处理动作。
+证据不足时必须保留不确定性。只输出最终给客户看的中文回复。
 """
 
 
@@ -122,7 +123,7 @@ def extract_agent_result(result: dict[str, Any]) -> tuple[str, list[str]]:
         elif message_type == "ai" and content.strip():
             answer = content.strip()
     if not answer:
-        raise ValueError("specialist agent returned no final answer")
+        raise ValueError("专业客服 Agent 未返回最终答案")
     return answer, evidence
 
 
@@ -197,10 +198,10 @@ class EcommerceSupportWorkflow:
                 [
                     SystemMessage(
                         content=(
-                            "Classify this e-commerce question as presales, aftersales, "
-                            "or other. Presales covers product selection, specifications, "
-                            "and stock. Aftersales covers an existing order, delivery, "
-                            "returns, warranty, or a product issue."
+                            "请将这个电商问题分类为 presales、aftersales 或 other。"
+                            "presales（售前）包括商品选择、规格和库存；"
+                            "aftersales（售后）包括已有订单、物流、退换、质保或"
+                            "商品问题。只判断意图，不要回答用户问题。"
                         )
                     ),
                     HumanMessage(content=question),
@@ -215,7 +216,7 @@ class EcommerceSupportWorkflow:
             decision = IntentDecision(
                 intent="other",
                 confidence=0,
-                reason="intent classification was unavailable",
+                reason="意图识别暂时不可用",
             )
         route = select_route(
             {"intent": decision.intent, "confidence": decision.confidence},
@@ -239,25 +240,22 @@ class EcommerceSupportWorkflow:
         except Exception:  # noqa: BLE001 - an unavailable agent must fail open
             return {
                 "draft_response": (
-                    f"The {label} specialist is temporarily unavailable. "
-                    "Please try again or provide more details."
+                    f"{label}客服暂时不可用，请稍后重试或补充更多信息。"
                 ),
                 "tool_evidence": [],
             }
 
     def _run_presales(self, state: SupportState) -> SupportState:
-        return self._run_specialist(state, self.presales_agent, "pre-sales")
+        return self._run_specialist(state, self.presales_agent, "售前")
 
     def _run_aftersales(self, state: SupportState) -> SupportState:
-        return self._run_specialist(
-            state, self.aftersales_agent, "after-sales"
-        )
+        return self._run_specialist(state, self.aftersales_agent, "售后")
 
     def _clarify(self, state: SupportState) -> SupportState:
         return {
             "draft_response": (
-                "Could you clarify whether you are asking about choosing a product "
-                "or about an existing order?"
+                "请问你想咨询商品选择、规格或库存，还是想查询已有订单、"
+                "物流或退换货问题？"
             ),
             "tool_evidence": [],
         }
@@ -272,13 +270,15 @@ class EcommerceSupportWorkflow:
             )
             final_response = _content_to_text(response.content).strip()
             if not final_response:
-                raise ValueError("reviewer returned an empty response")
+                raise ValueError("回复审核员返回了空内容")
         except Exception:  # noqa: BLE001 - review failure returns the safe draft
-            final_response = state["draft_response"]
+            final_response = state.get("draft_response") or (
+                "暂时无法生成回复，请稍后重试。"
+            )
         return {"final_response": final_response}
 
     def run(self, question: str) -> SupportState:
         normalized = question.strip()
         if not normalized:
-            raise ValueError("question must not be empty")
+            raise ValueError("问题不能为空")
         return self.graph.invoke({"question": normalized})

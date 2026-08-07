@@ -1,9 +1,12 @@
 """Offline tests for the text-only e-commerce support workflow."""
 
+import argparse
+import json
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+import app
 import pytest
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -27,16 +30,16 @@ from workflow import EcommerceSupportWorkflow, IntentDecision, select_route
 class KeywordClassifier:
     def invoke(self, messages: list[Any]) -> IntentDecision:
         question = messages[-1].content.casefold()
-        if "order" in question or "refund" in question:
+        if "订单" in question or "退款" in question:
             return IntentDecision(
-                intent="aftersales", confidence=0.95, reason="existing order"
+                intent="aftersales", confidence=0.95, reason="已有订单"
             )
-        if "shoe" in question or "stock" in question:
+        if "鞋" in question or "库存" in question or "有货" in question:
             return IntentDecision(
-                intent="presales", confidence=0.95, reason="product question"
+                intent="presales", confidence=0.95, reason="商品咨询"
             )
         return IntentDecision(
-            intent="other", confidence=0.4, reason="ambiguous"
+            intent="other", confidence=0.4, reason="意图不明确"
         )
 
 
@@ -47,7 +50,7 @@ class FixedClassifier:
     def invoke(self, messages: list[Any]) -> IntentDecision:
         del messages
         return IntentDecision(
-            intent=self.intent, confidence=0.99, reason="test route"
+            intent=self.intent, confidence=0.99, reason="测试路由"
         )
 
 
@@ -81,13 +84,13 @@ class DeterministicToolModel(BaseChatModel):
         del stop, run_manager, kwargs
         is_review = any(
             isinstance(message, SystemMessage)
-            and "final response reviewer" in str(message.content)
+            and "最终回复审核员" in str(message.content)
             for message in messages
         )
         if is_review:
-            response = AIMessage(content="reviewed deterministic answer")
+            response = AIMessage(content="已审核的确定性回复")
         elif any(isinstance(message, ToolMessage) for message in messages):
-            response = AIMessage(content="deterministic specialist answer")
+            response = AIMessage(content="确定性的专业客服回复")
         else:
             response = AIMessage(
                 content="",
@@ -114,10 +117,10 @@ class FakeModel:
 
     def invoke(self, messages: list[Any]) -> AIMessage:
         if self.fail_review:
-            raise RuntimeError("synthetic reviewer failure")
+            raise RuntimeError("虚构审核员异常")
         review_input = messages[-1].content
         self.review_inputs.append(review_input)
-        return AIMessage(content=f"reviewed: {review_input}")
+        return AIMessage(content=f"已审核：{review_input}")
 
 
 class FakeAgent:
@@ -131,7 +134,7 @@ class FakeAgent:
     def invoke(self, input_data: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(self.name)
         if self.fail:
-            raise RuntimeError("synthetic specialist failure")
+            raise RuntimeError("虚构专业客服异常")
         question = input_data["messages"][-1].content
         return {
             "messages": [
@@ -140,7 +143,7 @@ class FakeAgent:
                     tool_call_id=f"call-{self.name}",
                     name=f"{self.name}_tool",
                 ),
-                AIMessage(content=f"{self.name} draft for {question}"),
+                AIMessage(content=f"{self.name} 针对“{question}”的回复草稿"),
             ]
         }
 
@@ -159,7 +162,7 @@ def make_workflow(
 
 
 def test_synthetic_tools_return_bounded_results() -> None:
-    assert '"P-DEMO-001"' in search_product_catalog.invoke({"query": "shoes"})
+    assert '"P-DEMO-001"' in search_product_catalog.invoke({"query": "通勤鞋"})
     inventory = check_inventory.invoke(
         {"product_id": "P-DEMO-001", "size": "42"}
     )
@@ -172,8 +175,34 @@ def test_synthetic_tools_return_bounded_results() -> None:
 
 def test_missing_order_is_a_tool_result_not_an_exception() -> None:
     result = lookup_order_history.invoke({"order_id": "DEMO-404"})
-    assert '"ok": false' in result
-    assert "order not found" in result
+    assert json.loads(result) == {
+        "error": "未找到订单：DEMO-404",
+        "ok": False,
+    }
+
+
+def test_cli_reports_a_chinese_error_for_a_blank_question(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class EmptyQuestionWorkflow:
+        def run(self, question: str) -> dict[str, Any]:
+            del question
+            raise ValueError("问题不能为空")
+
+    monkeypatch.setattr(
+        app,
+        "parse_args",
+        lambda: argparse.Namespace(question="  "),
+    )
+    monkeypatch.setattr(app, "create_model", lambda: object())
+    monkeypatch.setattr(
+        app,
+        "EcommerceSupportWorkflow",
+        lambda model: EmptyQuestionWorkflow(),
+    )
+
+    assert app.main() == 2
+    assert capsys.readouterr().err == "请求错误：问题不能为空\n"
 
 
 def test_route_selection_uses_intent_and_confidence() -> None:
@@ -190,10 +219,8 @@ def test_route_selection_uses_intent_and_confidence() -> None:
 
 def test_presales_and_aftersales_use_different_agents() -> None:
     workflow, model, calls = make_workflow()
-    presales = workflow.run("Are the commuter shoes in stock in size 42?")
-    aftersales = workflow.run(
-        "Order DEMO-1001 has a defect. Can I get a refund?"
-    )
+    presales = workflow.run("云步通勤鞋 42 码有货吗？")
+    aftersales = workflow.run("订单 DEMO-1001 的鞋有质量问题，可以退款吗？")
 
     assert presales["route"] == "presales"
     assert aftersales["route"] == "aftersales"
@@ -209,15 +236,15 @@ def test_presales_and_aftersales_use_different_agents() -> None:
             "presales",
             "check_inventory",
             {"product_id": "P-DEMO-001", "size": "42"},
-            "Are the commuter shoes in stock in size 42?",
+            "云步通勤鞋 42 码有货吗？",
             '"quantity": 4',
         ),
         (
             "aftersales",
             "lookup_order_history",
             {"order_id": "DEMO-1001"},
-            "What is the status of order DEMO-1001?",
-            '"status": "delivered"',
+            "订单 DEMO-1001 现在是什么状态？",
+            '"status": "已签收"',
         ),
     ],
 )
@@ -240,35 +267,33 @@ def test_real_langgraph_react_agent_executes_a_synthetic_tool(
     result = workflow.run(question)
 
     assert result["route"] == intent
-    assert result["final_response"] == "reviewed deterministic answer"
+    assert result["final_response"] == "已审核的确定性回复"
     assert any(evidence in item for item in result["tool_evidence"])
 
 
 def test_ambiguous_question_uses_clarification_without_a_specialist() -> None:
     workflow, _, calls = make_workflow()
-    result = workflow.run("Can you help me?")
+    result = workflow.run("能帮帮我吗？")
     assert result["route"] == "clarify"
     assert calls == []
-    assert "clarify" in result["final_response"]
+    assert "请问你想咨询" in result["final_response"]
 
 
 def test_specialist_and_reviewer_fail_open() -> None:
     workflow, _, calls = make_workflow(
         fail_review=True, fail_agent="presales_agent"
     )
-    result = workflow.run("Are the commuter shoes in stock?")
+    result = workflow.run("云步通勤鞋有货吗？")
     assert calls == ["presales_agent"]
     assert result["route"] == "presales"
-    assert result["final_response"].startswith(
-        "The pre-sales specialist is temporarily unavailable."
-    )
+    assert result["final_response"].startswith("售前客服暂时不可用")
 
 
 def test_concurrent_invocations_keep_routes_and_answers_isolated() -> None:
     workflow, _, _ = make_workflow()
     questions = [
-        "Are the commuter shoes in stock?",
-        "Where is order DEMO-1002?",
+        "云步通勤鞋有货吗？",
+        "订单 DEMO-1002 到哪里了？",
     ]
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(workflow.run, questions))

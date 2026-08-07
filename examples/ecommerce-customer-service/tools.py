@@ -1,4 +1,4 @@
-"""Synthetic tools for the e-commerce customer service example."""
+"""电商客服示例使用的虚构工具和数据。"""
 
 import json
 from collections.abc import Callable
@@ -8,17 +8,17 @@ from langchain_core.tools import tool
 
 PRODUCTS = {
     "P-DEMO-001": {
-        "name": "CloudStep commuter shoes",
-        "category": "shoes",
-        "material": "water-resistant woven upper and rubber outsole",
-        "use_cases": ["daily commute", "light walking"],
+        "name": "云步通勤鞋",
+        "category": "鞋履",
+        "material": "防泼水织物鞋面和橡胶外底",
+        "use_cases": ["日常通勤", "轻度步行"],
         "sizes": ["39", "40", "41", "42", "43"],
     },
     "P-DEMO-002": {
-        "name": "Breeze insulated bottle",
-        "category": "drinkware",
-        "material": "food-grade stainless steel",
-        "use_cases": ["office", "short trips"],
+        "name": "清风保温杯",
+        "category": "杯具",
+        "material": "食品级不锈钢",
+        "use_cases": ["办公室", "短途出行"],
         "sizes": ["500ml"],
     },
 }
@@ -36,13 +36,13 @@ ORDERS = {
     "DEMO-1001": {
         "product_id": "P-DEMO-001",
         "size": "42",
-        "status": "delivered",
+        "status": "已签收",
         "delivered_days_ago": 1,
     },
     "DEMO-1002": {
         "product_id": "P-DEMO-002",
         "size": "500ml",
-        "status": "in_transit",
+        "status": "运输中",
         "delivered_days_ago": None,
     },
 }
@@ -50,13 +50,13 @@ ORDERS = {
 POLICIES = {
     "quality_issue": {
         "window_days": 30,
-        "resolution": "inspection followed by replacement or refund when confirmed",
-        "required_evidence": "order ID and a text description of the issue",
+        "resolution": "核验属实后可换货或退款",
+        "required_evidence": "订单号和问题文字描述",
     },
     "change_of_mind": {
         "window_days": 7,
-        "resolution": "return when the product is unused and complete",
-        "required_evidence": "order ID and product condition",
+        "resolution": "商品未使用且配件完整时可以退货",
+        "required_evidence": "订单号和商品状态说明",
     },
 }
 
@@ -66,16 +66,19 @@ def _json(data: Any) -> str:
 
 
 def _safe_lookup(operation: Callable[[], Any]) -> str:
-    """Keep synthetic tool failures explainable instead of crashing the agent."""
+    """将虚构工具异常转为可解释的结果，避免中断 Agent。"""
     try:
         return _json({"ok": True, "data": operation()})
     except (KeyError, TypeError, ValueError) as exc:
-        return _json({"ok": False, "error": str(exc)})
+        message = (
+            exc.args[0] if isinstance(exc, KeyError) and exc.args else str(exc)
+        )
+        return _json({"ok": False, "error": str(message)})
 
 
 @tool
 def search_product_catalog(query: str) -> str:
-    """Search the synthetic product catalog by product name, category, or use case."""
+    """按商品名称、分类或使用场景搜索虚构商品目录。"""
 
     def search() -> list[dict[str, Any]]:
         normalized = query.casefold()
@@ -104,11 +107,11 @@ def search_product_catalog(query: str) -> str:
 
 @tool
 def query_product_knowledge(product_id: str) -> str:
-    """Return specifications and suitable use cases for a synthetic product ID."""
+    """按虚构商品编号查询规格和适用场景。"""
 
     def lookup() -> dict[str, Any]:
         if product_id not in PRODUCTS:
-            raise KeyError(f"unknown product: {product_id}")
+            raise KeyError(f"未找到商品：{product_id}")
         return {"product_id": product_id, **PRODUCTS[product_id]}
 
     return _safe_lookup(lookup)
@@ -116,13 +119,13 @@ def query_product_knowledge(product_id: str) -> str:
 
 @tool
 def check_inventory(product_id: str, size: str) -> str:
-    """Check synthetic inventory for one product and size."""
+    """查询指定虚构商品和尺码的库存。"""
 
     def lookup() -> dict[str, Any]:
         if product_id not in PRODUCTS:
-            raise KeyError(f"unknown product: {product_id}")
+            raise KeyError(f"未找到商品：{product_id}")
         if (product_id, size) not in INVENTORY:
-            raise KeyError(f"unknown size {size} for product {product_id}")
+            raise KeyError(f"商品 {product_id} 没有尺码 {size}")
         quantity = INVENTORY[(product_id, size)]
         return {
             "product_id": product_id,
@@ -136,11 +139,11 @@ def check_inventory(product_id: str, size: str) -> str:
 
 @tool
 def lookup_order_history(order_id: str) -> str:
-    """Look up a synthetic order. Only DEMO-prefixed IDs exist in this example."""
+    """查询虚构订单；本示例只包含 DEMO- 前缀的订单号。"""
 
     def lookup() -> dict[str, Any]:
         if order_id not in ORDERS:
-            raise KeyError(f"order not found: {order_id}")
+            raise KeyError(f"未找到订单：{order_id}")
         return {"order_id": order_id, **ORDERS[order_id]}
 
     return _safe_lookup(lookup)
@@ -148,11 +151,11 @@ def lookup_order_history(order_id: str) -> str:
 
 @tool
 def query_after_sales_policy(issue_type: str) -> str:
-    """Return the synthetic policy for quality_issue or change_of_mind."""
+    """查询 quality_issue（质量问题）或 change_of_mind（无理由退货）政策。"""
 
     def lookup() -> dict[str, Any]:
         if issue_type not in POLICIES:
-            raise KeyError(f"unsupported issue type: {issue_type}")
+            raise KeyError(f"不支持的问题类型：{issue_type}")
         return {"issue_type": issue_type, **POLICIES[issue_type]}
 
     return _safe_lookup(lookup)
@@ -160,23 +163,21 @@ def query_after_sales_policy(issue_type: str) -> str:
 
 @tool
 def assess_issue(order_id: str, description: str) -> str:
-    """Provide a bounded next step using a synthetic order and text description."""
+    """根据虚构订单和文字问题描述给出有限的下一步建议。"""
 
     def assess() -> dict[str, Any]:
         if order_id not in ORDERS:
-            raise KeyError(f"order not found: {order_id}")
+            raise KeyError(f"未找到订单：{order_id}")
         if not description.strip():
-            raise ValueError("issue description is required")
+            raise ValueError("必须提供问题描述")
         order = ORDERS[order_id]
-        if order["status"] != "delivered":
-            next_step = "wait for delivery or contact logistics support"
+        if order["status"] != "已签收":
+            next_step = "等待商品送达，或联系物流客服查询"
         else:
-            next_step = (
-                "submit the order ID and issue description for inspection"
-            )
+            next_step = "提交订单号和问题描述，等待人工核验"
         return {
             "order_id": order_id,
-            "assessment": "manual verification required",
+            "assessment": "需要人工核验",
             "next_step": next_step,
         }
 

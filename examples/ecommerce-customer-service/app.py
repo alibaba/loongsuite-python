@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the text-only e-commerce customer service example."""
+"""运行纯文字中文电商客服示例。"""
 
 import argparse
 import os
@@ -10,6 +10,11 @@ from langchain_openai import ChatOpenAI
 from workflow import EcommerceSupportWorkflow
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+ROUTE_LABELS = {
+    "presales": "售前",
+    "aftersales": "售后",
+    "clarify": "需澄清",
+}
 
 
 def create_model() -> ChatOpenAI:
@@ -17,7 +22,7 @@ def create_model() -> ChatOpenAI:
     api_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "Set DASHSCOPE_API_KEY or OPENAI_API_KEY before running the example."
+            "运行示例前请设置 DASHSCOPE_API_KEY 或 OPENAI_API_KEY。"
         )
 
     return ChatOpenAI(
@@ -36,7 +41,7 @@ def questions(initial_question: str | None) -> Iterator[str]:
         yield initial_question
         return
 
-    print("Enter a question. Submit an empty line to exit.")
+    print("请输入问题，直接回车即可退出。")
     while True:
         try:
             question = input("> ").strip()
@@ -50,11 +55,11 @@ def questions(initial_question: str | None) -> Iterator[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Text-only LangGraph e-commerce customer service example"
+        description="纯文字 LangGraph 中文电商客服示例"
     )
     parser.add_argument(
         "--question",
-        help="Ask one question and exit. Omit it to use the interactive loop.",
+        help="提问一次后退出；不传该参数则进入交互模式。",
     )
     return parser.parse_args()
 
@@ -64,13 +69,17 @@ def main() -> int:
     try:
         support = EcommerceSupportWorkflow(create_model())
     except (RuntimeError, ValueError) as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
+        print(f"配置错误：{exc}", file=sys.stderr)
         return 2
 
     for question in questions(args.question):
         try:
             result = support.run(question)
-            print(f"[{result['route']}] {result['final_response']}")
+            route_label = ROUTE_LABELS.get(result["route"], result["route"])
+            print(f"[{route_label}] {result['final_response']}")
+        except ValueError as exc:
+            print(f"请求错误：{exc}", file=sys.stderr)
+            return 2
         except KeyboardInterrupt:
             print()
             return 130

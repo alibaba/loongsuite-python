@@ -1,21 +1,24 @@
 # Text-only e-commerce customer service
 
-This example shows a small LangGraph customer-service workflow with LoongSuite
-automatic instrumentation. It accepts text only: there is no image input, file
-upload, browser UI, or multimodal model.
+This example shows a small **Chinese-language** LangGraph customer-service
+workflow with LoongSuite automatic instrumentation. It accepts text only:
+there is no image input, file upload, browser UI, or multimodal model.
 
 The workflow is:
 
 ```text
-question
+Chinese customer question
   -> intent_router
   -> presales_agent | aftersales_agent | clarify
   -> response_review
-  -> final text response
+  -> final Chinese text response
 ```
 
-The two specialist branches use separate prompts and tools. All products,
-orders, policies, and tool results are fictional fixtures in `tools.py`.
+The router, specialist prompts, synthetic data, tool results, CLI, and customer
+responses use Simplified Chinese. Stable Python identifiers and graph node names
+remain in English. The two specialist branches use separate prompts and tools.
+All products, orders, policies, and tool results are fictional fixtures in
+`tools.py`.
 
 ## Install
 
@@ -58,17 +61,20 @@ export OTEL_LOGS_EXPORTER="none"
 export OTEL_SEMCONV_STABILITY_OPT_IN="gen_ai_latest_experimental"
 
 loongsuite-instrument python app.py \
-  --question "Are the CloudStep commuter shoes suitable for walking, and is size 42 available?"
+  --question "云步通勤鞋适合日常步行吗？42 码有货吗？"
 ```
 
 After-sales example:
 
 ```bash
 loongsuite-instrument python app.py \
-  --question "Order DEMO-1001 was delivered yesterday and has a sole defect. What should I do?"
+  --question "订单 DEMO-1001 昨天签收，鞋底有问题，应该怎么处理？"
 ```
 
-Omit `--question` to start a simple interactive text loop.
+Omit `--question` to start a simple interactive Chinese text loop.
+
+For a detailed scenario walkthrough and a ready-to-use training script, see
+[README.zh-CN.md](README.zh-CN.md#培训讲解指南).
 
 With LangChain and LangGraph instrumentation enabled, a specialist request is
 expected to include the router LLM, the selected Agent, ReAct Step, Tool/LLM
