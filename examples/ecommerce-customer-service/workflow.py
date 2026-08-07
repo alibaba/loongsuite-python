@@ -4,10 +4,10 @@ import json
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol, TypedDict
 
+from langchain.agents import create_agent
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 from tools import AFTERSALES_TOOLS, PRESALES_TOOLS
 
@@ -76,9 +76,13 @@ AgentFactory = Callable[..., AgentRunner]
 def default_agent_factory(
     *, name: str, model: ChatModel, tools: Sequence[BaseTool], prompt: str
 ) -> AgentRunner:
-    """Build a LangGraph ReAct agent while keeping construction injectable for tests."""
-    del name  # The outer graph node supplies the observable specialist name.
-    return create_react_agent(model=model, tools=list(tools), prompt=prompt)
+    """Build a LangGraph-backed agent while keeping construction injectable."""
+    return create_agent(
+        model=model,
+        tools=list(tools),
+        system_prompt=prompt,
+        name=name,
+    )
 
 
 def select_route(

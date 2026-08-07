@@ -3,6 +3,9 @@
 本示例展示一个使用 LoongSuite 自动埋点的小型中文 LangGraph 电商客服工作流。
 示例只接受文字：不包含图片输入、文件上传、浏览器 UI 或多模态模型。
 
+示例面向 LangGraph 1.2+，并使用 LangChain 1.x 的 `create_agent`，即当前受支持的
+LangGraph Agent API。
+
 工作流如下：
 
 ```text

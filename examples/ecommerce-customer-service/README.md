@@ -4,6 +4,9 @@ This example shows a small **Chinese-language** LangGraph customer-service
 workflow with LoongSuite automatic instrumentation. It accepts text only:
 there is no image input, file upload, browser UI, or multimodal model.
 
+It targets LangGraph 1.2+ and uses LangChain 1.x `create_agent`, the supported
+LangGraph-backed agent API.
+
 The workflow is:
 
 ```text
