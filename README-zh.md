@@ -50,6 +50,8 @@ LoongSuite Python Agent 同时也是上游 [OTel Python Agent](https://github.co
 - **loongsuite-otel-util-genai** — [https://pypi.org/project/loongsuite-otel-util-genai/](https://pypi.org/project/loongsuite-otel-util-genai/)
 - **loongsuite-site-bootstrap**— [https://pypi.org/project/loongsuite-site-bootstrap/](https://pypi.org/project/loongsuite-site-bootstrap/)。
 
+可运行的端到端示例请参见 [Examples](examples/README.zh-CN.md)。
+
 > **包名迁移：**新的 LoongSuite GenAI 工具库发行包名为
 > **`loongsuite-otel-util-genai`**。旧的 **`loongsuite-util-genai`**
 > 仍可供历史安装使用，但新的 LoongSuite GenAI 工具库更新会发布到新包名下。
