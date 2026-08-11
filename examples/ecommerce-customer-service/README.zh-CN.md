@@ -20,8 +20,10 @@ LangGraph Agent API。
 工具结果全部是虚构数据。
 
 运行时的意图识别提示词、专业 Agent 提示词、工具说明、虚构数据、异常兜底及
-最终回答均使用简体中文。为了保持代码规范和 Trace 名称稳定，Python 标识符、
-节点名和内部路由值仍使用英文。
+最终回答均使用简体中文。专业 Agent 的显示名称为“售前服务”和“售后服务”，
+因此可观测链路中会显示 `invoke_agent 售前服务` 或
+`invoke_agent 售后服务`。为了保持代码接口稳定，Python 标识符、LangGraph
+节点名、工具名和内部路由值仍使用英文。
 
 ## 安装
 
@@ -77,7 +79,9 @@ loongsuite-instrument python app.py \
 
 启用 LangChain 和 LangGraph 埋点后，一次专业客服请求应包含路由 LLM、
 被选中的 Agent、ReAct Step、Tool/LLM 子节点以及最终审查 LLM；未选中的
-专业 Agent 不会执行。
+专业 Agent 不会执行。外层编排节点仍显示为 `presales_agent` 或
+`aftersales_agent`，其内部专业 Agent 分别显示为 `invoke_agent 售前服务` 或
+`invoke_agent 售后服务`。
 
 ## 培训讲解指南
 

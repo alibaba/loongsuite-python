@@ -24,7 +24,13 @@ from tools import (
     query_after_sales_policy,
     search_product_catalog,
 )
-from workflow import EcommerceSupportWorkflow, IntentDecision, select_route
+from workflow import (
+    AFTERSALES_AGENT_NAME,
+    PRESALES_AGENT_NAME,
+    EcommerceSupportWorkflow,
+    IntentDecision,
+    select_route,
+)
 
 
 class KeywordClassifier:
@@ -224,9 +230,9 @@ def test_presales_and_aftersales_use_different_agents() -> None:
 
     assert presales["route"] == "presales"
     assert aftersales["route"] == "aftersales"
-    assert calls == ["presales_agent", "aftersales_agent"]
-    assert "presales_agent_tool" in model.review_inputs[0]
-    assert "aftersales_agent_tool" in model.review_inputs[1]
+    assert calls == [PRESALES_AGENT_NAME, AFTERSALES_AGENT_NAME]
+    assert f"{PRESALES_AGENT_NAME}_tool" in model.review_inputs[0]
+    assert f"{AFTERSALES_AGENT_NAME}_tool" in model.review_inputs[1]
 
 
 @pytest.mark.parametrize(
@@ -281,10 +287,10 @@ def test_ambiguous_question_uses_clarification_without_a_specialist() -> None:
 
 def test_specialist_and_reviewer_fail_open() -> None:
     workflow, _, calls = make_workflow(
-        fail_review=True, fail_agent="presales_agent"
+        fail_review=True, fail_agent=PRESALES_AGENT_NAME
     )
     result = workflow.run("云步通勤鞋有货吗？")
-    assert calls == ["presales_agent"]
+    assert calls == [PRESALES_AGENT_NAME]
     assert result["route"] == "presales"
     assert result["final_response"].startswith("售前客服暂时不可用")
 

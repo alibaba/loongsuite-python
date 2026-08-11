@@ -13,6 +13,9 @@ from tools import AFTERSALES_TOOLS, PRESALES_TOOLS
 
 Route = Literal["presales", "aftersales", "clarify"]
 
+PRESALES_AGENT_NAME = "售前服务"
+AFTERSALES_AGENT_NAME = "售后服务"
+
 PRESALES_PROMPT = """你是虚构电商店铺的售前客服。
 只能使用提供的虚构商品目录、商品知识和库存工具。
 回答前至少调用一个工具；工具未提供的信息要明确说明不知道。
@@ -159,13 +162,13 @@ class EcommerceSupportWorkflow:
         )
         self.confidence_threshold = confidence_threshold
         self.presales_agent = agent_factory(
-            name="presales_agent",
+            name=PRESALES_AGENT_NAME,
             model=model,
             tools=PRESALES_TOOLS,
             prompt=PRESALES_PROMPT,
         )
         self.aftersales_agent = agent_factory(
-            name="aftersales_agent",
+            name=AFTERSALES_AGENT_NAME,
             model=model,
             tools=AFTERSALES_TOOLS,
             prompt=AFTERSALES_PROMPT,
