@@ -64,6 +64,8 @@ from opentelemetry.instrumentation.litellm._embedding_wrapper import (
     EmbeddingWrapper,
 )
 from opentelemetry.instrumentation.litellm._wrapper import (
+    RESPONSES,
+    TEXT_COMPLETION,
     AsyncCompletionWrapper,
     CompletionWrapper,
 )
@@ -134,6 +136,10 @@ class LiteLLMInstrumentor(BaseInstrumentor):
         functions_to_wrap = [
             "completion",
             "acompletion",
+            "text_completion",
+            "atext_completion",
+            "responses",
+            "aresponses",
             "embedding",
             "aembedding",
             "completion_with_retries",
@@ -158,6 +164,34 @@ class LiteLLMInstrumentor(BaseInstrumentor):
                 self._handler, self._original_functions["acompletion"]
             )
             litellm.acompletion = async_completion_wrapper
+
+        if "text_completion" in self._original_functions:
+            litellm.text_completion = CompletionWrapper(
+                self._handler,
+                self._original_functions["text_completion"],
+                kind=TEXT_COMPLETION,
+            )
+
+        if "atext_completion" in self._original_functions:
+            litellm.atext_completion = AsyncCompletionWrapper(
+                self._handler,
+                self._original_functions["atext_completion"],
+                kind=TEXT_COMPLETION,
+            )
+
+        if "responses" in self._original_functions:
+            litellm.responses = CompletionWrapper(
+                self._handler,
+                self._original_functions["responses"],
+                kind=RESPONSES,
+            )
+
+        if "aresponses" in self._original_functions:
+            litellm.aresponses = AsyncCompletionWrapper(
+                self._handler,
+                self._original_functions["aresponses"],
+                kind=RESPONSES,
+            )
 
         if "embedding" in self._original_functions:
             litellm.embedding = EmbeddingWrapper(

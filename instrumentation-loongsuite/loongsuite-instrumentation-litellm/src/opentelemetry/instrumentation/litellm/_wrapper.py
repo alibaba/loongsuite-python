@@ -60,23 +60,39 @@ class _CompletionKind:
 
 
 CHAT_COMPLETION = _CompletionKind(
-    normalize_kwargs=normalize_litellm_completion_kwargs,
-    create_invocation=create_llm_invocation_from_litellm,
-    apply_response=apply_litellm_llm_response_to_invocation,
+    normalize_kwargs=lambda *a, **k: normalize_litellm_completion_kwargs(
+        *a, **k
+    ),
+    create_invocation=lambda **k: create_llm_invocation_from_litellm(**k),
+    apply_response=lambda *a, **k: apply_litellm_llm_response_to_invocation(
+        *a, **k
+    ),
     supports_stream=True,
 )
 
 TEXT_COMPLETION = _CompletionKind(
-    normalize_kwargs=normalize_litellm_text_completion_kwargs,
-    create_invocation=create_llm_invocation_from_litellm_text_completion,
-    apply_response=apply_litellm_text_completion_response_to_invocation,
+    normalize_kwargs=lambda *a, **k: normalize_litellm_text_completion_kwargs(
+        *a, **k
+    ),
+    create_invocation=lambda **k: create_llm_invocation_from_litellm_text_completion(
+        **k
+    ),
+    apply_response=lambda *a, **k: apply_litellm_text_completion_response_to_invocation(
+        *a, **k
+    ),
     supports_stream=False,
 )
 
 RESPONSES = _CompletionKind(
-    normalize_kwargs=normalize_litellm_responses_kwargs,
-    create_invocation=create_llm_invocation_from_litellm_responses,
-    apply_response=apply_litellm_responses_response_to_invocation,
+    normalize_kwargs=lambda *a, **k: normalize_litellm_responses_kwargs(
+        *a, **k
+    ),
+    create_invocation=lambda **k: create_llm_invocation_from_litellm_responses(
+        **k
+    ),
+    apply_response=lambda *a, **k: apply_litellm_responses_response_to_invocation(
+        *a, **k
+    ),
     supports_stream=False,
 )
 
@@ -100,24 +116,30 @@ def _prepare_advice(
     original_func: Callable,
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
+    kind: _CompletionKind = CHAT_COMPLETION,
 ) -> _CompletionAdviceState:
-    """Prepare probe state without owning the application call."""
+    """Prepare probe state without owning the application call.
+
+    ``kind`` selects the request-shape / response-shape helpers for this
+    LiteLLM entry point (``completion`` vs ``text_completion`` vs
+    ``responses``). Stream negotiation only runs for kinds that support it.
+    """
     invocation = None
     added_stream_options = False
     try:
-        request_kwargs = normalize_litellm_completion_kwargs(
-            original_func, args, kwargs
+        request_kwargs = kind.normalize_kwargs(original_func, args, kwargs)
+        is_stream = bool(
+            kind.supports_stream and request_kwargs.get("stream", False)
         )
-        is_stream = request_kwargs.get("stream", False)
 
         if is_stream and "stream_options" not in request_kwargs:
             kwargs["stream_options"] = {"include_usage": True}
             request_kwargs["stream_options"] = kwargs["stream_options"]
             added_stream_options = True
 
-        invocation = create_llm_invocation_from_litellm(**request_kwargs)
+        invocation = kind.create_invocation(**request_kwargs)
         handler.start_llm(invocation)
-        return _CompletionAdviceState(invocation, is_stream)
+        return _CompletionAdviceState(invocation, is_stream, kind)
     except Exception:
         if added_stream_options:
             kwargs.pop("stream_options", None)
@@ -143,7 +165,7 @@ def _success_advice(
 ) -> None:
     """Map a non-streaming response and finalize its telemetry."""
     try:
-        apply_litellm_llm_response_to_invocation(state.invocation, response)
+        state.kind.apply_response(state.invocation, response)
         handler.stop_llm(state.invocation)
     except Exception:
         handler.abandon_llm(state.invocation)
@@ -181,7 +203,7 @@ def _stream_success_advice(
             state.invocation.output_messages = output_messages
 
         if last_chunk:
-            apply_litellm_llm_response_to_invocation(
+            state.kind.apply_response(
                 state.invocation,
                 last_chunk,
                 include_output_messages=False,
@@ -239,11 +261,23 @@ def _abandon_advice(handler: Any, state: _CompletionAdviceState) -> None:
 
 
 class CompletionWrapper:
-    """Wrapper for ``litellm.completion()``."""
+    """Wrapper for ``litellm.completion()`` and other non-async entry points.
 
-    def __init__(self, handler: Any, original_func: Callable):
+    ``kind`` selects the request/response shape; ``CHAT_COMPLETION`` (the
+    default) preserves the historical behaviour for ``litellm.completion``.
+    Non-stream kinds bypass the stream advice entirely so their responses are
+    always finalized through ``_success_advice``.
+    """
+
+    def __init__(
+        self,
+        handler: Any,
+        original_func: Callable,
+        kind: _CompletionKind = CHAT_COMPLETION,
+    ):
         self._handler = handler
         self.original_func = original_func
+        self._kind = kind
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if not _is_instrumentation_enabled() or context.get_value(
@@ -252,7 +286,7 @@ class CompletionWrapper:
             return self.original_func(*args, **kwargs)
 
         state = _prepare_advice(
-            self._handler, self.original_func, args, kwargs
+            self._handler, self.original_func, args, kwargs, self._kind
         )
 
         try:
@@ -287,11 +321,20 @@ class CompletionWrapper:
 
 
 class AsyncCompletionWrapper:
-    """Wrapper for ``litellm.acompletion()``."""
+    """Wrapper for ``litellm.acompletion()`` and other async entry points.
 
-    def __init__(self, handler: Any, original_func: Callable):
+    See :class:`CompletionWrapper` for ``kind`` semantics.
+    """
+
+    def __init__(
+        self,
+        handler: Any,
+        original_func: Callable,
+        kind: _CompletionKind = CHAT_COMPLETION,
+    ):
         self._handler = handler
         self.original_func = original_func
+        self._kind = kind
 
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
         if not _is_instrumentation_enabled() or context.get_value(
@@ -300,7 +343,7 @@ class AsyncCompletionWrapper:
             return await self.original_func(*args, **kwargs)
 
         state = _prepare_advice(
-            self._handler, self.original_func, args, kwargs
+            self._handler, self.original_func, args, kwargs, self._kind
         )
 
         try:
