@@ -26,9 +26,15 @@ from opentelemetry.instrumentation.litellm._stream_wrapper import (
 )
 from opentelemetry.instrumentation.litellm._utils import (
     apply_litellm_llm_response_to_invocation,
+    apply_litellm_responses_response_to_invocation,
+    apply_litellm_text_completion_response_to_invocation,
     create_llm_invocation_from_litellm,
+    create_llm_invocation_from_litellm_responses,
+    create_llm_invocation_from_litellm_text_completion,
     extract_finish_reasons_from_litellm_response,
     normalize_litellm_completion_kwargs,
+    normalize_litellm_responses_kwargs,
+    normalize_litellm_text_completion_kwargs,
 )
 from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.types import Error
@@ -37,10 +43,49 @@ from opentelemetry.util.genai.types import Error
 ENABLE_LITELLM_INSTRUMENTOR = "ENABLE_LITELLM_INSTRUMENTOR"
 
 
+@dataclass(frozen=True)
+class _CompletionKind:
+    """How one LiteLLM completion entry point maps onto GenAI telemetry.
+
+    The completion entry points share a request/response lifecycle but not
+    their payload shapes: ``text_completion`` takes a prompt and answers with
+    ``choices[].text``, while ``responses`` takes an input list and answers
+    with a flat ``output`` list plus its own usage field names.
+    """
+
+    normalize_kwargs: Callable[..., dict[str, Any]]
+    create_invocation: Callable[..., Any]
+    apply_response: Callable[..., None]
+    supports_stream: bool
+
+
+CHAT_COMPLETION = _CompletionKind(
+    normalize_kwargs=normalize_litellm_completion_kwargs,
+    create_invocation=create_llm_invocation_from_litellm,
+    apply_response=apply_litellm_llm_response_to_invocation,
+    supports_stream=True,
+)
+
+TEXT_COMPLETION = _CompletionKind(
+    normalize_kwargs=normalize_litellm_text_completion_kwargs,
+    create_invocation=create_llm_invocation_from_litellm_text_completion,
+    apply_response=apply_litellm_text_completion_response_to_invocation,
+    supports_stream=False,
+)
+
+RESPONSES = _CompletionKind(
+    normalize_kwargs=normalize_litellm_responses_kwargs,
+    create_invocation=create_llm_invocation_from_litellm_responses,
+    apply_response=apply_litellm_responses_response_to_invocation,
+    supports_stream=False,
+)
+
+
 @dataclass
 class _CompletionAdviceState:
     invocation: Any
     is_stream: bool
+    kind: _CompletionKind = CHAT_COMPLETION
 
 
 def _is_instrumentation_enabled() -> bool:

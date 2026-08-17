@@ -41,6 +41,8 @@ from opentelemetry.util.genai.types import (
 logger = logging.getLogger(__name__)
 
 _COMPLETION_POSITIONAL_PARAMETERS = ("model", "messages")
+_TEXT_COMPLETION_POSITIONAL_PARAMETERS = ("model", "prompt")
+_RESPONSES_POSITIONAL_PARAMETERS = ("model", "input")
 _EMBEDDING_POSITIONAL_PARAMETERS = ("model", "input")
 _BASE_URL_PROVIDER_MAP = (
     ("dashscope.aliyuncs.com", "dashscope"),
@@ -75,6 +77,28 @@ def normalize_litellm_completion_kwargs(
     """Return request kwargs with positional LiteLLM completion args included."""
     return _normalize_litellm_kwargs(
         original_func, args, kwargs, _COMPLETION_POSITIONAL_PARAMETERS
+    )
+
+
+def normalize_litellm_text_completion_kwargs(
+    original_func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Return request kwargs with positional text-completion args included."""
+    return _normalize_litellm_kwargs(
+        original_func, args, kwargs, _TEXT_COMPLETION_POSITIONAL_PARAMETERS
+    )
+
+
+def normalize_litellm_responses_kwargs(
+    original_func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    """Return request kwargs with positional Responses API args included."""
+    return _normalize_litellm_kwargs(
+        original_func, args, kwargs, _RESPONSES_POSITIONAL_PARAMETERS
     )
 
 
@@ -525,6 +549,15 @@ def create_llm_invocation_from_litellm(**kwargs):
     if system_instruction:
         invocation.system_instruction = system_instruction
 
+    _apply_request_parameters_to_invocation(invocation, kwargs)
+
+    return invocation
+
+
+def _apply_request_parameters_to_invocation(
+    invocation: LLMInvocation, kwargs: Mapping[str, Any]
+) -> None:
+    """Copy the request parameters shared by every LiteLLM entry point."""
     # Set optional request parameters
     if "temperature" in kwargs and kwargs["temperature"] is not None:
         invocation.temperature = kwargs["temperature"]
@@ -573,7 +606,281 @@ def create_llm_invocation_from_litellm(**kwargs):
         if tool_definitions:
             invocation.tool_definitions = tool_definitions
 
+
+def create_llm_invocation_from_litellm_text_completion(**kwargs):
+    """Create an LLMInvocation from ``litellm.text_completion`` parameters.
+
+    The prompt-completion API has no message structure, so the prompt becomes a
+    single user message.
+    """
+    model = kwargs.get("model", "unknown_model")
+    provider = resolve_litellm_provider(model, kwargs)
+
+    invocation = LLMInvocation(
+        request_model=parse_model_name(model),
+        provider=provider,
+        operation_name=GenAiOperationNameValues.TEXT_COMPLETION.value,
+        input_messages=_convert_litellm_prompt_to_genai_format(
+            kwargs.get("prompt")
+        ),
+    )
+    _apply_request_parameters_to_invocation(invocation, kwargs)
     return invocation
+
+
+def _convert_litellm_prompt_to_genai_format(prompt: Any) -> List:
+    """Convert a text-completion prompt into a single GenAI input message."""
+    if isinstance(prompt, str):
+        prompts = [prompt]
+    elif isinstance(prompt, (list, tuple)):
+        prompts = [item for item in prompt if isinstance(item, str)]
+    else:
+        return []
+
+    parts = [Text(content=item) for item in prompts if item]
+    if not parts:
+        return []
+    return [InputMessage(role="user", parts=parts)]
+
+
+def apply_litellm_text_completion_response_to_invocation(
+    invocation: LLMInvocation,
+    response: Any,
+    *,
+    include_output_messages: bool = True,
+) -> None:
+    """Populate an LLMInvocation from a ``litellm.text_completion`` response."""
+    if include_output_messages:
+        output_messages = extract_output_from_litellm_text_completion_response(
+            response
+        )
+        if output_messages:
+            invocation.output_messages = output_messages
+
+    _apply_usage_to_invocation(
+        invocation, get_litellm_value(response, "usage")
+    )
+    _apply_response_identity_to_invocation(invocation, response)
+
+    finish_reasons = extract_finish_reasons_from_litellm_response(response)
+    if finish_reasons:
+        invocation.finish_reasons = finish_reasons
+
+
+def extract_output_from_litellm_text_completion_response(
+    response: Any,
+) -> List:
+    """Extract output messages from a text-completion response."""
+    choices = get_litellm_value(response, "choices") or []
+    output_messages = []
+    for choice in choices:
+        text = get_litellm_value(choice, "text")
+        parts = [Text(content=text if isinstance(text, str) else "")]
+        output_messages.append(
+            OutputMessage(
+                role="assistant",
+                parts=parts,
+                finish_reason=get_litellm_value(choice, "finish_reason")
+                or "stop",
+            )
+        )
+    return output_messages
+
+
+def create_llm_invocation_from_litellm_responses(**kwargs):
+    """Create an LLMInvocation from ``litellm.responses`` parameters.
+
+    The Responses API is a conversational completion, so it is reported as a
+    ``chat`` operation; ``instructions`` carries the system instruction that the
+    chat API would carry as a ``system`` message.
+    """
+    model = kwargs.get("model", "unknown_model")
+    provider = resolve_litellm_provider(model, kwargs)
+
+    invocation = LLMInvocation(
+        request_model=parse_model_name(model),
+        provider=provider,
+        operation_name=GenAiOperationNameValues.CHAT.value,
+        input_messages=_convert_litellm_responses_input_to_genai_format(
+            kwargs.get("input")
+        ),
+    )
+
+    instructions = kwargs.get("instructions")
+    if isinstance(instructions, str) and instructions:
+        invocation.system_instruction = [Text(content=instructions)]
+
+    _apply_request_parameters_to_invocation(invocation, kwargs)
+    if (
+        "max_output_tokens" in kwargs
+        and kwargs["max_output_tokens"] is not None
+    ):
+        invocation.max_tokens = kwargs["max_output_tokens"]
+    return invocation
+
+
+def _convert_litellm_responses_input_to_genai_format(input_value: Any) -> List:
+    """Convert a Responses API ``input`` into GenAI input messages."""
+    if isinstance(input_value, str):
+        if not input_value:
+            return []
+        return [InputMessage(role="user", parts=[Text(content=input_value)])]
+    if not isinstance(input_value, (list, tuple)):
+        return []
+
+    input_messages = []
+    for item in input_value:
+        if not isinstance(item, Mapping):
+            continue
+        role = item.get("role", "user")
+        parts = [
+            Text(content=text)
+            for text in _extract_responses_content_text(item.get("content"))
+        ]
+        if not parts:
+            continue
+        input_messages.append(InputMessage(role=role, parts=parts))
+    return input_messages
+
+
+def _extract_responses_content_text(content: Any) -> list[str]:
+    """Extract text from Responses API content, which nests text in parts."""
+    if isinstance(content, str):
+        return [content] if content else []
+    if not isinstance(content, (list, tuple)):
+        return []
+
+    texts = []
+    for part in content:
+        if isinstance(part, str):
+            if part:
+                texts.append(part)
+            continue
+        if not isinstance(part, Mapping):
+            continue
+        text = part.get("text")
+        if isinstance(text, str) and text:
+            texts.append(text)
+    return texts
+
+
+def apply_litellm_responses_response_to_invocation(
+    invocation: LLMInvocation,
+    response: Any,
+    *,
+    include_output_messages: bool = True,
+) -> None:
+    """Populate an LLMInvocation from a ``litellm.responses`` response."""
+    if include_output_messages:
+        output_messages = extract_output_from_litellm_responses_response(
+            response
+        )
+        if output_messages:
+            invocation.output_messages = output_messages
+
+    _apply_responses_usage_to_invocation(
+        invocation, get_litellm_value(response, "usage")
+    )
+    _apply_response_identity_to_invocation(invocation, response)
+
+    finish_reason = _responses_finish_reason(response)
+    if finish_reason:
+        invocation.finish_reasons = [finish_reason]
+
+
+def extract_output_from_litellm_responses_response(response: Any) -> List:
+    """Extract output messages from a Responses API response.
+
+    ``output`` is a flat list of items: assistant messages, reasoning
+    summaries, and function calls.
+    """
+    output = get_litellm_value(response, "output") or []
+    if not isinstance(output, (list, tuple)):
+        return []
+
+    parts = []
+    for item in output:
+        item_type = get_litellm_value(item, "type")
+        if item_type == "function_call":
+            parts.append(
+                ToolCall(
+                    id=get_litellm_value(item, "call_id")
+                    or get_litellm_value(item, "id"),
+                    name=get_litellm_value(item, "name", ""),
+                    arguments=parse_tool_call_arguments(
+                        get_litellm_value(item, "arguments", "")
+                    ),
+                )
+            )
+            continue
+        if item_type == "reasoning":
+            for text in _extract_responses_content_text(
+                get_litellm_value(item, "summary")
+            ):
+                parts.append(Reasoning(content=text))
+            continue
+        for text in _extract_responses_content_text(
+            get_litellm_value(item, "content")
+        ):
+            parts.append(Text(content=text))
+
+    if not parts:
+        return []
+    return [
+        OutputMessage(
+            role="assistant",
+            parts=parts,
+            finish_reason=_responses_finish_reason(response) or "stop",
+        )
+    ]
+
+
+def _apply_responses_usage_to_invocation(
+    invocation: LLMInvocation, usage: Any
+) -> None:
+    """Apply Responses API usage, which names its token fields differently."""
+    if not usage:
+        return
+
+    input_tokens = get_litellm_value(usage, "input_tokens")
+    output_tokens = get_litellm_value(usage, "output_tokens")
+    if input_tokens is not None:
+        invocation.input_tokens = input_tokens
+    if output_tokens is not None:
+        invocation.output_tokens = output_tokens
+
+    input_details = get_litellm_value(usage, "input_tokens_details")
+    cached_tokens = get_litellm_value(input_details, "cached_tokens")
+    if cached_tokens is not None:
+        invocation.usage_cache_read_input_tokens = cached_tokens
+
+
+def _apply_response_identity_to_invocation(
+    invocation: LLMInvocation, response: Any
+) -> None:
+    response_id = get_litellm_value(response, "id")
+    if response_id:
+        invocation.response_id = response_id
+
+    response_model = get_litellm_value(response, "model")
+    if response_model:
+        invocation.response_model_name = response_model
+
+
+_RESPONSES_STATUS_FINISH_REASONS = {
+    "completed": "stop",
+    "incomplete": "length",
+    "failed": "error",
+    "cancelled": "error",
+}
+
+
+def _responses_finish_reason(response: Any) -> Optional[str]:
+    """Map a Responses API status onto a GenAI finish reason."""
+    status = get_litellm_value(response, "status")
+    if not isinstance(status, str) or not status:
+        return None
+    return _RESPONSES_STATUS_FINISH_REASONS.get(status, status)
 
 
 def create_embedding_invocation_from_litellm(**kwargs):
