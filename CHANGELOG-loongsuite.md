@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add Strands Agents instrumentation using the shared LoongSuite GenAI utility
   lifecycle for agent, ReAct step, model, and tool spans.
+- Add DSPy instrumentation for the framework layer of a GenAI trace (entry,
+  chain, agent, ReAct step, tool, and retriever spans); LLM spans and token
+  usage come from `loongsuite-instrumentation-litellm`, which DSPy routes every
+  built-in model call through.
 
 ## Version 0.8.0 (2026-07-31)
 
