@@ -7,6 +7,10 @@
 ``MultimodalProcessingMixin``），而不是挂在某个框架插桩里，所以纯手动埋点
 同样会触发上传。
 
+本示例的 input 与 output 两侧都带图片 part，用来确认两侧都会被上传。处理哪一侧
+由 ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE`` 决定（``input`` /
+``output`` / ``both``），本示例需要 ``both``。
+
 与「挂载 ARMS 探针」场景的区别：这里进程内没有探针，因此
 - TracerProvider 需要本文件自己初始化；
 - SLS project、presign endpoint、LicenseKey 都无处回落，必须由环境变量给出，
@@ -40,6 +44,11 @@ if os.getenv("MULTIMODAL_DEBUG_LOG") == "1":
 from opentelemetry import trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+
+# 私有模块，仅示例用来复核「配置是否真的开启了 input/output 两侧处理」。
+from opentelemetry.util.genai._multimodal_upload.config import (
+    get_multimodal_config_snapshot,
+)
 from opentelemetry.util.genai.extended_handler import (
     get_extended_telemetry_handler,
 )
@@ -64,7 +73,7 @@ ATTR_LOG = os.path.join(
 REQUIRED_ENV = (
     (
         "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE",
-        "需为 both / span_only 之类的非 none 值，否则不会走上传",
+        "合法值只有 none/input/output/both；本示例两侧都带图，需为 both",
     ),
     (
         "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER",
@@ -125,6 +134,21 @@ def check_env() -> bool:
             file=sys.stderr,
         )
         ok = False
+
+    # upload_mode 决定处理哪一侧：只有 input/both 会处理 input，只有 output/both
+    # 会处理 output，非法值（例如误写成 span_only）会静默落回 none。这里直接读库
+    # 里的 snapshot，避免自己解析取值。
+    if os.getenv("OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE"):
+        snapshot = get_multimodal_config_snapshot()
+        if not (snapshot.process_input and snapshot.process_output):
+            print(
+                f"[demo] 当前 upload_mode={snapshot.upload_mode!r}："
+                f"process_input={snapshot.process_input}、"
+                f"process_output={snapshot.process_output}；"
+                "本示例两侧都带图，需设为 both",
+                file=sys.stderr,
+            )
+            ok = False
     return ok
 
 
@@ -199,15 +223,32 @@ def main() -> int:
 
     # handler 是单例：首次获取时就绑定 TracerProvider。
     handler = get_extended_telemetry_handler(tracer_provider=provider)
-    png = make_png()
-    print(f"[demo] 待上传 PNG: {len(png)} bytes")
+    # 两侧各用一张颜色不同的图，便于确认这是两次独立上传（两个不同对象）。
+    input_png = make_png(rgb=(40, 120, 220))
+    output_png = make_png(rgb=(220, 80, 40))
+    print(
+        f"[demo] 待上传 PNG: input {len(input_png)} bytes、"
+        f"output {len(output_png)} bytes"
+    )
 
-    # 1. 构造一次 LLM 调用，输入为纯文本
+    # 1. 构造一次 LLM 调用：输入是「文字 + 图片」，模拟带图提问。
+    #    一条 message 里可以混排多个 part，只有多模态 part 会被替换成 uri，
+    #    Text 保持原样。
     invocation = LLMInvocation(
         request_model="manual-sdk-demo-model",
         provider="manual-demo",
         input_messages=[
-            InputMessage(role="user", parts=[Text(content="画一张纯色方块图")])
+            InputMessage(
+                role="user",
+                parts=[
+                    Text(content="这张图是什么颜色？再画一张不同颜色的"),
+                    Blob(
+                        mime_type="image/png",
+                        modality="image",
+                        content=input_png,
+                    ),
+                ],
+            )
         ],
     )
 
@@ -221,7 +262,13 @@ def main() -> int:
     invocation.output_messages = [
         OutputMessage(
             role="assistant",
-            parts=[Blob(mime_type="image/png", modality="image", content=png)],
+            parts=[
+                Blob(
+                    mime_type="image/png",
+                    modality="image",
+                    content=output_png,
+                )
+            ],
             finish_reason="stop",
         )
     ]
@@ -242,7 +289,10 @@ def main() -> int:
     provider.force_flush(10_000)
 
     print(f"[demo] span 属性已写入 {ATTR_LOG}")
-    print("[demo] 检查其中 gen_ai.output.messages 的 uri 是否为 sls:// 开头")
+    print(
+        "[demo] 检查其中 gen_ai.input.messages 与 gen_ai.output.messages 的 uri "
+        "是否都为 sls:// 开头（两侧应是两个不同对象）"
+    )
     return 0
 
 

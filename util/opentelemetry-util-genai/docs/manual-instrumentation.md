@@ -154,7 +154,11 @@ export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
 多模态链路**降级为关闭**（属性里保留原始 base64/URL，不会产生不可访问的地址）。
 
 ```bash
-# 启用多模态 + 选择 presign 通道
+# 启用多模态 + 选择 presign 通道。
+# UPLOAD_MODE 决定处理哪一侧，合法值只有 none / input / output / both，
+# 默认 none；非法值只记一条 warning 后落回 none，不要和第 3 节内容采集用的
+# SPAN_ONLY 之类混写。input 与 output 两侧的多模态 part 都会被上传，想要两侧
+# 都替换就用 both。
 export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
 export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER=presign
 export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER=presign
@@ -248,6 +252,7 @@ python examples/multimodal_presign_manual.py
 | `Presign request rejected (status=404)`，响应体 `LogStoreNotExist` | logstore 在该 project 下不存在（常见于沿用了缺省值 `logstore-multimodal`） | 显式配置 `APSARA_APM_COLLECTOR_MULTIMODAL_SLS_LOGSTORE` 为真实存在的 logstore |
 | `status=401/403` | LicenseKey 或 workspace 与 project 不属于同一租户 | 核对三者是否同一实例 |
 | 上传链路整体没启动 | project、endpoint 或 LicenseKey 缺失导致降级 | 开 DEBUG 日志看降级原因；或参考示例的 `check_env()` 做启动自检 |
+| 只有一侧（input 或 output）被替换成 `sls://` | `upload_mode` 没覆盖那一侧 | 设为 `both`；`input`/`output` 只处理对应单侧 |
 | span 属性仍是 base64 | 上传未在 span end 前完成 | 检查是否在 `shutdown()` / atexit drain 之前就强杀了进程 |
 
 ## 7. 已知限制
