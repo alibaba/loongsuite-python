@@ -441,6 +441,52 @@ Framework 探针若已声明对本包的依赖，会随探针一并安装；单�
 
 **可选上传记录**：``FsUploader`` 终态成功/失败时会调用全局 ``MultimodalUsageRecorder``（默认 no-op）。需要时可通过 ``set_multimodal_usage_recorder()`` 注册自定义实现。
 
+预授权 OSS 模式（presign）
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+多模态数据落在服务端预授权的 OSS Bucket 里时，应用本地不持有任何 OSS AK/SK：每个对象上传前先用 LicenseKey 申请一个短时有效的预签名 URL，再直接把数据 ``PUT`` 到该 URL。
+
+Bucket 由服务端持有和决定，本地不需要（也无法）指定，因此对象地址不含 bucket，与 ``arms`` 模式同构：
+
+::
+
+    sls://{project}/{logstore}[/{prefix}]/{objectName}
+
+这个地址在上传发起前即可本地确定，所以 Span 属性同步写出、上传保持异步，两者不会不一致。实际存储位置为 ``{bucket}/{project}/{logstore}[/{prefix}]/{objectName}``，仅多一个服务端自持的 bucket 前缀。
+
+- hook 名：``presign``（亦接受 ``oss-presign`` / ``oss_presign`` / ``presigned-oss`` / ``presigned_oss`` 别名）。
+- 申请链路：``POST {endpoint}/apm/meta/api/v1/multimodal/upload/presign``，请求头 ``x-arms-license-key``、``x-cms-workspace``，请求体 ``{"project", "logstore", "objectName"}``。响应中的上传 URL 支持 ``uploadUrl`` / ``signedUrl`` / ``url`` 等字段名，可被 ``data`` / ``result`` 包裹，也允许响应体直接是一个裸 URL 文本；``method`` 缺省为 ``PUT``。
+- 上传阶段不自注入 ``Content-Type``：预签名 URL 的签名可能已覆盖该 header，客户端再加会导致 OSS 返回 403 SignatureDoesNotMatch。
+
+- 环境变量：
+
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY``：鉴权用的 LicenseKey，缺省回落到 ``ARMS_LICENSE_KEY``。**必填**，取不到时整条多模态链路降级为关闭。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE``：对象归属的 CMS workspace，缺省回落到 ``ARMS_WORKSPACE``；留空时由服务端按 LicenseKey 推导。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT``：申请预签名 URL 的 endpoint，可填 host 或完整 base URL。挂载 ARMS 探针时可留空以复用其 OneEndpoint 探活结果，独立使用时\ **需显式配置**\ 。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT``：申请与上传超时（秒，默认 ``30``）。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX``：可选；给本应用所有对象加统一路径前缀，如 ``genai/my-app``。首尾 ``/`` 会被去掉，非法值（空段、``.``、``..``）记 warning 并视为未配置。
+  - ``APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT`` / ``_SLS_LOGSTORE``：对象地址与请求体里的 project / logstore。project 取不到时本模式整体降级；logstore 缺省为 ``logstore-multimodal``，该缺省值同时作用于 URI 与请求体，二者不会分叉。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET`` 在本模式下\ **已废弃且被忽略**\ ，仅对 ``oss`` hook 仍有意义。
+
+出于安全考虑，LicenseKey、workspace 与 endpoint 只从环境变量读取，\ **不允许**\ 通过运行时动态配置改写。
+
+::
+
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER=presign
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER=presign
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY='<your-license-key>'
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT=cn-hangzhou.log.aliyuncs.com
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX=genai/my-app
+    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT=proj-xtrace-xxx-cn-hangzhou
+    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_LOGSTORE=multimodal
+
+SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploader 与 pre-uploader 同时返回 ``None``，多模态链路整体降级为关闭：消息中的多模态内容保持原样，不会被替换成无法访问的 ``sls://`` URI。这样避开了“属性看起来正常、实际指向不存在的对象”这种更难排查的状态。
+
+反过来也要注意：地址在上传发起前就已写入属性，**属性被替换不代表上传成功**。确认是否真的落地要看上传链路日志里 presign 返回 200 且后续 OSS ``PUT ... 200 OK``。
+
+纯 SDK（手动埋点）方式下没有探针注入身份，presign 所需的 project、endpoint 与 LicenseKey 都必须显式配置。完整说明与可运行示例见 ``docs/manual-instrumentation.md`` 与 ``examples/multimodal_presign_manual.py``。
+
 ------------------------------------------------------------------------
 5. 补充说明
 ------------------------------------------------------------------------
