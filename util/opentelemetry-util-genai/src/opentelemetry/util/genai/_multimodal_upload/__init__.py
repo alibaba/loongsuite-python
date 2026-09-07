@@ -23,7 +23,9 @@ from opentelemetry.util.genai._multimodal_upload._base import (
     UploadItem,
 )
 from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
+    PRESIGN_HOOK_NAME,
     get_multimodal_config_snapshot,
+    normalize_oss_bucket,
     update_multimodal_runtime_config,
 )
 from opentelemetry.util.genai._multimodal_upload.multimodal_upload_hook import (  # pylint: disable=no-name-in-module
@@ -58,6 +60,20 @@ try:
 except ImportError:
     MultimodalPreUploader = None
 
+try:
+    from opentelemetry.util.genai._multimodal_upload.presign_uploader import (
+        PresignUploader,
+    )
+except ImportError:
+    PresignUploader = None
+
+try:
+    from opentelemetry.util.genai._multimodal_upload.presign_client import (
+        MultimodalPresignClient,
+    )
+except ImportError:
+    MultimodalPresignClient = None
+
 __all__ = [
     "UploadItem",
     "PreUploadItem",
@@ -76,6 +92,8 @@ __all__ = [
     "get_or_rebuild_uploader_pair",
     "get_multimodal_config_snapshot",
     "update_multimodal_runtime_config",
+    "normalize_oss_bucket",
+    "PRESIGN_HOOK_NAME",
     "get_uploader",
     "get_pre_uploader",
 ]
@@ -84,3 +102,7 @@ if FsUploader is not None:
     __all__.append("FsUploader")
 if MultimodalPreUploader is not None:
     __all__.append("MultimodalPreUploader")
+if PresignUploader is not None:
+    __all__.append("PresignUploader")
+if MultimodalPresignClient is not None:
+    __all__.append("MultimodalPresignClient")

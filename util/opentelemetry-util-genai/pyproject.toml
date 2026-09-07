@@ -42,9 +42,11 @@ upload = "opentelemetry.util.genai._upload:upload_completion_hook"
 
 [project.entry-points.opentelemetry_genai_multimodal_uploader]
 fs = "opentelemetry.util.genai._multimodal_upload.fs_uploader:fs_uploader_hook"
+presign = "opentelemetry.util.genai._multimodal_upload.presign_uploader:presign_uploader_hook"
 
 [project.entry-points.opentelemetry_genai_multimodal_pre_uploader]
 fs = "opentelemetry.util.genai._multimodal_upload.pre_uploader:fs_pre_uploader_hook"
+presign = "opentelemetry.util.genai._multimodal_upload.presign_uploader:presign_pre_uploader_hook"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0.0"]

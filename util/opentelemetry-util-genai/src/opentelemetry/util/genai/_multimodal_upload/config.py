@@ -27,7 +27,12 @@ from opentelemetry.util.genai.extended_environment_variables import (  # pylint:
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED,
+    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET,
+    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER,
+    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT,
+    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY,
+    OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER,
@@ -36,7 +41,15 @@ from opentelemetry.util.genai.extended_environment_variables import (  # pylint:
 _logger = logging.getLogger(__name__)
 
 _VALID_UPLOAD_MODES = frozenset({"none", "input", "output", "both"})
-_VALID_HOOKS = frozenset({"arms", "fs"})
+_VALID_HOOKS = frozenset({"arms", "fs", "oss", "presign"})
+PRESIGN_HOOK_NAME = "presign"
+# Console/ConfigServer aliases for the pre-authorized OSS mode.
+_HOOK_NAME_ALIASES = {
+    "oss-presign": PRESIGN_HOOK_NAME,
+    "oss_presign": PRESIGN_HOOK_NAME,
+    "presigned-oss": PRESIGN_HOOK_NAME,
+    "presigned_oss": PRESIGN_HOOK_NAME,
+}
 DEFAULT_SLS_LOGSTORE = "logstore-multimodal"
 DEFAULT_MULTIMODAL_UPLOADER_HOOK = "fs"
 DEFAULT_MULTIMODAL_PRE_UPLOADER_HOOK = "fs"
@@ -54,6 +67,13 @@ _APSARA_SLS_ACCESS_KEY_SECRET_ENV = (
 )
 _APSARA_SLS_STS_TOKEN_ENV = "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_STS_TOKEN"
 
+# Identity authenticating presign requests. The dedicated multimodal
+# variables take precedence so an application can upload without running
+# under an ARMS agent; the ARMS_* ones remain as a fallback so a
+# co-located agent needs no extra configuration.
+_ARMS_LICENSE_KEY_ENV = "ARMS_LICENSE_KEY"
+_ARMS_WORKSPACE_ENV = "ARMS_WORKSPACE"
+
 STRATEGY_FIELDS = frozenset(
     {
         "upload_mode",
@@ -70,6 +90,8 @@ UPLOADER_GENERATION_FIELDS = frozenset(
         "pre_uploader_hook_name",
         "sls_project",
         "sls_logstore",
+        "oss_bucket",
+        "oss_path_prefix",
     }
 )
 
@@ -82,6 +104,9 @@ _READ_ONLY_RUNTIME_FIELDS = frozenset(
         "sls_access_key_id",
         "sls_access_key_secret",
         "sls_sts_token",
+        "presign_endpoint",
+        "presign_license_key",
+        "presign_workspace",
     }
 )
 
@@ -102,6 +127,11 @@ class MultimodalConfigSnapshot:
     sls_access_key_id: Optional[str]
     sls_access_key_secret: Optional[str]
     sls_sts_token: Optional[str]
+    oss_bucket: Optional[str] = None
+    oss_path_prefix: Optional[str] = None
+    presign_endpoint: Optional[str] = None
+    presign_license_key: Optional[str] = None
+    presign_workspace: Optional[str] = None
     version: int = 0
     strategy_version: int = 0
     uploader_generation: int = 0
@@ -117,11 +147,13 @@ class MultimodalConfigSnapshot:
     @property
     def effective_storage_base_path(self) -> Optional[str]:
         if self.uploader_hook_name == "arms":
-            project = self.sls_project
-            if not project:
-                return None
-            logstore = self.sls_logstore or DEFAULT_SLS_LOGSTORE
-            return f"sls://{project}/{logstore}"
+            return format_sls_base_path(self.sls_project, self.sls_logstore)
+        if self.uploader_hook_name == PRESIGN_HOOK_NAME:
+            return format_sls_base_path(
+                self.sls_project,
+                self.sls_logstore,
+                self.oss_path_prefix,
+            )
         return self.storage_base_path
 
 
@@ -159,10 +191,87 @@ def normalize_multimodal_hook_name(value: Any) -> Optional[str]:
     if value is None:
         return None
     hook_name = str(value).strip().lower()
+    hook_name = _HOOK_NAME_ALIASES.get(hook_name, hook_name)
     if hook_name not in _VALID_HOOKS:
         _logger.warning("Unsupported multimodal hook name: %r", value)
         return None
     return hook_name
+
+
+def normalize_oss_bucket(value: Any) -> Optional[str]:
+    """Return ``bucket`` or ``bucket/prefix`` from a bucket name or oss:// URL."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if "://" in text:
+        scheme, _, remainder = text.partition("://")
+        if scheme.lower() != "oss":
+            _logger.warning(
+                "Multimodal OSS bucket must be a name or oss:// URL: %r", value
+            )
+            return None
+        text = remainder
+    text = text.strip("/")
+    if not text:
+        return None
+    if any(part in ("", ".", "..") for part in text.split("/")):
+        _logger.warning(
+            "Multimodal OSS bucket must not contain empty or dot segments: %r",
+            value,
+        )
+        return None
+    return text
+
+
+def normalize_oss_path_prefix(value: Any) -> Optional[str]:
+    """Return a clean ``a/b`` object path prefix, or None when unusable."""
+    if value is None:
+        return None
+    text = str(value).strip().strip("/")
+    if not text:
+        return None
+    if any(part in ("", ".", "..") for part in text.split("/")):
+        _logger.warning(
+            "Multimodal OSS path prefix must not contain empty or dot "
+            "segments: %r",
+            value,
+        )
+        return None
+    return text
+
+
+def format_sls_base_path(
+    project: Optional[str],
+    logstore: Optional[str],
+    prefix: Optional[str] = None,
+) -> Optional[str]:
+    """Return the ``sls://{project}/{logstore}[/{prefix}]`` base path.
+
+    Both the ARMS SLS uploader and the pre-authorized OSS uploader address
+    objects this way: the backing bucket belongs to the server, so only
+    project, logstore and object name identify an object. Returns None when no
+    project is known, since the address would then be ambiguous.
+    """
+    project_name = (project or "").strip().strip("/")
+    if not project_name:
+        return None
+    store = (logstore or "").strip().strip("/") or DEFAULT_SLS_LOGSTORE
+    base_path = f"sls://{project_name}/{store}"
+    normalized_prefix = normalize_oss_path_prefix(prefix)
+    if normalized_prefix:
+        return f"{base_path}/{normalized_prefix}"
+    return base_path
+
+
+def _first_env(*names: str) -> Optional[str]:
+    """Return the first non-empty value among ``names``."""
+    for name in names:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return None
 
 
 def _normalize_allowed_root_paths(
@@ -243,6 +352,24 @@ def _snapshot_from_env(*, version: int = 0) -> MultimodalConfigSnapshot:
         sls_access_key_secret=os.getenv(_APSARA_SLS_ACCESS_KEY_SECRET_ENV)
         or None,
         sls_sts_token=os.getenv(_APSARA_SLS_STS_TOKEN_ENV) or None,
+        oss_bucket=normalize_oss_bucket(
+            os.getenv(OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET)
+        ),
+        oss_path_prefix=normalize_oss_path_prefix(
+            os.getenv(OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX)
+        ),
+        presign_endpoint=os.getenv(
+            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT
+        )
+        or None,
+        presign_license_key=_first_env(
+            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY,
+            _ARMS_LICENSE_KEY_ENV,
+        ),
+        presign_workspace=_first_env(
+            OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE,
+            _ARMS_WORKSPACE_ENV,
+        ),
         version=version,
         strategy_version=0,
         uploader_generation=0,
@@ -275,6 +402,8 @@ def _normalize_and_validate(
         "sls_access_key_id": old.sls_access_key_id,
         "sls_access_key_secret": old.sls_access_key_secret,
         "sls_sts_token": old.sls_sts_token,
+        "oss_bucket": old.oss_bucket,
+        "oss_path_prefix": old.oss_path_prefix,
     }
 
     for key, value in fields.items():
@@ -299,6 +428,10 @@ def _normalize_and_validate(
             normalized_hook = normalize_multimodal_hook_name(value)
             if normalized_hook is not None:
                 merged[key] = normalized_hook
+        elif key == "oss_bucket":
+            merged[key] = normalize_oss_bucket(value)
+        elif key == "oss_path_prefix":
+            merged[key] = normalize_oss_path_prefix(value)
         elif key in (
             "storage_base_path",
             "sls_project",
@@ -321,6 +454,11 @@ def _normalize_and_validate(
         sls_access_key_id=merged["sls_access_key_id"],
         sls_access_key_secret=merged["sls_access_key_secret"],
         sls_sts_token=merged["sls_sts_token"],
+        oss_bucket=merged["oss_bucket"],
+        oss_path_prefix=merged["oss_path_prefix"],
+        presign_endpoint=old.presign_endpoint,
+        presign_license_key=old.presign_license_key,
+        presign_workspace=old.presign_workspace,
         version=old.version,
         strategy_version=old.strategy_version,
         uploader_generation=old.uploader_generation,
