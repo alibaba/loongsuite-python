@@ -18,10 +18,12 @@ Chinese customer question
 ```
 
 The router, specialist prompts, synthetic data, tool results, CLI, and customer
-responses use Simplified Chinese. Stable Python identifiers and graph node names
-remain in English. The two specialist branches use separate prompts and tools.
-All products, orders, policies, and tool results are fictional fixtures in
-`tools.py`.
+responses use Simplified Chinese. The specialist Agent display names are
+`售前服务` and `售后服务`, so their observable spans are named
+`invoke_agent 售前服务` and `invoke_agent 售后服务`. Stable Python identifiers,
+graph node names, tool names, and route values remain in English. The two
+specialist branches use separate prompts and tools. All products, orders,
+policies, and tool results are fictional fixtures in `tools.py`.
 
 ## Install
 
@@ -82,6 +84,8 @@ For a detailed scenario walkthrough and a ready-to-use training script, see
 With LangChain and LangGraph instrumentation enabled, a specialist request is
 expected to include the router LLM, the selected Agent, ReAct Step, Tool/LLM
 children, and the final reviewer LLM. Only the chosen specialist branch runs.
+The outer graph nodes remain `presales_agent` and `aftersales_agent`, while the
+inner Agent spans use the Chinese display names above.
 
 ## Test
 
