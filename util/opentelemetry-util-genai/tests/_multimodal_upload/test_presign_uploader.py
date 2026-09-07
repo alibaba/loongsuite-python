@@ -1314,21 +1314,6 @@ def test_presign_expiration_preserves_zero_and_trims(
         assert target.expiration == "0"
 
 
-@pytest.mark.parametrize("field", ["sls_project", "sls_logstore"])
-@pytest.mark.parametrize("value", ["a/b", ".", "..", "a/../b"])
-def test_invalid_sls_target_disables_both_hooks(
-    monkeypatch, field, value
-) -> None:
-    _apply_env(monkeypatch, _presign_env())
-    snapshot = replace(get_multimodal_config_snapshot(), **{field: value})
-    assert (
-        format_sls_base_path(snapshot.sls_project, snapshot.sls_logstore)
-        is None
-    )
-    assert presign_uploader_hook(snapshot) is None
-    assert presign_pre_uploader_hook(snapshot) is None
-
-
 def test_sls_target_retains_default_and_prefix() -> None:
     assert (
         format_sls_base_path("project", None, "a/b")

@@ -691,7 +691,7 @@ def _resolve_sls_base_path(snapshot: Any) -> str:
     )
     if not base_path:
         raise PresignUploadConfigError(
-            "Pre-authorized OSS mode requires a valid SLS project and logstore; set "
+            "Pre-authorized OSS mode requires an SLS project, set "
             "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT or run with an ARMS "
             "agent that provides one"
         )
