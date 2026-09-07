@@ -36,6 +36,7 @@ from agentscope.middleware import MiddlewareBase
 from agentscope.model import ChatModelBase, ChatResponse
 from agentscope.tool import ToolResponse
 
+from opentelemetry import baggage
 from opentelemetry import context as otel_context
 from opentelemetry.context import Context, get_current
 from opentelemetry.util.genai import hook_advice
@@ -208,6 +209,10 @@ def _start_agent(
     try:
         handler.start_invoke_agent(invocation)
         agent_context = get_current()
+        if invocation.conversation_id:
+            agent_context = baggage.set_baggage(
+                "gen_ai.session.id", invocation.conversation_id, agent_context
+            )
     except Exception:
         _abandon_invocation(invocation)
         raise
@@ -251,17 +256,16 @@ def _finish_agent(
     state.finalized = True
 
     invocation = state.invocation
-    if state.last_msg is not None:
-        invocation.output_messages = [_message_to_output(state.last_msg)]
-        if state.last_msg.usage is not None:
-            invocation.input_tokens = state.last_msg.usage.input_tokens
-            invocation.output_tokens = state.last_msg.usage.output_tokens
-
     token = None
     span = invocation.span
     try:
         token = otel_context.attach(state.context)
         invocation.context_token = token
+        if state.last_msg is not None:
+            invocation.output_messages = [_message_to_output(state.last_msg)]
+            if state.last_msg.usage is not None:
+                invocation.input_tokens = state.last_msg.usage.input_tokens
+                invocation.output_tokens = state.last_msg.usage.output_tokens
         if error is None or isinstance(error, GeneratorExit):
             state.handler.stop_invoke_agent(invocation)
         else:
@@ -293,6 +297,7 @@ def _start_react(
         )
         + 1
     )
+    _apply_identity(react_invocation, context=context)
 
     try:
         handler.start_react_step(react_invocation, context=context)
@@ -347,6 +352,7 @@ def _create_tool_invocation(
         tool_call_arguments=tool_call_arguments,
         provider="agentscope",
     )
+    _apply_identity(tool_invocation)
     _apply_skill_metadata(
         tool_invocation,
         agent,
@@ -633,6 +639,10 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return
 
         invocation = _create_agent_invocation(agent, input_kwargs)
+        if invocation is None:
+            async for item in next_handler(**input_kwargs):
+                yield item
+            return
         state = _start_agent(handler, invocation)
         try:
             business_stream = next_handler(**input_kwargs)
@@ -778,6 +788,8 @@ class AgentScopeV2Middleware(MiddlewareBase):
             return await next_handler(**input_kwargs)
 
         invocation = _create_llm_invocation(model, input_kwargs)
+        if invocation is None:
+            return await next_handler(**input_kwargs)
         state = _start_llm(handler, invocation, get_current())
         try:
             result = await next_handler(**input_kwargs)
@@ -909,6 +921,25 @@ class AgentScopeV2Middleware(MiddlewareBase):
                 _finish_acting(state)
 
 
+def _apply_identity(
+    invocation: Any, context: Context | None = None
+) -> str | None:
+    """Prefer the Entry's business identity over framework-local state IDs.
+
+    Use ordinary W3C baggage, as the v1 adapter does. Robin's additional
+    traffic-coloring prefix is intentionally not part of the OSS contract.
+    """
+    for key in ("gen_ai.session.id", "gen_ai.user.id"):
+        value = baggage.get_baggage(key, context=context)
+        if isinstance(value, str) and value.strip():
+            invocation.attributes[key] = value
+    session_id = invocation.attributes.get("gen_ai.session.id")
+    if session_id:
+        invocation.attributes["gen_ai.conversation.id"] = session_id
+    return session_id
+
+
+@hook_advice("agentscope", "create_agent_invocation")
 def _create_agent_invocation(
     agent: Agent,
     input_kwargs: dict[str, Any],
@@ -917,7 +948,7 @@ def _create_agent_invocation(
     request_model = getattr(model, "model", None)
     provider = _get_provider_name(model)
     inputs = input_kwargs.get("inputs")
-    return InvokeAgentInvocation(
+    invocation = InvokeAgentInvocation(
         provider=provider,
         agent_name=getattr(agent, "name", "unknown_agent"),
         agent_id=getattr(getattr(agent, "state", None), "session_id", None),
@@ -930,8 +961,13 @@ def _create_agent_invocation(
             Text(content=getattr(agent, "_system_prompt", ""))
         ],
     )
+    session_id = _apply_identity(invocation)
+    if session_id:
+        invocation.conversation_id = session_id
+    return invocation
 
 
+@hook_advice("agentscope", "create_llm_invocation")
 def _create_llm_invocation(
     model: ChatModelBase,
     input_kwargs: dict[str, Any],
@@ -939,9 +975,17 @@ def _create_llm_invocation(
     invocation = LLMInvocation(
         request_model=getattr(model, "model", None),
         provider=_get_provider_name(model),
-        input_messages=_messages_to_inputs(input_kwargs.get("messages")),
+        input_messages=_messages_to_inputs(
+            input_kwargs.get("messages"),
+            include_reasoning=getattr(
+                getattr(model, "formatter", None),
+                "supports_thinking_input",
+                True,
+            ),
+        ),
         tool_definitions=_tool_definitions(input_kwargs.get("tools")),
     )
+    _apply_identity(invocation)
     parameters = getattr(model, "parameters", None)
     for source in (parameters, input_kwargs):
         _set_if_present(invocation, "temperature", source)
@@ -964,26 +1008,49 @@ def _finish_llm_invocation(
         invocation.output_tokens = getattr(usage, "output_tokens", None)
 
 
-def _messages_to_inputs(value: Any) -> list[InputMessage]:
+def _messages_to_inputs(
+    value: Any, *, include_reasoning: bool = True
+) -> list[InputMessage]:
     if value is None:
         return []
     if isinstance(value, Msg):
-        return [_message_to_input(value)]
-    if isinstance(value, list):
-        return [
-            _message_to_input(item) for item in value if isinstance(item, Msg)
-        ]
-    return []
-
-
-def _message_to_input(msg: Msg) -> InputMessage:
-    return InputMessage(role=msg.role, parts=_blocks_to_parts(msg.content))
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    messages = []
+    for msg in value:
+        if not isinstance(msg, Msg):
+            continue
+        pending = []
+        # AgentScope v2 keeps multiple ReAct rounds in one assistant Msg.
+        # Emit tool results as separate messages, preserving call/result order
+        # without modifying the framework's persisted conversation.
+        for part in _blocks_to_parts(msg.content):
+            if isinstance(part, ToolCallResponse):
+                if pending:
+                    messages.append(InputMessage(role=msg.role, parts=pending))
+                    pending = []
+                messages.append(InputMessage(role="tool", parts=[part]))
+            elif include_reasoning or not isinstance(part, Reasoning):
+                pending.append(part)
+        if pending:
+            messages.append(InputMessage(role=msg.role, parts=pending))
+    return messages
 
 
 def _message_to_output(msg: Msg) -> OutputMessage:
+    # The reply Msg is cumulative, not just the final response. Keep only
+    # visible text after the last tool interaction at the AGENT boundary;
+    # intermediate reasoning and tools remain on their child spans.
+    parts = []
+    for part in _blocks_to_parts(msg.content):
+        if isinstance(part, (ToolCall, ToolCallResponse)):
+            parts = []
+        elif isinstance(part, Text):
+            parts.append(part)
     return OutputMessage(
         role=msg.role,
-        parts=_blocks_to_parts(msg.content),
+        parts=parts,
         finish_reason="stop",
     )
 

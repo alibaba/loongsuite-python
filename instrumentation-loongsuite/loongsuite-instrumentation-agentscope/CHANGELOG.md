@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Split AgentScope v2 cumulative assistant history at tool results, preserving
+  chronological assistant/tool roles without changing the application context.
+- Respect the model formatter's thinking-input capability in LLM history and
+  limit agent output to final visible text, leaving reasoning and tools on child spans.
+- Prefer Entry session/user baggage over AgentScope's internal session identity
+  and propagate the conversation to ReAct, LLM, and tool spans.
+- Fail open when v2 input conversion fails and finalize agent spans even when
+  output conversion raises.
+
 ## Version 0.8.0 (2026-07-31)
 
 ### Fixed

@@ -36,6 +36,7 @@ from agentscope.credential import DashScopeCredential  # noqa: E402
 from agentscope.message import (  # noqa: E402
     Msg,
     TextBlock,
+    ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
     UserMsg,
@@ -43,10 +44,17 @@ from agentscope.message import (  # noqa: E402
 from agentscope.model import ChatResponse, DashScopeChatModel  # noqa: E402
 from agentscope.tool import ToolResponse  # noqa: E402
 
+from opentelemetry import baggage, context  # noqa: E402
 from opentelemetry import trace as trace_api  # noqa: E402
+from opentelemetry.instrumentation.agentscope import (  # noqa: E402
+    _v2_middleware,
+)
 from opentelemetry.instrumentation.agentscope._v2_middleware import (  # noqa: E402
     AgentScopeV2Middleware,
-    _message_to_input,
+    _create_agent_invocation,
+    _create_llm_invocation,
+    _message_to_output,
+    _messages_to_inputs,
 )
 from opentelemetry.instrumentation.agentscope.package import (  # noqa: E402
     get_installed_instrumentation_dependencies,
@@ -77,12 +85,179 @@ def test_v2_tool_result_message_content_is_jsonable():
         ],
     )
 
-    input_message = _message_to_input(msg)
+    [input_message] = _messages_to_inputs(msg)
 
     assert (
         gen_ai_json_dumps([asdict(input_message)])
-        == '[{"role":"assistant","parts":[{"response":[{"content":"sunny","type":"text"}],"id":"tool-call-content","type":"tool_call_response"}]}]'
+        == '[{"role":"tool","parts":[{"response":[{"content":"sunny","type":"text"}],"id":"tool-call-content","type":"tool_call_response"}]}]'
     )
+
+
+def test_v2_cumulative_reply_preserves_round_order_without_mutating_history():
+    msg = Msg(
+        name="agent",
+        role="assistant",
+        content=[
+            ThinkingBlock(thinking="plan one"),
+            ToolCallBlock(id="one", name="lookup", input="{}"),
+            ToolResultBlock(id="one", name="lookup", output="result one"),
+            ThinkingBlock(thinking="plan two"),
+            ToolCallBlock(id="two", name="lookup", input="{}"),
+            ToolResultBlock(id="two", name="lookup", output="result two"),
+            ThinkingBlock(thinking="final reasoning"),
+            TextBlock(text="final answer"),
+        ],
+    )
+    snapshot = msg.model_dump()
+    inputs = _messages_to_inputs([UserMsg("user", "original question"), msg])
+    assert [item.role for item in inputs] == [
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+    ]
+    assert [
+        part.id
+        for item in inputs
+        if item.role == "tool"
+        for part in item.parts
+    ] == ["one", "two"]
+    assert all(
+        part.type != "tool_call_response"
+        for item in inputs
+        if item.role == "assistant"
+        for part in item.parts
+    )
+    assert [part.content for part in _message_to_output(msg).parts] == [
+        "final answer"
+    ]
+    without_reasoning = _messages_to_inputs(msg, include_reasoning=False)
+    assert not any(
+        part.type == "reasoning"
+        for item in without_reasoning
+        for part in item.parts
+    )
+    assert msg.model_dump() == snapshot
+
+
+@pytest.mark.parametrize("session", [None, "", "  ", "entry-session"])
+def test_v2_entry_identity_precedes_framework_session(session):
+    agent = SimpleNamespace(
+        name="agent", state=SimpleNamespace(session_id="internal")
+    )
+    ctx = baggage.set_baggage("gen_ai.user.id", "entry-user")
+    if session is not None:
+        ctx = baggage.set_baggage("gen_ai.session.id", session, ctx)
+    token = context.attach(ctx)
+    try:
+        invocation = _create_agent_invocation(
+            agent, {"inputs": UserMsg("user", "hello")}
+        )
+        assert invocation.conversation_id == (
+            session if session and session.strip() else "internal"
+        )
+        assert invocation.attributes["gen_ai.user.id"] == "entry-user"
+        assert agent.state.session_id == "internal"
+    finally:
+        context.detach(token)
+
+
+def test_v2_model_formatter_controls_history_reasoning():
+    msg = Msg(
+        name="agent",
+        role="assistant",
+        content=[ThinkingBlock(thinking="history"), TextBlock(text="answer")],
+    )
+    model = SimpleNamespace(
+        model="test", formatter=SimpleNamespace(supports_thinking_input=False)
+    )
+    invocation = _create_llm_invocation(model, {"messages": [msg]})
+    assert [p.type for p in invocation.input_messages[0].parts] == ["text"]
+    model.formatter.supports_thinking_input = True
+    invocation = _create_llm_invocation(model, {"messages": [msg]})
+    assert [p.type for p in invocation.input_messages[0].parts] == [
+        "reasoning",
+        "text",
+    ]
+
+
+@pytest.mark.parametrize("operation", ["agent", "llm"])
+async def test_v2_input_mapping_failure_preserves_one_business_call(
+    instrument, span_exporter, monkeypatch, operation
+):
+    agent = Agent(
+        name="mapping-fault",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    expected = Msg(
+        name="assistant",
+        role="assistant",
+        content=[TextBlock(text="business")],
+    )
+    calls = []
+
+    def broken_mapping(*args, **kwargs):
+        raise ValueError("probe input mapping failure")
+
+    monkeypatch.setattr(_v2_middleware, "_messages_to_inputs", broken_mapping)
+
+    async def reply_handler(**kwargs):
+        calls.append(kwargs)
+        yield expected
+
+    async def model_handler(**kwargs):
+        calls.append(kwargs)
+        return expected
+
+    if operation == "agent":
+        actual = [
+            item
+            async for item in middleware.on_reply(
+                agent, {"inputs": []}, reply_handler
+            )
+        ]
+        assert actual[0] is expected
+    else:
+        actual = await middleware.on_model_call(
+            agent,
+            {"current_model": agent.model, "messages": []},
+            model_handler,
+        )
+        assert actual is expected
+    assert len(calls) == 1
+    assert not span_exporter.get_finished_spans()
+    assert not trace_api.get_current_span().get_span_context().is_valid
+
+
+async def test_v2_standalone_agent_propagates_fallback_session_without_leaking(
+    instrument, span_exporter
+):
+    agent = Agent(
+        name="standalone",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    expected = agent.state.session_id
+    seen = []
+
+    async def reply_handler(**kwargs):
+        seen.append(baggage.get_baggage("gen_ai.session.id"))
+        yield Msg(
+            name="assistant",
+            role="assistant",
+            content=[TextBlock(text="done")],
+        )
+
+    async for _ in middleware.on_reply(agent, {"inputs": []}, reply_handler):
+        assert baggage.get_baggage("gen_ai.session.id") is None
+    assert seen == [expected]
+    assert baggage.get_baggage("gen_ai.session.id") is None
+    assert len(span_exporter.get_finished_spans()) == 1
 
 
 def test_instrumentor_injects_v2_middleware(instrument):
@@ -728,10 +903,12 @@ async def test_v2_reasoning_error_preserves_identity_and_fails_step(
     assert not middleware._reply_states
 
 
+@pytest.mark.parametrize("fault", ["stop", "mapping"])
 async def test_v2_reply_finish_failure_does_not_replace_business_result(
     instrument,
     span_exporter,
     monkeypatch,
+    fault,
 ):
     agent = Agent(
         name="finish_failure_agent",
@@ -750,7 +927,12 @@ async def test_v2_reply_finish_failure_does_not_replace_business_result(
         del args, kwargs
         raise ValueError("probe finish failure")
 
-    monkeypatch.setattr(handler, "stop_invoke_agent", stop_invoke_agent)
+    if fault == "stop":
+        monkeypatch.setattr(handler, "stop_invoke_agent", stop_invoke_agent)
+    else:
+        monkeypatch.setattr(
+            _v2_middleware, "_message_to_output", stop_invoke_agent
+        )
 
     async def reply_handler(**kwargs):
         del kwargs
@@ -1327,7 +1509,7 @@ async def test_v2_skill_viewer_tool_captures_skill_metadata(
     assert tool_span.attributes["gen_ai.skill.version"] == "1.2.3"
 
 
-@pytest.mark.vcr()
+@pytest.mark.vcr(record_mode="none")
 async def test_v2_agent_non_streaming_e2e(instrument, span_exporter):
     model = _make_model(stream=False)
     agent = Agent(
@@ -1336,13 +1518,24 @@ async def test_v2_agent_non_streaming_e2e(instrument, span_exporter):
         model=model,
     )
 
-    msg = await agent.reply(UserMsg(name="user", content="Say OK."))
+    token = context.attach(
+        baggage.set_baggage("gen_ai.session.id", "entry-session")
+    )
+    try:
+        msg = await agent.reply(UserMsg(name="user", content="Say OK."))
+    finally:
+        context.detach(token)
 
     assert msg.get_text_content()
-    _assert_agent_and_llm_spans(span_exporter.get_finished_spans())
+    spans = span_exporter.get_finished_spans()
+    _assert_agent_and_llm_spans(spans)
+    for span in spans:
+        assert span.attributes["gen_ai.session.id"] == "entry-session"
+        assert span.attributes["gen_ai.conversation.id"] == "entry-session"
+    assert baggage.get_baggage("gen_ai.session.id") is None
 
 
-@pytest.mark.vcr()
+@pytest.mark.vcr(record_mode="none")
 async def test_v2_agent_streaming_e2e(instrument, span_exporter):
     model = _make_model(stream=True)
     agent = Agent(
@@ -1365,7 +1558,7 @@ async def test_v2_agent_streaming_e2e(instrument, span_exporter):
     _assert_agent_and_llm_spans(span_exporter.get_finished_spans())
 
 
-@pytest.mark.vcr()
+@pytest.mark.vcr(record_mode="none")
 async def test_v2_agent_concurrent_e2e(instrument, span_exporter):
     async def call_agent(idx: int):
         agent = Agent(
