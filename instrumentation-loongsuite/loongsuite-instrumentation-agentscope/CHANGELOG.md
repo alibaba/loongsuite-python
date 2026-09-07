@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
 ### Fixed
 
 - Treat AgentScope v2 cancellation as control flow, with an explicit
