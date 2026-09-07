@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Propagate the owning agent name during QwenPaw 2 ReMe Dream calls so
+  instrumented downstream LLM spans carry `gen_ai.agent.name`. Restore the
+  caller context on completion, failure, or cancellation; no agent ID is added.
+
 - Treat `asyncio.CancelledError` as control flow at Entry finalization while
   preserving the original exception. Record `qwenpaw.cancelled` and a bounded
   `qwenpaw.cancellation.reason` from explicit cancellation codes; missing or

@@ -9,6 +9,27 @@ Compatibility note: CoPaw was renamed to QwenPaw. Installations pinned to
 `AgentRunner.query_handler` as its request entry point; QwenPaw 2 uses
 `Runtime.run`.
 
+## Dream owner attribution
+
+For QwenPaw 2's ReMe memory backend, this plugin scopes
+`gen_ai.agent.name` to the owning agent while `dream()` executes, including
+scheduled and manually triggered Dream calls. It uses the same configured
+name (or `QwenPaw` fallback) as normal conversations and restores the caller's
+context on completion, error, or cancellation. No agent ID or synthetic
+Agent invocation is added.
+
+This is attribution for **already-instrumented LLM calls**, not a new model
+instrumentation layer. Direct model calls outside AgentScope Agent middleware
+need a matching model SDK instrumentor using LoongSuite's GenAI handler; for
+OpenAI-compatible clients, this can be `opentelemetry-instrumentation-openai-v2`.
+The Dream adapter does not install or enable that extra instrumentor, change
+token metric dimensions, or modify memory content.
+
+ReMe versions using internal AgentScope Agents also require the matching
+AgentScope plugin update to preserve Dream ownership across helper Agents.
+Those calls are already collected by AgentScope: enabling an additional SDK
+instrumentor can produce nested, duplicate LLM spans and is not required.
+
 ## Getting Started
 
 QwenPaw is started as its own app (CLI / process entrypoint), not as a library

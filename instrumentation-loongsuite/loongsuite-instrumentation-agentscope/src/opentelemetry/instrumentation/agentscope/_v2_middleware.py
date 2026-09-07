@@ -983,7 +983,8 @@ def _create_agent_invocation(
     inputs = input_kwargs.get("inputs")
     invocation = InvokeAgentInvocation(
         provider=provider,
-        agent_name=getattr(agent, "name", "unknown_agent"),
+        agent_name=otel_context.get_value("qwenpaw.dream.agent.name")
+        or getattr(agent, "name", "unknown_agent"),
         agent_id=getattr(getattr(agent, "state", None), "session_id", None),
         conversation_id=getattr(
             getattr(agent, "state", None), "session_id", None

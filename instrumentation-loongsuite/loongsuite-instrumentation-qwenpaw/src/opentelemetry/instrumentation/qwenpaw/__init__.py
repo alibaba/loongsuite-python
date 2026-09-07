@@ -40,6 +40,10 @@ from typing import Any, Collection
 from wrapt import wrap_function_wrapper
 
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.qwenpaw._dream import (
+    instrument_dream,
+    uninstrument_dream,
+)
 from opentelemetry.instrumentation.qwenpaw.package import (
     _instruments_any,
     get_installed_instrumentation_dependencies,
@@ -79,6 +83,7 @@ class QwenPawInstrumentor(BaseInstrumentor):
             logger_provider=logger_provider,
         )
         runtime_targets = tuple(get_installed_runtime_targets())
+        self._dream_class = None
         if not runtime_targets:
             raise ModuleNotFoundError(
                 "No supported QwenPaw runtime package is installed"
@@ -102,9 +107,14 @@ class QwenPawInstrumentor(BaseInstrumentor):
                 target.method_name,
             )
 
+        if any(target.wrapper_kind == "runtime" for target in runtime_targets):
+            self._dream_class = instrument_dream()
+
     def _uninstrument(self, **kwargs: Any) -> None:
         del kwargs
         self._handler = None
+        uninstrument_dream(getattr(self, "_dream_class", None))
+        self._dream_class = None
         for target in get_installed_runtime_targets():
             try:
                 runtime_module = import_module(target.module_name)
