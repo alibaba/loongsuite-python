@@ -144,9 +144,10 @@ class PresignUploader(Uploader):
         self._project, self._logstore, self._prefix = self._parse_base_path(
             base_path
         )
-        self._base_path = format_sls_base_path(
-            self._project, self._logstore, self._prefix
-        ) or f"sls://{self._project}/{self._logstore}"
+        self._base_path = (
+            format_sls_base_path(self._project, self._logstore, self._prefix)
+            or f"sls://{self._project}/{self._logstore}"
+        )
         self._client = client
         self._timeout = timeout
         self._ssl_verify = os.environ.get(
@@ -168,6 +169,7 @@ class PresignUploader(Uploader):
         self._queue_count = 0
         self._current_queue_bytes = 0
         self._shutdown = False
+        self._close_when_drained = False
         self._pending_paths: set[str] = set()
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
@@ -552,7 +554,10 @@ class PresignUploader(Uploader):
                 self._pending_paths.discard(task.full_path)
             self._queue_count -= 1
             self._current_queue_bytes -= task.reserved_size
+            close_clients = self._close_when_drained and self._queue_count == 0
             self._queue_cond.notify_all()
+        if close_clients:
+            self._close_clients()
 
     def _download_content(
         self,
@@ -562,31 +567,28 @@ class PresignUploader(Uploader):
     ) -> Optional[bytes]:
         with suppress_http_instrumentation():
             try:
-                with httpx.Client(
-                    timeout=self._timeout,
-                    verify=self._ssl_verify,
-                    follow_redirects=False,
-                ) as client:
-                    with client.stream("GET", uri) as response:
-                        if 300 <= response.status_code < 400:
-                            raise httpx.HTTPStatusError(
-                                "Redirect not allowed",
-                                request=response.request,
-                                response=response,
+                with self._http_client.stream(
+                    "GET", uri, follow_redirects=False
+                ) as response:
+                    if 300 <= response.status_code < 400:
+                        raise httpx.HTTPStatusError(
+                            "Redirect not allowed",
+                            request=response.request,
+                            response=response,
+                        )
+                    response.raise_for_status()
+                    buffer = io.BytesIO()
+                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                        if buffer.tell() + len(chunk) > max_size:
+                            _logger.warning(
+                                "Download exceeds multimodal limit %d, "
+                                "aborting: %s",
+                                max_size,
+                                uri,
                             )
-                        response.raise_for_status()
-                        buffer = io.BytesIO()
-                        for chunk in response.iter_bytes(chunk_size=64 * 1024):
-                            if buffer.tell() + len(chunk) > max_size:
-                                _logger.warning(
-                                    "Download exceeds multimodal limit %d, "
-                                    "aborting: %s",
-                                    max_size,
-                                    uri,
-                                )
-                                return None
-                            buffer.write(chunk)
-                        return buffer.getvalue()
+                            return None
+                        buffer.write(chunk)
+                    return buffer.getvalue()
             except Exception as exc:  # pylint: disable=broad-except
                 _logger.warning(
                     "Failed to download multimodal source %s: %s", uri, exc
@@ -609,13 +611,13 @@ class PresignUploader(Uploader):
             self._lru_uploaded.popitem(last=False)
 
     def shutdown(self, timeout: float = 10.0) -> None:
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
         with self._queue_cond:
             if self._shutdown:
                 return
             self._shutdown = True
             while self._queue_count > 0:
-                remaining = deadline - time.time()
+                remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     _logger.warning(
                         "Presigned uploader shutdown timed out with %d task(s)",
@@ -624,10 +626,18 @@ class PresignUploader(Uploader):
                     break
                 self._queue_cond.wait(timeout=remaining)
             drained = self._queue_count == 0
+            # Active requests keep their clients until the final task finishes.
+            self._close_when_drained = not drained
         self._executor.shutdown(wait=False)
         if drained:
+            self._close_clients()
+
+    def _close_clients(self) -> None:
+        # Called once: by shutdown when drained, otherwise by the last task.
+        try:
             if self._owns_http_client:
                 self._http_client.close()
+        finally:
             self._client.close()
 
     def _at_fork_reinit(self) -> None:
@@ -636,6 +646,7 @@ class PresignUploader(Uploader):
         self._queue_count = 0
         self._current_queue_bytes = 0
         self._shutdown = False
+        self._close_when_drained = False
         self._pending_paths = set()
         self._lru_uploaded = OrderedDict()
         self._executor = ThreadPoolExecutor(

@@ -26,10 +26,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional
-from urllib.parse import urlsplit
 
 import httpx
 
@@ -40,10 +38,6 @@ _logger = logging.getLogger(__name__)
 PRESIGN_API_PATH = "/apm/meta/api/v1/multimodal/upload/presign"
 LICENSE_KEY_HEADER = "x-arms-license-key"
 WORKSPACE_HEADER = "x-cms-workspace"
-
-# Mirrors the ARMS exporter contract: telemetry endpoints stay on plain HTTP
-# unless the agent was started with TLS enabled.
-_USE_TLS_ENV = "APSARA_APM_COLLECTOR_USE_TLS"
 
 _URL_KEYS = (
     "uploadUrl",
@@ -96,26 +90,6 @@ class PresignedUpload:
     expiration: Optional[str] = None
 
 
-def use_tls() -> bool:
-    """Return whether agent telemetry endpoints are addressed over HTTPS."""
-    return bool(os.getenv(_USE_TLS_ENV, ""))
-
-
-def normalize_presign_base_url(endpoint: str) -> str:
-    """Return ``scheme://host`` for a host or URL shaped endpoint."""
-    raw = (endpoint or "").strip()
-    if not raw:
-        raise PresignConfigError("Multimodal presign endpoint is required")
-    if "://" not in raw:
-        raw = f"{'https' if use_tls() else 'http'}://{raw.strip('/')}"
-    parts = urlsplit(raw)
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        raise PresignConfigError(
-            f"Invalid multimodal presign endpoint: {endpoint!r}"
-        )
-    return f"{parts.scheme}://{parts.netloc}"
-
-
 def resolve_presign_endpoint(snapshot: Any) -> Optional[str]:
     """Resolve the presign endpoint from config, then from ARMS state.
 
@@ -125,7 +99,7 @@ def resolve_presign_endpoint(snapshot: Any) -> Optional[str]:
     """
     configured = getattr(snapshot, "presign_endpoint", None)
     if configured:
-        return str(configured).strip() or None
+        return configured
     try:
         from aliyun.sdk.extension.arms.exporters.arms_endpoints_state import (  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
             global_arms_endpoints_state,
@@ -138,7 +112,7 @@ def resolve_presign_endpoint(snapshot: Any) -> Optional[str]:
             exc_info=True,
         )
         return None
-    return str(endpoint).strip() or None
+    return endpoint or None
 
 
 def _unwrap_payload(payload: Any) -> Optional[Mapping[str, Any]]:
@@ -315,7 +289,7 @@ class MultimodalPresignClient:
             raise PresignRetryableError(
                 "Multimodal presign endpoint is not resolvable yet"
             )
-        return f"{normalize_presign_base_url(endpoint)}{PRESIGN_API_PATH}"
+        return f"{endpoint}{PRESIGN_API_PATH}"
 
     def _request_headers(self) -> Dict[str, str]:
         headers = {

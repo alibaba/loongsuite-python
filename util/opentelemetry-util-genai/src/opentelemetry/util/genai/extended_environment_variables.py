@@ -166,8 +166,9 @@ OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT = (
 .. envvar:: OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT
 
 Override the endpoint used to request presigned multimodal upload URLs.
-Accepts a host (``cn-hangzhou.log.aliyuncs.com``) or a full base URL. When
-unset, the endpoint is resolved from the ARMS/SLS OneEndpoint state, which is
+Requires a base URL including its HTTP or HTTPS scheme, without a trailing
+slash (for example ``https://cn-hangzhou.log.aliyuncs.com``). The URL is used
+unchanged before appending the presign API path. When unset, the endpoint is resolved from the ARMS/SLS OneEndpoint state, which is
 only available when running under an ARMS agent.
 """
 

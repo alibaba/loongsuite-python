@@ -44,7 +44,6 @@ from opentelemetry.util.genai._multimodal_upload.presign_client import (  # pyli
     PresignConfigError,
     PresignError,
     PresignRetryableError,
-    normalize_presign_base_url,
     parse_presign_response,
     resolve_presign_endpoint,
 )
@@ -73,7 +72,7 @@ from opentelemetry.util.genai.extended_environment_variables import (
 
 from .multimodal_test_helpers import reset_multimodal_runtime_state_for_test
 
-_ENDPOINT = "proj-xtrace-test.cn-hangzhou.log.aliyuncs.com"
+_ENDPOINT = "https://proj-xtrace-test.cn-hangzhou.log.aliyuncs.com"
 # The signed URL points at an ARMS-owned bucket the agent never configures.
 _SIGNED_URL = (
     "https://bucket-a.oss-cn-hangzhou.aliyuncs.com/genai/img.jpg?sig=1"
@@ -191,23 +190,24 @@ def _recorder_fixture():
 # --------------------------------------------------------------------------
 
 
-def test_endpoint_defaults_to_http_and_keeps_explicit_scheme() -> None:
-    assert normalize_presign_base_url(_ENDPOINT) == f"http://{_ENDPOINT}"
-    assert (
-        normalize_presign_base_url(f"https://{_ENDPOINT}/")
-        == f"https://{_ENDPOINT}"
-    )
+@pytest.mark.parametrize(
+    "endpoint", ["http://example.com", "https://example.com/base"]
+)
+@pytest.mark.parametrize("tls", ["true", "false"])
+def test_endpoint_is_used_verbatim(monkeypatch, endpoint, tls) -> None:
+    monkeypatch.setenv("APSARA_APM_COLLECTOR_USE_TLS", tls)
+    seen = []
 
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, text=_SIGNED_URL)
 
-def test_endpoint_uses_https_when_agent_tls_enabled(monkeypatch) -> None:
-    monkeypatch.setenv("APSARA_APM_COLLECTOR_USE_TLS", "true")
-    assert normalize_presign_base_url(_ENDPOINT) == f"https://{_ENDPOINT}"
-
-
-@pytest.mark.parametrize("endpoint", ["", "   ", "ftp://host", "http://"])
-def test_invalid_endpoint_is_rejected(endpoint: str) -> None:
-    with pytest.raises(PresignConfigError):
-        normalize_presign_base_url(endpoint)
+    client = _presign_client(handler, endpoint=endpoint)
+    try:
+        client.presign("a.jpg")
+        assert seen == [f"{endpoint}{PRESIGN_API_PATH}"]
+    finally:
+        client.close()
 
 
 def test_endpoint_prefers_configured_value_over_arms_state() -> None:
@@ -300,7 +300,7 @@ def test_presign_request_sends_license_key_workspace_and_sls_target() -> None:
     client.close()
 
     assert target.url == _SIGNED_URL
-    assert seen["url"] == f"http://{_ENDPOINT}{PRESIGN_API_PATH}"
+    assert seen["url"] == f"{_ENDPOINT}{PRESIGN_API_PATH}"
     assert seen["headers"][LICENSE_KEY_HEADER] == "test-license-key"
     assert seen["headers"][WORKSPACE_HEADER] == "test-workspace"
     assert seen["headers"]["content-type"] == "application/json"
@@ -700,6 +700,116 @@ def test_upload_after_shutdown_is_rejected(recorder) -> None:
     assert recorder.errors == [("oss", "shutdown")]
 
 
+@pytest.mark.parametrize("owns_http_client", [True, False])
+@pytest.mark.parametrize("status", [200, 400])
+def test_shutdown_timeout_closes_clients_after_last_task(
+    monkeypatch, owns_http_client, status
+) -> None:
+    started = [threading.Event(), threading.Event()]
+    release = [threading.Event(), threading.Event()]
+    closed = threading.Event()
+    requests = []
+    close_calls = []
+    presign_client = _FakePresignClient()
+
+    def handler(request):
+        index = len(requests)
+        requests.append(request)
+        started[index].set()
+        assert release[index].wait(5.0)
+        return httpx.Response(status)
+
+    http_client = _mock_http_client(handler)
+    original_close = http_client.close
+
+    def close_http():
+        close_calls.append("http")
+        original_close()
+
+    def close_presign():
+        close_calls.append("presign")
+        closed.set()
+
+    monkeypatch.setattr(http_client, "close", close_http)
+    monkeypatch.setattr(presign_client, "close", close_presign)
+    monkeypatch.setattr(
+        PresignUploader, "_new_http_client", lambda self: http_client
+    )
+    uploader = PresignUploader(
+        _UPLOADER_BASE_PATH,
+        client=presign_client,
+        http_client=None if owns_http_client else http_client,
+        max_workers=1,
+        max_upload_attempts=1,
+    )
+    try:
+        assert uploader.upload(_item())
+        assert uploader.upload(_item(url=_ITEM_URL + ".second"))
+        assert started[0].wait(2.0)
+        uploader.shutdown(timeout=0.0)
+        uploader.shutdown(timeout=0.0)
+        assert not close_calls
+        assert not http_client.is_closed
+
+        release[0].set()
+        assert started[1].wait(2.0)
+        assert not close_calls
+        release[1].set()
+        assert closed.wait(2.0)
+        uploader.shutdown(timeout=0.0)
+        assert close_calls == (
+            ["http", "presign"] if owns_http_client else ["presign"]
+        )
+        assert http_client.is_closed is owns_http_client
+        assert uploader._queue_count == 0  # pylint: disable=protected-access
+        assert uploader._current_queue_bytes == 0  # pylint: disable=protected-access
+        assert not uploader._pending_paths  # pylint: disable=protected-access
+    finally:
+        for event in release:
+            event.set()
+        uploader.shutdown(timeout=2.0)
+        uploader._executor.shutdown(wait=True)  # pylint: disable=protected-access
+        original_close()
+
+
+def test_downloads_reuse_upload_client(monkeypatch) -> None:
+    requests = []
+
+    def handler(request):
+        requests.append((request.method, str(request.url)))
+        return httpx.Response(200, content=b"image")
+
+    uploader = _uploader(_FakePresignClient(), handler)
+
+    def unexpected_client(*args, **kwargs):
+        pytest.fail("Downloads must reuse the existing HTTP client")
+
+    monkeypatch.setattr(
+        "opentelemetry.util.genai._multimodal_upload.presign_uploader.httpx.Client",
+        unexpected_client,
+    )
+    try:
+        for index in range(2):
+            assert uploader.upload(
+                _item(
+                    url=_ITEM_URL + str(index),
+                    data=None,
+                    source_uri=f"https://example.com/{index}.jpg",
+                )
+            )
+        uploader.shutdown(timeout=2.0)
+        assert [method for method, _ in requests] == [
+            "GET",
+            "PUT",
+            "GET",
+            "PUT",
+        ]
+        assert not uploader._http_client.is_closed  # pylint: disable=protected-access
+    finally:
+        uploader.shutdown(timeout=2.0)
+        uploader._http_client.close()  # pylint: disable=protected-access
+
+
 def test_executor_rejection_releases_queue_slot(recorder, monkeypatch) -> None:
     uploader = _uploader(
         _FakePresignClient(), lambda request: httpx.Response(200)
@@ -732,14 +842,10 @@ def test_fork_reinit_rebuilds_worker_state() -> None:
     uploader.shutdown(timeout=2.0)
 
 
-def test_download_source_content_enforces_size_limit(monkeypatch) -> None:
+def test_download_source_content_enforces_size_limit() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"0123456789")
 
-    monkeypatch.setattr(
-        "opentelemetry.util.genai._multimodal_upload.presign_uploader.httpx.Client",
-        lambda **kwargs: _mock_http_client(handler),
-    )
     uploader = _uploader(_FakePresignClient(), handler)
     try:
         assert (
@@ -759,16 +865,10 @@ def test_download_source_content_enforces_size_limit(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("status", [302, 404])
-def test_download_source_content_rejects_bad_responses(
-    monkeypatch, status: int
-) -> None:
+def test_download_source_content_rejects_bad_responses(status: int) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status, headers={"Location": "https://other"})
 
-    monkeypatch.setattr(
-        "opentelemetry.util.genai._multimodal_upload.presign_uploader.httpx.Client",
-        lambda **kwargs: _mock_http_client(handler),
-    )
     uploader = _uploader(_FakePresignClient(), handler)
     try:
         assert (
