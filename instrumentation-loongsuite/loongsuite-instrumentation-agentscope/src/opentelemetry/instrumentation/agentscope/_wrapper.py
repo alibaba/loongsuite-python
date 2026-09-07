@@ -69,6 +69,7 @@ from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import ReactStepInvocation
 from opentelemetry.util.genai.types import Error, LLMInvocation
 
+from ._usage import _extract_cache_tokens
 from .utils import (
     apply_entry_baggage_identity,
     convert_agent_response_to_output_messages,
@@ -414,6 +415,7 @@ class AgentScopeChatModelWrapper:
                     invocation.output_tokens = getattr(
                         last_chunk.usage, "output_tokens", None
                     )
+                    _extract_cache_tokens(last_chunk.usage, invocation)
 
                 if hasattr(last_chunk, "id"):
                     invocation.response_id = getattr(last_chunk, "id", None)
@@ -493,6 +495,7 @@ class AgentScopeChatModelWrapper:
                         invocation.output_tokens = getattr(
                             result.usage, "output_tokens", None
                         )
+                        _extract_cache_tokens(result.usage, invocation)
 
                     invocation.response_model = invocation.request_model
                     invocation.response_finish_reasons = ["stop"]

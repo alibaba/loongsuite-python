@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Limit Dream tests to the QwenPaw 2 runtime and verify that QwenPaw 1 and
+  legacy CoPaw retain Entry instrumentation without enabling Dream hooks.
+
+- Propagate the owning agent name during QwenPaw 2 ReMe Dream calls so
+  instrumented downstream LLM spans carry `gen_ai.agent.name`. Restore the
+  caller context on completion, failure, or cancellation; no agent ID is added.
+
+- Treat `asyncio.CancelledError` as control flow at Entry finalization while
+  preserving the original exception. Record `qwenpaw.cancelled` and a bounded
+  `qwenpaw.cancellation.reason` from explicit cancellation codes; missing or
+  unrecognized reasons are `unknown`, not inferred from partial responses.
+
 ## Version 0.8.0 (2026-07-31)
 
 ### Added

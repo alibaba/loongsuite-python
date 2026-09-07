@@ -16,6 +16,8 @@
 # the oldest supported version of external dependencies.
 
 agentscope>=1.0.0,<2.0.0
+# AgentScope 1.x imports tqdm without declaring it as a runtime dependency.
+tqdm
 mcp<2
 pytest
 pytest-asyncio

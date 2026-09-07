@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import timeit
 from dataclasses import dataclass
@@ -39,6 +40,30 @@ from ._entry_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@hook_advice("qwenpaw", "record_cancellation")
+def _record_cancellation(
+    invocation: EntryInvocation, error: BaseException | None
+) -> None:
+    if (
+        not isinstance(error, asyncio.CancelledError)
+        or invocation.span is None
+    ):
+        return
+    # Only low-cardinality reason codes supplied by the caller are captured.
+    # Never infer a cause from partial output or export arbitrary exception text.
+    reason = error.args[0] if error.args else None
+    if not isinstance(reason, str) or reason not in {
+        "client_stop",
+        "session_closed",
+        "session_reset",
+        "reset",
+        "matrix_orchestration_failed",
+    }:
+        reason = "unknown"
+    invocation.span.set_attribute("qwenpaw.cancelled", True)
+    invocation.span.set_attribute("qwenpaw.cancellation.reason", reason)
 
 
 @dataclass
@@ -183,7 +208,10 @@ def _finish_entry(
     try:
         token = otel_context.attach(state.context)
         invocation.context_token = token
-        if error is None or isinstance(error, GeneratorExit):
+        _record_cancellation(invocation, error)
+        if error is None or isinstance(
+            error, (GeneratorExit, asyncio.CancelledError)
+        ):
             state.handler.stop_entry(invocation)
         else:
             state.handler.fail_entry(

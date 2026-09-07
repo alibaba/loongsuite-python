@@ -26,3 +26,7 @@ opentelemetry-instrumentation
 -e instrumentation-loongsuite/loongsuite-instrumentation-agentscope
 -e instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw
 -e util/opentelemetry-util-genai
+
+# Dream calls the model outside AgentScope Agent middleware.
+-e instrumentation-genai/opentelemetry-instrumentation-openai-v2
+vcrpy
