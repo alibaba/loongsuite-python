@@ -252,12 +252,21 @@ def format_sls_base_path(
     Both the ARMS SLS uploader and the pre-authorized OSS uploader address
     objects this way: the backing bucket belongs to the server, so only
     project, logstore and object name identify an object. Returns None when no
-    project is known, since the address would then be ambiguous.
+    project is known or either target field is invalid, since the address
+    would then be ambiguous.
     """
     project_name = (project or "").strip().strip("/")
     if not project_name:
         return None
     store = (logstore or "").strip().strip("/") or DEFAULT_SLS_LOGSTORE
+    for field_name, value in (("project", project_name), ("logstore", store)):
+        if "/" in value or value in (".", ".."):
+            _logger.warning(
+                "Multimodal SLS %s must not contain slashes or dot segments: %r",
+                field_name,
+                value,
+            )
+            return None
     base_path = f"sls://{project_name}/{store}"
     normalized_prefix = normalize_oss_path_prefix(prefix)
     if normalized_prefix:

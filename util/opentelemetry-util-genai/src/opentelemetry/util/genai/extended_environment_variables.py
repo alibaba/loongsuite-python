@@ -168,8 +168,10 @@ OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT = (
 Override the endpoint used to request presigned multimodal upload URLs.
 Requires a base URL including its HTTP or HTTPS scheme, without a trailing
 slash (for example ``https://cn-hangzhou.log.aliyuncs.com``). The URL is used
-unchanged before appending the presign API path. When unset, the endpoint is resolved from the ARMS/SLS OneEndpoint state, which is
-only available when running under an ARMS agent.
+unchanged before appending the presign API path. A trailing slash produces a
+double slash in the request path, which the server may reject. When unset,
+the endpoint is resolved from the ARMS/SLS OneEndpoint state, which is only
+available when running under an ARMS agent.
 """
 
 OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT = (

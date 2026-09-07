@@ -203,8 +203,8 @@ def parse_presign_response(payload: Any) -> PresignedUpload:
     expiration: Optional[str] = None
     for key in _EXPIRATION_KEYS:
         candidate = body.get(key)
-        if candidate:
-            expiration = str(candidate)
+        if candidate is not None and str(candidate).strip():
+            expiration = str(candidate).strip()
             break
 
     return PresignedUpload(

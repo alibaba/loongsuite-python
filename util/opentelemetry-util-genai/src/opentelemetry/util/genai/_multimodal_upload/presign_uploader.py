@@ -100,7 +100,6 @@ class _Task:
     object_key: str
     content: Optional[bytes]
     source_uri: Optional[str]
-    expected_size: int
     reserved_size: int
     skip_if_exists: bool
 
@@ -296,15 +295,17 @@ class PresignUploader(Uploader):
         if isinstance(content, str):
             content = content.encode()
         full_path = f"sls://{self._project}/{self._logstore}/{object_key}"
-        reserved_size = (
-            len(content) if content is not None else max(0, item.expected_size)
-        )
+        # Download sizes are untrusted estimates. Reserve the enforced download
+        # ceiling so concurrent downloads cannot outgrow the queue byte budget.
+        download_limit = _MAX_DOWNLOAD_BYTES
+        if self._max_queue_bytes > 0:
+            download_limit = min(download_limit, self._max_queue_bytes)
+        reserved_size = len(content) if content is not None else download_limit
         task = _Task(
             full_path=full_path,
             object_key=object_key,
             content=content,
             source_uri=item.source_uri,
-            expected_size=max(0, item.expected_size),
             reserved_size=reserved_size,
             skip_if_exists=skip_if_exists,
         )
@@ -374,7 +375,7 @@ class PresignUploader(Uploader):
             if task.content is None and task.source_uri:
                 task.content = self._download_content(
                     task.source_uri,
-                    max_size=_MAX_DOWNLOAD_BYTES,
+                    max_size=task.reserved_size,
                 )
                 if task.content is None:
                     recorder.record_upload_error(
@@ -382,7 +383,12 @@ class PresignUploader(Uploader):
                         reason="download_failed",
                     )
                     return
-                self._adjust_reserved_size(task, len(task.content))
+                if not self._adjust_reserved_size(task, len(task.content)):
+                    recorder.record_upload_error(
+                        provider=_USAGE_METRICS_PROVIDER,
+                        reason="queue_bytes_limit",
+                    )
+                    return
 
             content = task.content
             if content is None:
@@ -540,11 +546,15 @@ class PresignUploader(Uploader):
         if delay > 0:
             time.sleep(delay)
 
-    def _adjust_reserved_size(self, task: _Task, actual_size: int) -> None:
+    def _adjust_reserved_size(self, task: _Task, actual_size: int) -> bool:
         with self._queue_cond:
-            difference = actual_size - task.reserved_size
-            self._current_queue_bytes += difference
+            # The streaming download enforces this reservation before writing
+            # each chunk. Keep the accounting safe if a downloader violates it.
+            if actual_size > task.reserved_size:
+                return False
+            self._current_queue_bytes += actual_size - task.reserved_size
             task.reserved_size = actual_size
+            return True
 
     def _release_task(self, task: _Task, *, succeeded: bool) -> None:
         with self._queue_cond:
@@ -681,7 +691,7 @@ def _resolve_sls_base_path(snapshot: Any) -> str:
     )
     if not base_path:
         raise PresignUploadConfigError(
-            "Pre-authorized OSS mode requires an SLS project, set "
+            "Pre-authorized OSS mode requires a valid SLS project and logstore; set "
             "APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT or run with an ARMS "
             "agent that provides one"
         )
@@ -726,6 +736,9 @@ def build_presign_client(snapshot: Any) -> MultimodalPresignClient:
         OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_SSL_VERIFY,
         "true",
     ).lower() not in ("false", "0", "no")
+    # Require readiness before enabling URI rewriting. Keep resolving on each
+    # request afterward so ARMS OneEndpoint discovery can switch destinations
+    # without rebuilding the uploader or changing the configuration snapshot.
     endpoint = resolve_presign_endpoint(snapshot)
     if not endpoint:
         raise PresignConfigError(

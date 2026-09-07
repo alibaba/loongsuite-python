@@ -29,6 +29,7 @@ from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disa
     DEFAULT_SLS_LOGSTORE,
     PRESIGN_HOOK_NAME,
     UPLOADER_GENERATION_FIELDS,
+    format_sls_base_path,
     get_multimodal_config_snapshot,
     normalize_multimodal_hook_name,
     normalize_oss_bucket,
@@ -1212,3 +1213,165 @@ def test_presign_identity_falls_back_to_arms_env(monkeypatch) -> None:
     snapshot = get_multimodal_config_snapshot()
     assert snapshot.presign_license_key == "test-license-key"
     assert snapshot.presign_workspace == "test-workspace"
+
+
+@pytest.mark.parametrize("expected_size", [0, 1])
+@pytest.mark.parametrize("content", [b"1234", b"123456789"])
+def test_download_reserves_budget_and_enforces_stream_limit(
+    recorder, expected_size, content
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+    uploading = threading.Event()
+    finish_upload = threading.Event()
+    client = _FakePresignClient()
+
+    def handler(request):
+        if request.method == "GET":
+            started.set()
+            assert release.wait(5.0)
+            return httpx.Response(200, content=content)
+        uploading.set()
+        assert finish_upload.wait(5.0)
+        return httpx.Response(200)
+
+    uploader = _uploader(client, handler, max_queue_bytes=8)
+    item = _item(
+        data=None,
+        source_uri="https://example.com/a",
+        expected_size=expected_size,
+    )
+    try:
+        assert uploader.upload(item)
+        assert started.wait(2.0)
+        assert uploader._current_queue_bytes == 8  # pylint: disable=protected-access
+        assert not uploader.upload(_item(url=_ITEM_URL + ".second", data=b"x"))
+        assert recorder.errors == [("oss", "queue_bytes_limit")]
+        release.set()
+        if len(content) <= 8:
+            assert uploading.wait(2.0)
+            assert uploader._current_queue_bytes == 4  # pylint: disable=protected-access
+            # The unused reservation becomes available before upload completes.
+            assert uploader.upload(
+                _item(url=_ITEM_URL + ".third", data=b"1234")
+            )
+        finish_upload.set()
+        uploader.shutdown(timeout=2.0)
+        if len(content) > 8:
+            assert not client.object_names
+            assert recorder.errors[-1] == ("oss", "download_failed")
+        else:
+            assert len(client.object_names) == 2
+        assert uploader._queue_count == 0  # pylint: disable=protected-access
+        assert uploader._current_queue_bytes == 0  # pylint: disable=protected-access
+        assert not uploader._pending_paths  # pylint: disable=protected-access
+    finally:
+        release.set()
+        finish_upload.set()
+        uploader.shutdown(timeout=2.0)
+        uploader._executor.shutdown(wait=True)  # pylint: disable=protected-access
+        uploader._http_client.close()  # pylint: disable=protected-access
+
+
+def test_download_rejects_content_exceeding_reservation(recorder) -> None:
+    client = _FakePresignClient()
+    uploader = _uploader(
+        client, lambda request: httpx.Response(200), max_queue_bytes=4
+    )
+    uploader._download_content = lambda uri, *, max_size: b"12345"  # pylint: disable=protected-access
+    try:
+        assert uploader.upload(
+            _item(
+                data=None, source_uri="https://example.com/a", expected_size=0
+            )
+        )
+        uploader.shutdown(timeout=2.0)
+        assert recorder.errors == [("oss", "queue_bytes_limit")]
+        assert not client.object_names
+        assert uploader._current_queue_bytes == 0  # pylint: disable=protected-access
+        assert uploader._queue_count == 0  # pylint: disable=protected-access
+        assert not uploader._pending_paths  # pylint: disable=protected-access
+    finally:
+        uploader.shutdown(timeout=2.0)
+        uploader._http_client.close()  # pylint: disable=protected-access
+
+
+@pytest.mark.parametrize(
+    "expiration, expected",
+    [(0, "0"), (None, None), ("", None), ("  ", None), (" 900 ", "900")],
+)
+def test_presign_expiration_preserves_zero_and_trims(
+    expiration, expected
+) -> None:
+    target = parse_presign_response(
+        {"url": _SIGNED_URL, "expiration": expiration}
+    )
+    assert target.expiration == expected
+    if expected is None:
+        target = parse_presign_response(
+            {"url": _SIGNED_URL, "expiration": expiration, "expireTime": 0}
+        )
+        assert target.expiration == "0"
+
+
+@pytest.mark.parametrize("field", ["sls_project", "sls_logstore"])
+@pytest.mark.parametrize("value", ["a/b", ".", "..", "a/../b"])
+def test_invalid_sls_target_disables_both_hooks(
+    monkeypatch, field, value
+) -> None:
+    _apply_env(monkeypatch, _presign_env())
+    snapshot = replace(get_multimodal_config_snapshot(), **{field: value})
+    assert (
+        format_sls_base_path(snapshot.sls_project, snapshot.sls_logstore)
+        is None
+    )
+    assert presign_uploader_hook(snapshot) is None
+    assert presign_pre_uploader_hook(snapshot) is None
+
+
+def test_sls_target_retains_default_and_prefix() -> None:
+    assert (
+        format_sls_base_path("project", None, "a/b")
+        == f"sls://project/{DEFAULT_SLS_LOGSTORE}/a/b"
+    )
+    assert (
+        format_sls_base_path("project", "logstore", "a/b")
+        == "sls://project/logstore/a/b"
+    )
+
+
+def test_build_client_follows_endpoint_changes_after_readiness_check(
+    monkeypatch,
+) -> None:
+    _apply_env(monkeypatch, _presign_env())
+    endpoints = iter(
+        [
+            "https://initial.example",
+            "https://next.example",
+            "https://final.example",
+        ]
+    )
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, text=_SIGNED_URL)
+
+    monkeypatch.setattr(
+        "opentelemetry.util.genai._multimodal_upload.presign_uploader.resolve_presign_endpoint",
+        lambda snapshot: next(endpoints),
+    )
+    monkeypatch.setattr(
+        "opentelemetry.util.genai._multimodal_upload.presign_client.httpx.Client",
+        lambda **kwargs: _mock_http_client(handler),
+    )
+    client = build_presign_client(get_multimodal_config_snapshot())
+    try:
+        client.presign("a.jpg")
+        client.presign("b.jpg")
+        assert seen == [
+            f"https://next.example{PRESIGN_API_PATH}",
+            f"https://final.example{PRESIGN_API_PATH}",
+        ]
+    finally:
+        client.close()
