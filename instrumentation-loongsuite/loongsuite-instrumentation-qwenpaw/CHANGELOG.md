@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
 ### Fixed
 
 - Limit Dream tests to the QwenPaw 2 runtime and verify that QwenPaw 1 and
