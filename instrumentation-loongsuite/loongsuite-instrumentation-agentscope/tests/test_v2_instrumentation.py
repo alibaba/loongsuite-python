@@ -623,8 +623,10 @@ async def test_v2_streaming_model_cancellation_cleans_cross_task_context(
         "chat",
     )
     assert task.cancelled()
-    assert span.status.status_code == StatusCode.ERROR
-    assert span.attributes["error.type"] == "CancelledError"
+    assert span.status.status_code == StatusCode.UNSET
+    assert "error.type" not in span.attributes
+    assert span.attributes["agentscope.cancelled"] is True
+    assert "gen_ai.response.finish_reasons" not in span.attributes
     assert not any(
         "Context detach failed" in record.getMessage()
         or "Failed to detach context" in record.getMessage()
@@ -1138,8 +1140,9 @@ async def test_v2_reply_stream_preserves_cross_task_cancellation(
         "invoke_agent",
     )
     assert len(agent_spans) == 1
-    assert agent_spans[0].status.status_code == StatusCode.ERROR
-    assert agent_spans[0].attributes["error.type"] == "CancelledError"
+    assert agent_spans[0].status.status_code == StatusCode.UNSET
+    assert "error.type" not in agent_spans[0].attributes
+    assert agent_spans[0].attributes["agentscope.cancelled"] is True
 
 
 async def test_v2_tool_acting_hook(instrument, span_exporter):
@@ -1615,6 +1618,107 @@ async def test_v2_skill_viewer_tool_captures_skill_metadata(
         tool_span.attributes["gen_ai.skill.id"] == "workspace:demo:code-review"
     )
     assert tool_span.attributes["gen_ai.skill.version"] == "1.2.3"
+
+
+async def test_v2_tool_cancellation_preserves_exception_and_marks_step(
+    instrument,
+    span_exporter,
+):
+    agent = Agent(
+        name="cancel_tool_agent",
+        system_prompt="Use tools.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._acting_middlewares)
+    cancellation = asyncio.CancelledError("client_stop")
+
+    async def handler(**kwargs):
+        del kwargs
+        raise cancellation
+        yield  # pragma: no cover
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        async for _ in middleware.on_acting(
+            agent,
+            {
+                "tool_call": SimpleNamespace(
+                    name="lookup", id="one", input="{}"
+                )
+            },
+            handler,
+        ):
+            pass
+    assert caught.value is cancellation
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+    for span in spans:
+        assert span.status.status_code == StatusCode.UNSET
+        assert span.attributes["agentscope.cancelled"] is True
+        assert "error.type" not in span.attributes
+    assert not trace_api.get_current_span().get_span_context().is_valid
+
+
+async def test_v2_real_provider_replay_cancellation(
+    instrument,
+    span_exporter,
+    monkeypatch,
+    vcr,
+):
+    agent = Agent(
+        name="stream_agent",
+        system_prompt="Reply with a short sentence.",
+        model=_make_model(stream=True),
+    )
+    cancellation = asyncio.CancelledError("client_stop")
+
+    async def consume():
+        stream = agent.reply_stream(
+            UserMsg(name="user", content="Say hello in one sentence.")
+        )
+        try:
+            async for _ in stream:
+                pass
+        finally:
+            await stream.aclose()
+
+    # Inject cancellation at a real SDK stream pull, after a replayed chunk.
+    # This preserves the provider/formatter path while making timing deterministic.
+    original_stream = AgentScopeV2Middleware._wrap_model_stream
+
+    async def cancelled_stream(self, result, state):
+        async def cancel_after_chunk():
+            try:
+                yield await result.__anext__()
+                raise cancellation
+            finally:
+                await result.aclose()
+
+        async for chunk in original_stream(self, cancel_after_chunk(), state):
+            yield chunk
+
+    monkeypatch.setattr(
+        AgentScopeV2Middleware, "_wrap_model_stream", cancelled_stream
+    )
+    with vcr.use_cassette(
+        "test_v2_agent_streaming_e2e.yaml", record_mode="none"
+    ):
+        # AgentScope defaults to converting cancellation into an interrupted
+        # ReplyEndEvent rather than raising to the application.
+        await consume()
+    spans = span_exporter.get_finished_spans()
+    assert {s.attributes.get("gen_ai.span.kind") for s in spans} == {
+        "AGENT",
+        "STEP",
+        "LLM",
+    }
+    for span in spans:
+        assert span.status.status_code == StatusCode.UNSET
+        assert span.attributes["agentscope.cancelled"] is True
+        assert "error.type" not in span.attributes
+    [llm] = _spans_by_operation(spans, "chat")
+    assert "gen_ai.response.finish_reasons" not in llm.attributes
+    assert "gen_ai.usage.input_tokens" not in llm.attributes
+    assert not trace_api.get_current_span().get_span_context().is_valid
 
 
 @pytest.mark.vcr(record_mode="none")

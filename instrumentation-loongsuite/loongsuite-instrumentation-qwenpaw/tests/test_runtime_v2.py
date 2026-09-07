@@ -441,19 +441,36 @@ async def test_runtime_mapping_and_stop_failures_preserve_business_chunks(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason,expected_reason",
+    [
+        (None, "unknown"),
+        ("client_stop", "client_stop"),
+        ("session_closed", "session_closed"),
+        ("matrix_orchestration_failed", "matrix_orchestration_failed"),
+        ("private free-form data", "unknown"),
+    ],
+)
 async def test_runtime_cancellation_finishes_entry(
     runtime_module,
     tracer_provider,
     span_exporter,
     monkeypatch,
+    reason,
+    expected_reason,
 ):
     started = asyncio.Event()
     never = asyncio.Event()
+    original = []
 
     async def fake_run(self, request):
         del self, request
         started.set()
-        await never.wait()
+        try:
+            await never.wait()
+        except asyncio.CancelledError as error:
+            original.append(error)
+            raise
         yield None
 
     monkeypatch.setattr(runtime_module.Runtime, "run", fake_run)
@@ -462,13 +479,18 @@ async def test_runtime_cancellation_finishes_entry(
         stream = _runtime(runtime_module).run(_request("cancel-session"))
         task = asyncio.create_task(stream.__anext__())
         await started.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
+        task.cancel(reason)
+        with pytest.raises(asyncio.CancelledError) as caught:
             await task
+        assert caught.value is original[0]
     finally:
         instrumentor.uninstrument()
 
-    assert len(_entry_spans(span_exporter)) == 1
+    [entry] = _entry_spans(span_exporter)
+    assert entry.status.status_code.name == "UNSET"
+    assert "error.type" not in entry.attributes
+    assert entry.attributes["qwenpaw.cancelled"] is True
+    assert entry.attributes["qwenpaw.cancellation.reason"] == expected_reason
 
 
 @pytest.mark.asyncio

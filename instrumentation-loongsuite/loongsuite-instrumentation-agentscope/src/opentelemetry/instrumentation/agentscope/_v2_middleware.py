@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -70,6 +71,15 @@ _FIRST_TOKEN_EVENT_TYPES = {
     "thinking_block_delta",
     "tool_call_delta",
 }
+
+
+@hook_advice("agentscope", "record_cancellation")
+def _record_cancellation(invocation: Any, error: BaseException | None) -> None:
+    if (
+        isinstance(error, asyncio.CancelledError)
+        and invocation.span is not None
+    ):
+        invocation.span.set_attribute("agentscope.cancelled", True)
 
 
 @dataclass
@@ -179,7 +189,10 @@ def _finish_llm(
     try:
         token = otel_context.attach(state.context)
         invocation.context_token = token
-        if error is None or isinstance(error, GeneratorExit):
+        _record_cancellation(invocation, error)
+        if error is None or isinstance(
+            error, (GeneratorExit, asyncio.CancelledError)
+        ):
             if error is None or getattr(state.last_chunk, "is_last", False):
                 _finish_llm_invocation(invocation, state.last_chunk)
             state.handler.stop_llm(invocation)
@@ -240,6 +253,13 @@ def _detach_stream_context(token: object | None) -> None:
 
 @hook_advice("agentscope", "record_agent_chunk")
 def _record_agent_chunk(state: _AgentState, item: Any) -> None:
+    # AgentScope may consume CancelledError and emit an interrupted reply
+    # instead. Preserve that signal without changing the framework behavior.
+    reason = getattr(item, "finished_reason", None)
+    if getattr(reason, "value", reason) == "interrupted":
+        if state.invocation.span is not None:
+            state.invocation.span.set_attribute("agentscope.cancelled", True)
+        state.invocation.finish_reasons = ["interrupted"]
     if not state.first_token_seen and _is_first_token_event(item):
         state.invocation.monotonic_first_token_s = timeit.default_timer()
         state.first_token_seen = True
@@ -268,7 +288,10 @@ def _finish_agent(
                 invocation.input_tokens = state.last_msg.usage.input_tokens
                 invocation.output_tokens = state.last_msg.usage.output_tokens
                 _extract_cache_tokens(state.last_msg.usage, invocation)
-        if error is None or isinstance(error, GeneratorExit):
+        _record_cancellation(invocation, error)
+        if error is None or isinstance(
+            error, (GeneratorExit, asyncio.CancelledError)
+        ):
             state.handler.stop_invoke_agent(invocation)
         else:
             state.handler.fail_invoke_agent(
@@ -458,7 +481,9 @@ def _finish_tool(
     state.tool_finalized = True
 
     invocation = state.tool_invocation
-    if error is None or isinstance(error, GeneratorExit):
+    if error is None or isinstance(
+        error, (GeneratorExit, asyncio.CancelledError)
+    ):
         if isinstance(state.last_item, ToolResponse):
             invocation.tool_call_result = _jsonable(
                 _blocks_to_parts(state.last_item.content)
@@ -471,7 +496,10 @@ def _finish_tool(
     try:
         token = otel_context.attach(state.tool_context)
         invocation.context_token = token
-        if error is None or isinstance(error, GeneratorExit):
+        _record_cancellation(invocation, error)
+        if error is None or isinstance(
+            error, (GeneratorExit, asyncio.CancelledError)
+        ):
             state.handler.stop_execute_tool(invocation)
         else:
             state.handler.fail_execute_tool(
@@ -505,7 +533,10 @@ def _finish_react(
     failure = error
     if failure is None:
         failure = state.error
-    if isinstance(failure, GeneratorExit):
+    _record_cancellation(invocation, failure)
+    if isinstance(failure, (GeneratorExit, asyncio.CancelledError)):
+        if isinstance(failure, asyncio.CancelledError):
+            invocation.finish_reason = None
         failure = None
 
     token = None
