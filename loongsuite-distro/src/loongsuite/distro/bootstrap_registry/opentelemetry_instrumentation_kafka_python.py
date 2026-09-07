@@ -16,13 +16,13 @@
 # RUN `python scripts/loongsuite/generate_loongsuite_bootstrap.py` TO REGENERATE.
 #
 # Generated with options:
-#   --upstream-version: (from source)
-#   --loongsuite-version: (from source)
+#   --upstream-version: 0.60b1
+#   --loongsuite-version: 0.9.0
 
 REGISTRY = {
     "source": "upstream",
     "package": "opentelemetry-instrumentation-kafka-python",
-    "instrumentation": "opentelemetry-instrumentation-kafka-python==0.62b0.dev",
+    "instrumentation": "opentelemetry-instrumentation-kafka-python==0.60b1",
     "libraries": [
         "kafka-python >= 2.0, < 3.0",
         "kafka-python-ng >= 2.0, < 3.0",

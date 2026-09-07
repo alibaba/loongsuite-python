@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
 ### Added
 
 - Add Strands Agents instrumentation using the shared LoongSuite GenAI utility

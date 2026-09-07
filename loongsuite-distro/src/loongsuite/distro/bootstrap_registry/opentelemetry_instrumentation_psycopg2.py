@@ -16,13 +16,13 @@
 # RUN `python scripts/loongsuite/generate_loongsuite_bootstrap.py` TO REGENERATE.
 #
 # Generated with options:
-#   --upstream-version: (from source)
-#   --loongsuite-version: (from source)
+#   --upstream-version: 0.60b1
+#   --loongsuite-version: 0.9.0
 
 REGISTRY = {
     "source": "upstream",
     "package": "opentelemetry-instrumentation-psycopg2",
-    "instrumentation": "opentelemetry-instrumentation-psycopg2==0.62b0.dev",
+    "instrumentation": "opentelemetry-instrumentation-psycopg2==0.60b1",
     "libraries": [
         "psycopg2 >= 2.7.3.1",
         "psycopg2-binary >= 2.7.3.1",
