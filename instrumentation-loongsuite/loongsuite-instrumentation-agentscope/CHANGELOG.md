@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Capture cache-read and cache-creation input tokens in AgentScope v1 and v2,
+  including final streaming and v2 agent usage, without adding cached tokens
+  to input totals.
 - Split AgentScope v2 cumulative assistant history at tool results, preserving
   chronological assistant/tool roles without changing the application context.
 - Respect the model formatter's thinking-input capability in LLM history and

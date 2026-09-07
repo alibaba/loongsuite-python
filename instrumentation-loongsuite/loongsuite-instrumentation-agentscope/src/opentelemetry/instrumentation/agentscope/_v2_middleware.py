@@ -60,6 +60,7 @@ from opentelemetry.util.genai.types import (
 )
 
 from ._skill import _enrich_skill_metadata
+from ._usage import _extract_cache_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,7 @@ def _finish_agent(
             if state.last_msg.usage is not None:
                 invocation.input_tokens = state.last_msg.usage.input_tokens
                 invocation.output_tokens = state.last_msg.usage.output_tokens
+                _extract_cache_tokens(state.last_msg.usage, invocation)
         if error is None or isinstance(error, GeneratorExit):
             state.handler.stop_invoke_agent(invocation)
         else:
@@ -1006,6 +1008,7 @@ def _finish_llm_invocation(
     if usage is not None:
         invocation.input_tokens = getattr(usage, "input_tokens", None)
         invocation.output_tokens = getattr(usage, "output_tokens", None)
+        _extract_cache_tokens(usage, invocation)
 
 
 def _messages_to_inputs(

@@ -39,9 +39,14 @@ from agentscope.message import (  # noqa: E402
     ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
+    Usage,
     UserMsg,
 )
-from agentscope.model import ChatResponse, DashScopeChatModel  # noqa: E402
+from agentscope.model import (  # noqa: E402
+    ChatResponse,
+    ChatUsage,
+    DashScopeChatModel,
+)
 from agentscope.tool import ToolResponse  # noqa: E402
 
 from opentelemetry import baggage, context  # noqa: E402
@@ -673,6 +678,109 @@ async def test_v2_streaming_model_call_captures_input_and_output_content(
     assert input_messages[0]["parts"][0]["content"] == "hello"
     assert output_messages[0]["role"] == "assistant"
     assert output_messages[0]["parts"][0]["content"] == "done"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("cache_read,cache_creation", [(100, 40), (0, 0)])
+async def test_v2_model_cache_usage(
+    instrument, span_exporter, streaming, cache_read, cache_creation
+):
+    agent = Agent(
+        name="cache_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=streaming),
+    )
+    middleware = _middleware(agent._model_call_middlewares)
+    response = ChatResponse(
+        content=[TextBlock(text="done")],
+        usage=ChatUsage(
+            input_tokens=200,
+            output_tokens=10,
+            time=0.1,
+            cache_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_creation,
+        ),
+        is_last=True,
+    )
+    calls = 0
+
+    async def handler(**kwargs):
+        nonlocal calls
+        calls += 1
+
+        async def chunks():
+            yield ChatResponse(
+                content=[TextBlock(text="partial")],
+                usage=ChatUsage(150, 5, 0.05, cache_input_tokens=75),
+                is_last=False,
+            )
+            yield response
+
+        return chunks() if streaming else response
+
+    result = await middleware.on_model_call(
+        agent,
+        {"current_model": agent.model, "messages": []},
+        handler,
+    )
+    if streaming:
+        chunks = [chunk async for chunk in result]
+        assert chunks[-1] is response
+    else:
+        assert result is response
+    assert calls == 1
+    [span] = _spans_by_operation(span_exporter.get_finished_spans(), "chat")
+    assert (
+        span.attributes["gen_ai.usage.cache_read.input_tokens"] == cache_read
+    )
+    assert (
+        span.attributes["gen_ai.usage.cache_creation.input_tokens"]
+        == cache_creation
+    )
+    assert span.attributes["gen_ai.usage.input_tokens"] == 200
+    assert span.attributes["gen_ai.usage.output_tokens"] == 10
+
+
+@pytest.mark.parametrize("cache_read,cache_creation", [(100, 40), (0, 0)])
+async def test_v2_agent_cache_usage(
+    instrument, span_exporter, cache_read, cache_creation
+):
+    agent = Agent(
+        name="cache_agent",
+        system_prompt="Reply briefly.",
+        model=_make_model(stream=False),
+    )
+    middleware = _middleware(agent._reply_middlewares)
+    expected = Msg(
+        name="assistant",
+        role="assistant",
+        content=[TextBlock(text="done")],
+        usage=Usage(
+            input_tokens=200,
+            output_tokens=10,
+            cache_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_creation,
+        ),
+    )
+
+    async def handler(**kwargs):
+        yield expected
+
+    assert [
+        msg
+        async for msg in middleware.on_reply(agent, {"inputs": []}, handler)
+    ] == [expected]
+    [span] = _spans_by_operation(
+        span_exporter.get_finished_spans(), "invoke_agent"
+    )
+    assert (
+        span.attributes["gen_ai.usage.cache_read.input_tokens"] == cache_read
+    )
+    assert (
+        span.attributes["gen_ai.usage.cache_creation.input_tokens"]
+        == cache_creation
+    )
+    assert span.attributes["gen_ai.usage.input_tokens"] == 200
 
 
 async def test_v2_reply_stream_survives_cross_task_heartbeat(
@@ -1532,6 +1640,8 @@ async def test_v2_agent_non_streaming_e2e(instrument, span_exporter):
     for span in spans:
         assert span.attributes["gen_ai.session.id"] == "entry-session"
         assert span.attributes["gen_ai.conversation.id"] == "entry-session"
+    [llm_span] = _spans_by_operation(spans, "chat")
+    assert llm_span.attributes["gen_ai.usage.cache_read.input_tokens"] == 0
     assert baggage.get_baggage("gen_ai.session.id") is None
 
 
@@ -1556,6 +1666,11 @@ async def test_v2_agent_streaming_e2e(instrument, span_exporter):
         event.__class__.__name__ == "TextBlockDeltaEvent" for event in events
     )
     _assert_agent_and_llm_spans(span_exporter.get_finished_spans())
+
+    [llm_span] = _spans_by_operation(
+        span_exporter.get_finished_spans(), "chat"
+    )
+    assert llm_span.attributes["gen_ai.usage.cache_read.input_tokens"] == 0
 
 
 @pytest.mark.vcr(record_mode="none")

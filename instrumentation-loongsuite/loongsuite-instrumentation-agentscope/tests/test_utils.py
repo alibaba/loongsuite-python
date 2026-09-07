@@ -19,6 +19,7 @@ Tests for utility functions in opentelemetry.instrumentation.agentscope.utils
 
 from types import SimpleNamespace
 
+import pytest
 from agentscope.message import Msg, ToolResultBlock
 from agentscope.tracing._converter import (
     _convert_block_to_part as _convert_block_to_part_framework,
@@ -27,6 +28,10 @@ from agentscope.tracing._converter import (
 from opentelemetry import baggage
 from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.agentscope import utils as utils_module
+from opentelemetry.instrumentation.agentscope._usage import (
+    _extract_cache_tokens,
+    _safe_get,
+)
 from opentelemetry.instrumentation.agentscope.utils import (
     _convert_block_to_part as _convert_block_to_part_local,
 )
@@ -43,7 +48,81 @@ from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import
     GEN_AI_USER_ID,
 )
 from opentelemetry.util.genai.extended_types import ReactStepInvocation
-from opentelemetry.util.genai.types import ToolCallResponse
+from opentelemetry.util.genai.types import LLMInvocation, ToolCallResponse
+
+
+@pytest.mark.parametrize(
+    "usage,read,creation",
+    [
+        (None, None, None),
+        ({"input_tokens": 200}, None, None),
+        (
+            {"cache_input_tokens": 100, "cache_creation_input_tokens": 40},
+            100,
+            40,
+        ),
+        ({"cache_read_input_tokens": 80, "cache_input_tokens": 100}, 80, None),
+        ({"prompt_tokens_details": {"cached_tokens": 70}}, 70, None),
+        (
+            SimpleNamespace(
+                prompt_tokens_details=SimpleNamespace(cached_tokens=60)
+            ),
+            60,
+            None,
+        ),
+        (
+            {
+                "cache_creation_input_tokens": 0,
+                "prompt_tokens_details": {"cached_tokens": 50},
+            },
+            50,
+            0,
+        ),
+        (
+            {
+                "cache_read_input_tokens": 0,
+                "prompt_tokens_details": {
+                    "cached_tokens": 90,
+                    "cache_creation_input_tokens": 30,
+                },
+            },
+            0,
+            30,
+        ),
+    ],
+)
+def test_extract_cache_tokens(usage, read, creation):
+    invocation = LLMInvocation(input_tokens=200, output_tokens=10)
+    _extract_cache_tokens(usage, invocation)
+    assert invocation.usage_cache_read_input_tokens == read
+    assert invocation.usage_cache_creation_input_tokens == creation
+    assert invocation.input_tokens == 200
+    assert invocation.output_tokens == 10
+
+
+def test_cache_usage_missing_dict_attributes():
+    class DictUsage(dict):
+        def __getattr__(self, key):
+            return self[key]
+
+    usage = DictUsage(cache_input_tokens=0)
+    assert _safe_get(usage, "missing") is None
+    invocation = LLMInvocation()
+    _extract_cache_tokens(usage, invocation)
+    assert invocation.usage_cache_read_input_tokens == 0
+    assert invocation.usage_cache_creation_input_tokens is None
+
+
+def test_cache_usage_broken_property_is_fail_open():
+    class BrokenUsage:
+        @property
+        def cache_creation_input_tokens(self):
+            raise RuntimeError("usage accessor failed")
+
+    invocation = LLMInvocation(input_tokens=200)
+    _extract_cache_tokens(BrokenUsage(), invocation)
+    assert invocation.input_tokens == 200
+    assert invocation.usage_cache_read_input_tokens is None
 
 
 class TestUtils:
