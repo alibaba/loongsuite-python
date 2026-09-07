@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import importlib.metadata
 from types import ModuleType
+from unittest.mock import Mock
+
+import pytest
 
 from opentelemetry.instrumentation.qwenpaw import (
     CoPawInstrumentor,
@@ -92,6 +95,66 @@ def test_runtime_detection_falls_back_to_legacy_copaw(monkeypatch):
     assert QwenPawInstrumentor().instrumentation_dependencies() == (
         "copaw >= 0.1.0, <= 1.0.2",
     )
+
+
+@pytest.mark.parametrize(
+    "version, module_name, method_name, enables_dream",
+    [
+        (
+            _fake_qwenpaw_version,
+            "qwenpaw.app.runner.runner",
+            "AgentRunner.query_handler",
+            False,
+        ),
+        (
+            _fake_copaw_version,
+            "copaw.app.runner.runner",
+            "AgentRunner.query_handler",
+            False,
+        ),
+        (
+            _fake_qwenpaw_v2_version,
+            "qwenpaw.runtime.runtime",
+            "Runtime.run",
+            True,
+        ),
+    ],
+    ids=["qwenpaw-v1", "legacy-copaw", "qwenpaw-v2"],
+)
+def test_dream_hook_only_enabled_for_v2(
+    monkeypatch, version, module_name, method_name, enables_dream
+):
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.qwenpaw.package.version", version
+    )
+    wrap = Mock()
+    dream = Mock()
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.qwenpaw.wrap_function_wrapper", wrap
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.qwenpaw.instrument_dream", dream
+    )
+    monkeypatch.setattr(
+        "opentelemetry.instrumentation.qwenpaw.ExtendedTelemetryHandler",
+        Mock(),
+    )
+    inst = QwenPawInstrumentor()
+    try:
+        inst._instrument()
+        # Entry instrumentation must remain enabled on every supported runtime.
+        wrap.assert_called_once()
+        assert wrap.call_args.args[:2] == (module_name, method_name)
+        if enables_dream:
+            dream.assert_called_once_with()
+            assert inst._dream_class is dream.return_value
+        else:
+            dream.assert_not_called()
+            assert inst._dream_class is None
+    finally:
+        # No real wrappers were installed; restore the singleton's test state.
+        inst._handler = None
+        inst._dream_class = None
 
 
 def test_uninstrument_handles_qwenpaw_runner(monkeypatch):

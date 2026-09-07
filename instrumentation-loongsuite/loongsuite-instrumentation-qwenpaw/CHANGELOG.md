@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Limit Dream tests to the QwenPaw 2 runtime and verify that QwenPaw 1 and
+  legacy CoPaw retain Entry instrumentation without enabling Dream hooks.
+
 - Propagate the owning agent name during QwenPaw 2 ReMe Dream calls so
   instrumented downstream LLM spans carry `gen_ai.agent.name`. Restore the
   caller context on completion, failure, or cancellation; no agent ID is added.

@@ -19,8 +19,20 @@ from types import SimpleNamespace
 import pytest
 
 from opentelemetry import baggage, context
+from opentelemetry.instrumentation.qwenpaw.package import (
+    get_installed_runtime_targets,
+)
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import LLMInvocation
+
+if not any(
+    target.wrapper_kind == "runtime"
+    for target in get_installed_runtime_targets()
+):
+    # QwenPaw 1 also exposes the ReMe module, but not the Dream runtime API.
+    pytest.skip(
+        "Dream tests require QwenPaw 2 runtime", allow_module_level=True
+    )
 
 memory = pytest.importorskip("qwenpaw.agents.memory.reme_light_memory_manager")
 config = pytest.importorskip("qwenpaw.config.config")
