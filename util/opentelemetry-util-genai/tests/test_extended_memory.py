@@ -18,9 +18,9 @@ from typing import Any, Mapping
 from unittest.mock import patch
 
 from opentelemetry import trace
-from opentelemetry.instrumentation._semconv import (
+from opentelemetry.util.genai._configuration import (
     OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
+    is_experimental_mode,
 )
 
 # Backward compatibility for InMemoryLogExporter -> InMemoryLogRecordExporter rename
@@ -97,8 +97,8 @@ def patch_env_vars(stability_mode, content_capturing=None, emit_event=None):
         @patch.dict(os.environ, env_vars)
         def wrapper(*args, **kwargs):
             # Reset state.
-            _OpenTelemetrySemanticConventionStability._initialized = False
-            _OpenTelemetrySemanticConventionStability._initialize()
+            is_experimental_mode.cache_clear()
+            is_experimental_mode()
             return test_case(*args, **kwargs)
 
         return wrapper

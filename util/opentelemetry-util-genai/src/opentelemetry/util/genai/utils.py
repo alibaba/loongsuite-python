@@ -19,11 +19,7 @@ from base64 import b64encode
 from functools import partial
 from typing import Any, List, Optional
 
-from opentelemetry.instrumentation._semconv import (
-    _OpenTelemetrySemanticConventionStability,
-    _OpenTelemetryStabilitySignalType,
-    _StabilityMode,
-)
+from opentelemetry.util.genai._configuration import is_experimental_mode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
@@ -35,26 +31,6 @@ from opentelemetry.util.genai.extended_environment_variables import (  # pylint:
 from opentelemetry.util.genai.types import ContentCapturingMode
 
 logger = logging.getLogger(__name__)
-
-
-def is_experimental_mode() -> bool:
-    # LoongSuite Extension (FIXME): genai-util should not depend on initialization flows in instrumentation packages; otherwise it cannot be delivered as a standalone SDK.
-    # Bypass the initialization logic of instrumentation package by directly accessing the internal state.
-    try:
-        if not _OpenTelemetrySemanticConventionStability._initialized:
-            _OpenTelemetrySemanticConventionStability._initialize()
-    except (ImportError, AttributeError):
-        logger.debug(
-            "Failed to initialize _OpenTelemetrySemanticConventionStability, using default value."
-        )
-        return False
-
-    return (
-        _OpenTelemetrySemanticConventionStability._get_opentelemetry_stability_opt_in_mode(
-            _OpenTelemetryStabilitySignalType.GEN_AI,
-        )
-        is _StabilityMode.GEN_AI_LATEST_EXPERIMENTAL
-    )
 
 
 def get_content_capturing_mode() -> ContentCapturingMode:

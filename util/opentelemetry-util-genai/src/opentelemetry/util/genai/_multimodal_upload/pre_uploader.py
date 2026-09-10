@@ -41,7 +41,6 @@ from urllib.parse import urlparse
 import httpx
 
 from opentelemetry import trace as ot_trace
-from opentelemetry.instrumentation.utils import suppress_http_instrumentation
 from opentelemetry.trace import SpanContext
 
 # LoongSuite Extension: For Python 3.8 Compatibility
@@ -50,6 +49,7 @@ from opentelemetry.util.genai._multimodal_upload._base import (
     PreUploader,
     PreUploadItem,
 )
+from opentelemetry.util.genai._suppression import suppress_http_instrumentation
 from opentelemetry.util.genai.extended_environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH,
 )

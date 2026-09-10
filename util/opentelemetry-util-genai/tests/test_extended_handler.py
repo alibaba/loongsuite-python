@@ -26,10 +26,6 @@ from opentelemetry import baggage as baggage_api
 from opentelemetry import context as context_api
 from opentelemetry import trace
 from opentelemetry.baggage import get_all as get_all_baggage
-from opentelemetry.instrumentation._semconv import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
-)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (  # pylint: disable=no-name-in-module
     InMemoryLogRecordExporter,
@@ -50,6 +46,10 @@ from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._configuration import (
+    OTEL_SEMCONV_STABILITY_OPT_IN,
+    is_experimental_mode,
+)
 from opentelemetry.util.genai._multimodal_processing import (
     MultimodalProcessingMixin,
     _MultimodalAsyncTask,
@@ -133,8 +133,8 @@ def patch_env_vars(
         @patch.dict(os.environ, env_vars)
         def wrapper(*args, **kwargs):
             # Reset state.
-            _OpenTelemetrySemanticConventionStability._initialized = False
-            _OpenTelemetrySemanticConventionStability._initialize()
+            is_experimental_mode.cache_clear()
+            is_experimental_mode()
             return test_case(*args, **kwargs)
 
         return wrapper

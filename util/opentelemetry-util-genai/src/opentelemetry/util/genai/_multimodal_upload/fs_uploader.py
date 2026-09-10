@@ -34,8 +34,6 @@ from typing import Any, Deque, Dict, Optional, Tuple, cast
 import fsspec
 import httpx
 
-from opentelemetry.instrumentation.utils import suppress_http_instrumentation
-
 # LoongSuite Extension: For Python 3.8 Compatibility
 from opentelemetry.util.genai import compatible_hashlib as hashlib
 from opentelemetry.util.genai._multimodal_upload._base import (
@@ -46,6 +44,7 @@ from opentelemetry.util.genai._multimodal_upload.usage_recorder import (
     get_multimodal_usage_recorder,
     provider_label_from_protocol,
 )
+from opentelemetry.util.genai._suppression import suppress_http_instrumentation
 from opentelemetry.util.genai.extended_environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_SSL_VERIFY,
     OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH,

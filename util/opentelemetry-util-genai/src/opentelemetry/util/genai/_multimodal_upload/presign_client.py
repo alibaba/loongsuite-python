@@ -31,7 +31,7 @@ from typing import Any, Dict, Mapping, Optional
 
 import httpx
 
-from opentelemetry.instrumentation.utils import suppress_http_instrumentation
+from opentelemetry.util.genai._suppression import suppress_http_instrumentation
 
 _logger = logging.getLogger(__name__)
 

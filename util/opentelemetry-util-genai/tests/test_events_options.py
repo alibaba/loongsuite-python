@@ -16,9 +16,9 @@ import os
 import unittest
 from unittest.mock import patch
 
-from opentelemetry.instrumentation._semconv import (
+from opentelemetry.util.genai._configuration import (
     OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
+    is_experimental_mode,
 )
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -41,8 +41,8 @@ def patch_env_vars(stability_mode, content_capturing, emit_event):
         )
         def wrapper(*args, **kwargs):
             # Reset state.
-            _OpenTelemetrySemanticConventionStability._initialized = False
-            _OpenTelemetrySemanticConventionStability._initialize()
+            is_experimental_mode.cache_clear()
+            is_experimental_mode()
             return test_case(*args, **kwargs)
 
         return wrapper

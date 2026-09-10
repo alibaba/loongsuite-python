@@ -20,12 +20,13 @@
 # (opentelemetry-api/sdk/semantic-conventions from CORE_REPO).
 
 # Newest supported versions of external dependencies for qwen-agent tests.
-# numpy / soundfile / python-dateutil: see requirements.oldest.txt
+# numpy / soundfile / python-dateutil / tqdm: see requirements.oldest.txt
 
 qwen-agent>=0.0.20
 numpy>=1.24.0
 soundfile>=0.12.0
 python-dateutil>=2.8.0
+tqdm>=4.27.0
 pytest==7.4.4
 pytest-vcr==1.0.2
 vcrpy>=4.2.0
