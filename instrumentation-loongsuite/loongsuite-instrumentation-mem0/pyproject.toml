@@ -41,8 +41,8 @@ instruments = [
 mem0 = "opentelemetry.instrumentation.mem0:Mem0Instrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-mem0"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-mem0"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/mem0/version.py"

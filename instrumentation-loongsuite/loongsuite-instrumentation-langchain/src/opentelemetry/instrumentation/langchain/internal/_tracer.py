@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import logging
 import timeit
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import RLock
 from typing import Any, Literal, Optional
 from uuid import UUID
@@ -51,6 +51,7 @@ from langchain_core.tracers.schemas import Run
 from opentelemetry import context as otel_context
 from opentelemetry.context import Context
 from opentelemetry.instrumentation.langchain.internal._utils import (
+    DEEPAGENTS_REACT_STEP_NODE,
     LANGGRAPH_REACT_STEP_NODE,
     _documents_to_retrieval_documents,
     _extract_finish_reasons,
@@ -62,6 +63,7 @@ from opentelemetry.instrumentation.langchain.internal._utils import (
     _extract_response_model,
     _extract_token_usage,
     _extract_tool_definitions,
+    _has_deepagents_metadata,
     _has_langgraph_react_metadata,
     _is_agent_run,
     _safe_json,
@@ -94,6 +96,7 @@ from opentelemetry.util.genai.types import (
     LLMInvocation,
     OutputMessage,
     Text,
+    ToolCall,
 )
 from opentelemetry.util.genai.utils import (
     ContentCapturingMode,
@@ -122,6 +125,11 @@ class _RunData:
     original_context: Context | None = None
     is_langgraph_react: bool = False
     inside_langgraph_react: bool = False
+    is_deepagents_react: bool = False
+    inside_deepagents_react: bool = False
+    deepagents_skills_by_path: dict[str, dict[str, Any]] = field(
+        default_factory=dict
+    )
 
 
 def _should_capture_chain_content() -> bool:
@@ -139,6 +147,35 @@ def _should_capture_chain_content() -> bool:
             exc_info=True,
         )
         return False
+
+
+def _extract_tool_call_arguments(inputs: Any) -> Any:
+    """Extract tool call arguments without dropping structured tool inputs."""
+    if not isinstance(inputs, dict):
+        return inputs if inputs is not None else ""
+    if "input" in inputs:
+        return inputs.get("input")
+    if "query" in inputs:
+        return inputs.get("query")
+    return dict(inputs) if inputs else ""
+
+
+def _extract_deepagents_skills_metadata(
+    outputs: Any,
+) -> list[dict[str, Any]] | None:
+    """Extract SkillsMiddleware output across observed LangChain shapes."""
+    if not isinstance(outputs, dict):
+        return None
+
+    candidates = [outputs.get("skills_metadata")]
+    output = outputs.get("output")
+    if isinstance(output, dict):
+        candidates.append(output.get("skills_metadata"))
+
+    for candidate in candidates:
+        if isinstance(candidate, list):
+            return [dict(item) for item in candidate if isinstance(item, dict)]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +307,7 @@ class LoongsuiteTracer(BaseTracer):
             rd = _RunData(
                 run_kind="llm",
                 span=invocation.span,
-                context=set_span_in_context(invocation.span)
+                context=otel_context.get_current()
                 if invocation.span
                 else None,
                 invocation=invocation,
@@ -317,24 +354,25 @@ class LoongsuiteTracer(BaseTracer):
         try:
             if _is_agent_run(run):
                 self._start_agent(run)
-            elif _has_langgraph_react_metadata(run):
-                self._handle_langgraph_chain_start(run)
+            elif _has_langgraph_react_metadata(
+                run
+            ) or _has_deepagents_metadata(run):
+                self._handle_react_chain_start(run)
             else:
                 self._start_chain(run)
         except Exception:
             logger.debug("Failed to start Chain/Agent span", exc_info=True)
 
-    def _handle_langgraph_chain_start(self, run: Run) -> None:
-        """Route a chain start that carries LangGraph ReAct metadata.
+    def _handle_react_chain_start(self, run: Run) -> None:
+        """Route a chain start that carries LoongSuite ReAct metadata.
 
         Because ``config["metadata"]`` propagates to child callbacks,
         both the graph-level run and its child nodes carry the flag.
-        We disambiguate by checking whether any ancestor is a LangGraph
-        ReAct agent (``is_langgraph_react``) or inside one
-        (``inside_langgraph_react``):
+        We disambiguate by checking whether any ancestor is a marked
+        ReAct-style agent or inside one:
 
-        * **Inside LangGraph agent** → child node (chain span, with
-          possible ReAct step transition).
+        * **Inside marked agent** → child node (chain span, with possible
+          ReAct step transition).
         * **Otherwise** → top-level graph → create Agent span.
         """
         parent_id = getattr(run, "parent_run_id", None)
@@ -342,11 +380,17 @@ class LoongsuiteTracer(BaseTracer):
             parent_rd = self._runs.get(parent_id) if parent_id else None
 
         inside = parent_rd is not None and (
-            parent_rd.is_langgraph_react or parent_rd.inside_langgraph_react
+            parent_rd.is_langgraph_react
+            or parent_rd.inside_langgraph_react
+            or parent_rd.is_deepagents_react
+            or parent_rd.inside_deepagents_react
         )
 
         if inside:
-            self._maybe_enter_langgraph_react_step(run)
+            if parent_rd is not None and parent_rd.is_deepagents_react:
+                self._maybe_enter_deepagents_react_step(run)
+            elif parent_rd is not None and parent_rd.is_langgraph_react:
+                self._maybe_enter_langgraph_react_step(run)
             self._start_chain(run)
         else:
             self._start_agent(run)
@@ -413,11 +457,10 @@ class LoongsuiteTracer(BaseTracer):
         rd = _RunData(
             run_kind="agent",
             span=invocation.span,
-            context=set_span_in_context(invocation.span)
-            if invocation.span
-            else None,
+            context=otel_context.get_current() if invocation.span else None,
             invocation=invocation,
             is_langgraph_react=_has_langgraph_react_metadata(run),
+            is_deepagents_react=_has_deepagents_metadata(run),
         )
         with self._lock:
             self._runs[run.id] = rd
@@ -437,18 +480,29 @@ class LoongsuiteTracer(BaseTracer):
             span.set_attribute(INPUT_VALUE, _safe_json(inputs))
 
         # Attach chain span context so non-LangChain children nest correctly.
-        ctx = set_span_in_context(span)
+        current_context = (
+            parent_ctx
+            if parent_ctx is not None
+            else otel_context.get_current()
+        )
+        ctx = set_span_in_context(span, current_context)
         token = otel_context.attach(ctx)
 
-        # Propagate inside_langgraph_react from parent so that
+        # Propagate framework-specific ReAct context from parent so that
         # grandchildren of the graph are also recognised as internal.
         inside_lg = False
+        inside_deepagents = False
+        deepagents_skills_by_path: dict[str, dict[str, Any]] = {}
         parent_id = getattr(run, "parent_run_id", None)
         if parent_id:
             with self._lock:
                 p = self._runs.get(parent_id)
             if p is not None:
                 inside_lg = p.is_langgraph_react or p.inside_langgraph_react
+                inside_deepagents = (
+                    p.is_deepagents_react or p.inside_deepagents_react
+                )
+                deepagents_skills_by_path = dict(p.deepagents_skills_by_path)
 
         rd = _RunData(
             run_kind="chain",
@@ -456,6 +510,8 @@ class LoongsuiteTracer(BaseTracer):
             context=ctx,
             context_token=token,
             inside_langgraph_react=inside_lg,
+            inside_deepagents_react=inside_deepagents,
+            deepagents_skills_by_path=deepagents_skills_by_path,
         )
         with self._lock:
             self._runs[run.id] = rd
@@ -466,6 +522,7 @@ class LoongsuiteTracer(BaseTracer):
         if rd is None:
             return
         try:
+            self._record_deepagents_skill_metadata(run)
             if rd.run_kind == "agent":
                 self._stop_agent(run, rd)
             elif rd.run_kind == "chain":
@@ -562,21 +619,21 @@ class LoongsuiteTracer(BaseTracer):
         try:
             parent_ctx = self._get_parent_context(run)
             inputs = getattr(run, "inputs", None) or {}
-            input_str = inputs.get("input") or inputs.get("query") or ""
-            if not isinstance(input_str, str):
-                input_str = _safe_json(input_str)
+            tool_call_arguments = _extract_tool_call_arguments(inputs)
             extra = getattr(run, "extra", None) or {}
             tool_call_id = extra.get("tool_call_id")
             invocation = ExecuteToolInvocation(
                 tool_name=run.name or "unknown_tool",
-                tool_call_arguments=input_str,
+                tool_call_arguments=tool_call_arguments,
                 tool_call_id=tool_call_id,
+                tool_type="function",
             )
+            self._apply_deepagents_skill_attributes(run, invocation)
             self._handler.start_execute_tool(invocation, context=parent_ctx)
             rd = _RunData(
                 run_kind="tool",
                 span=invocation.span,
-                context=set_span_in_context(invocation.span)
+                context=otel_context.get_current()
                 if invocation.span
                 else None,
                 invocation=invocation,
@@ -634,7 +691,7 @@ class LoongsuiteTracer(BaseTracer):
             rd = _RunData(
                 run_kind="retriever",
                 span=invocation.span,
-                context=set_span_in_context(invocation.span)
+                context=otel_context.get_current()
                 if invocation.span
                 else None,
                 invocation=invocation,
@@ -705,6 +762,31 @@ class LoongsuiteTracer(BaseTracer):
 
         self._enter_react_step(parent_id)
 
+    def _maybe_enter_deepagents_react_step(self, run: Run) -> None:
+        """Start a ReAct STEP for DeepAgents model decision nodes.
+
+        DeepAgents is built through ``langchain.agents.create_agent`` and its
+        model decision node is named ``"model"``. Treat each direct ``model``
+        child of the marked DeepAgents root graph as one ReAct round.
+        """
+        parent_id = getattr(run, "parent_run_id", None)
+        if not parent_id:
+            return
+
+        with self._lock:
+            parent_rd = self._runs.get(parent_id)
+        if parent_rd is None or not parent_rd.is_deepagents_react:
+            return
+
+        chain_name = getattr(run, "name", "") or ""
+        if chain_name != DEEPAGENTS_REACT_STEP_NODE:
+            return
+
+        if parent_rd.active_step is not None:
+            self._exit_react_step(parent_id, "tool_calls")
+
+        self._enter_react_step(parent_id)
+
     # ------------------------------------------------------------------
     # ReAct Step — called from patch wrapper or callback detection
     # ------------------------------------------------------------------
@@ -724,7 +806,7 @@ class LoongsuiteTracer(BaseTracer):
         self._handler.start_react_step(inv, context=agent_rd.original_context)
 
         step_ctx = (
-            set_span_in_context(inv.span)
+            otel_context.get_current()
             if inv.span
             else agent_rd.original_context
         )
@@ -766,6 +848,90 @@ class LoongsuiteTracer(BaseTracer):
             agent_rd.context = agent_rd.original_context
 
     # ------------------------------------------------------------------
+    # DeepAgents skills
+    # ------------------------------------------------------------------
+
+    def _record_deepagents_skill_metadata(self, run: Run) -> None:
+        """Cache SkillsMiddleware metadata on the parent DeepAgents run."""
+        if not _has_deepagents_metadata(run):
+            return
+        if getattr(run, "name", "") != "SkillsMiddleware.before_agent":
+            return
+
+        outputs = getattr(run, "outputs", None) or {}
+        skills = _extract_deepagents_skills_metadata(outputs)
+        if skills is None:
+            return
+
+        skills_by_path = {
+            str(skill["path"]): dict(skill)
+            for skill in skills
+            if isinstance(skill, dict) and skill.get("path")
+        }
+        parent_id = getattr(run, "parent_run_id", None)
+        if parent_id is None:
+            return
+
+        with self._lock:
+            parent_rd = self._runs.get(parent_id)
+            if parent_rd is not None:
+                parent_rd.deepagents_skills_by_path = skills_by_path
+
+    def _apply_deepagents_skill_attributes(
+        self,
+        run: Run,
+        invocation: ExecuteToolInvocation,
+    ) -> None:
+        skill = self._match_deepagents_loaded_skill(run)
+        if skill is None:
+            return
+
+        skill_name = skill.get("name")
+        if skill_name:
+            invocation.skill_name = str(skill_name)
+
+        metadata = skill.get("metadata") if isinstance(skill, dict) else None
+        metadata = metadata if isinstance(metadata, dict) else {}
+        skill_id = metadata.get("id") or skill.get("id") or skill_name
+        if skill_id:
+            invocation.skill_id = str(skill_id)
+
+        skill_description = skill.get("description")
+        if skill_description:
+            invocation.skill_description = str(skill_description)
+
+        skill_version = metadata.get("version") or skill.get("version")
+        if skill_version:
+            invocation.skill_version = str(skill_version)
+
+    def _match_deepagents_loaded_skill(
+        self,
+        run: Run,
+    ) -> dict[str, Any] | None:
+        """Return skill metadata when read_file loads a registered SKILL.md."""
+        if not _has_deepagents_metadata(run):
+            return None
+        if (getattr(run, "name", "") or "") != "read_file":
+            return None
+
+        inputs = getattr(run, "inputs", None) or {}
+        if not isinstance(inputs, dict):
+            return None
+        file_path = inputs.get("file_path") or inputs.get("path")
+        if not isinstance(file_path, str) or not file_path:
+            return None
+
+        parent_id = getattr(run, "parent_run_id", None)
+        if parent_id is None:
+            return None
+
+        with self._lock:
+            parent_rd = self._runs.get(parent_id)
+            if parent_rd is None:
+                return None
+            return parent_rd.deepagents_skills_by_path.get(file_path)
+
+    # ------------------------------------------------------------------
     # Deep copy / copy — return self (shared singleton)
     # ------------------------------------------------------------------
 
@@ -791,6 +957,67 @@ def _extract_langgraph_input_message(msg: Any) -> InputMessage | None:
         role, content = msg
         if isinstance(content, str) and content:
             return InputMessage(role=str(role), parts=[Text(content=content)])
+        return None
+
+    # OpenAI-style message dict: {"role": "user", "content": "hello"}.
+    if isinstance(msg, dict):
+        content = msg.get("content")
+        if content is None:
+            content = msg.get("text")
+
+        parts: list[Any] = []
+        if isinstance(content, str) and content:
+            parts.append(Text(content=content))
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, str) and part:
+                    parts.append(Text(content=part))
+                elif isinstance(part, dict):
+                    text = part.get("text")
+                    if text is None:
+                        text = part.get("content")
+                    if isinstance(text, str) and text:
+                        parts.append(Text(content=text))
+
+        for tool_call in msg.get("tool_calls") or []:
+            if isinstance(tool_call, dict):
+                function = tool_call.get("function") or {}
+                if not isinstance(function, dict):
+                    function = {}
+                arguments = tool_call.get("args")
+                if arguments is None:
+                    arguments = tool_call.get("arguments")
+                if arguments is None:
+                    arguments = function.get("arguments", {})
+                parts.append(
+                    ToolCall(
+                        name=tool_call.get("name")
+                        or function.get("name")
+                        or "",
+                        arguments=arguments,
+                        id=tool_call.get("id"),
+                    )
+                )
+
+        if parts:
+            role = msg.get("role") or msg.get("type") or "user"
+            role_name = str(role).lower()
+            if role_name.endswith("_message"):
+                role_name = role_name[: -len("_message")]
+            elif role_name.endswith("message"):
+                role_name = role_name[: -len("message")]
+            role_map = {
+                "human": "user",
+                "ai": "assistant",
+                "system": "system",
+                "function": "tool",
+                "tool": "tool",
+                "chat": "user",
+            }
+            return InputMessage(
+                role=role_map.get(role_name, role_name),
+                parts=parts,
+            )
         return None
 
     # LangChain message object (HumanMessage, AIMessage, etc.)

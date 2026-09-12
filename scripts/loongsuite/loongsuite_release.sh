@@ -23,7 +23,7 @@
 #   Default (no --dry-run):
 #     1. Create release/{version} branch from main
 #     2. Generate bootstrap_gen.py
-#     3. Rename package names in pyproject.toml (opentelemetry-util-genai -> loongsuite-util-genai)
+#     3. Rename package names in pyproject.toml (opentelemetry-util-genai -> loongsuite-otel-util-genai)
 #     3.6 Pin __version__ in managed packages to the release version (PyPI train)
 #     4. Build PyPI + GitHub Release packages
 #     5. Verify artifacts
@@ -129,7 +129,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 RELEASE_BRANCH="release/${LOONGSUITE_VERSION}"
-TAR_NAME="loongsuite-python-agent-${LOONGSUITE_VERSION}.tar.gz"
+TAR_NAME="loongsuite-python-${LOONGSUITE_VERSION}.tar.gz"
 TAR_PATH="${REPO_ROOT}/dist/${TAR_NAME}"
 PYPI_DIST_DIR="${REPO_ROOT}/dist-pypi"
 RELEASE_NOTES_FILE="${REPO_ROOT}/dist/release-notes.md"
@@ -185,7 +185,7 @@ echo ""
 
 # ── Step 3.5: Rename packages in pyproject.toml (skip in dry-run) ──────────
 if [[ "$DRY_RUN" != "true" ]]; then
-  echo ">>> Step 3.5: Renaming opentelemetry-util-genai -> loongsuite-util-genai in pyproject.toml..."
+  echo ">>> Step 3.5: Renaming opentelemetry-util-genai -> loongsuite-otel-util-genai in pyproject.toml..."
   python scripts/loongsuite/collect_loongsuite_changelog.py \
     --version "$LOONGSUITE_VERSION"
   echo "    OK"
@@ -241,10 +241,10 @@ echo ""
 # ── Step 6: Verify tar contents ────────────────────────────────────────────
 echo ">>> Step 6: Verifying tar contents..."
 
-if tar -tzf "$TAR_PATH" | grep -q "loongsuite_util_genai"; then
-  echo "    WARN: loongsuite-util-genai in tar (should be on PyPI only)"
+if tar -tzf "$TAR_PATH" | grep -q "loongsuite_otel_util_genai"; then
+  echo "    WARN: loongsuite-otel-util-genai in tar (should be on PyPI only)"
 else
-  echo "    OK: loongsuite-util-genai not in tar (correct, on PyPI)"
+  echo "    OK: loongsuite-otel-util-genai not in tar (correct, on PyPI)"
 fi
 
 if tar -tzf "$TAR_PATH" | grep -q "opentelemetry_util_genai"; then
@@ -335,12 +335,12 @@ else
   echo "    Installing loongsuite-distro from local..."
   pip install -q -e ./loongsuite-distro
 
-  UTIL_WHL=$(ls "$PYPI_DIST_DIR"/loongsuite_util_genai-*.whl 2>/dev/null | head -1)
+  UTIL_WHL=$(ls "$PYPI_DIST_DIR"/loongsuite_otel_util_genai-*.whl 2>/dev/null | head -1)
   if [[ -n "$UTIL_WHL" ]]; then
-    echo "    Pre-installing loongsuite-util-genai from local build..."
+    echo "    Pre-installing loongsuite-otel-util-genai from local build..."
     pip install -q "$UTIL_WHL"
   else
-    echo "    ERROR: loongsuite-util-genai wheel not found in $PYPI_DIST_DIR"
+    echo "    ERROR: loongsuite-otel-util-genai wheel not found in $PYPI_DIST_DIR"
     deactivate
     rm -rf "$DRYRUN_VENV"
     exit 1
@@ -356,10 +356,10 @@ WL
     echo ""
     echo "    Verifying installed packages..."
 
-    if pip show loongsuite-util-genai &>/dev/null; then
-      echo "    OK: loongsuite-util-genai installed ($(pip show loongsuite-util-genai | grep Version:))"
+    if pip show loongsuite-otel-util-genai &>/dev/null; then
+      echo "    OK: loongsuite-otel-util-genai installed ($(pip show loongsuite-otel-util-genai | grep Version:))"
     else
-      echo "    WARN: loongsuite-util-genai not installed"
+      echo "    WARN: loongsuite-otel-util-genai not installed"
     fi
 
     if pip show opentelemetry-util-genai &>/dev/null; then
@@ -398,12 +398,12 @@ else
     echo "    WARN: gh CLI not found, skipping GitHub Release creation."
     echo "    Run manually:"
     echo "      gh release create v$LOONGSUITE_VERSION \\"
-    echo "        --title \"loongsuite-python-agent $LOONGSUITE_VERSION\" \\"
+    echo "        --title \"loongsuite-python $LOONGSUITE_VERSION\" \\"
     echo "        --notes-file $RELEASE_NOTES_FILE \\"
     echo "        $TAR_PATH"
   else
     gh release create "v${LOONGSUITE_VERSION}" \
-      --title "loongsuite-python-agent ${LOONGSUITE_VERSION}" \
+      --title "loongsuite-python ${LOONGSUITE_VERSION}" \
       --notes-file "$RELEASE_NOTES_FILE" \
       "$TAR_PATH"
     echo "    OK: GitHub Release v${LOONGSUITE_VERSION} created"
@@ -450,7 +450,7 @@ else
       --base main \
       --head "$POST_RELEASE_BRANCH" \
       --title "chore: post-release ${LOONGSUITE_VERSION} — archive changelogs & bump dev versions" \
-      --body "## Post-release updates for loongsuite-python-agent ${LOONGSUITE_VERSION}
+      --body "## Post-release updates for loongsuite-python ${LOONGSUITE_VERSION}
 
 Automated housekeeping after the \`${LOONGSUITE_VERSION}\` release:
 

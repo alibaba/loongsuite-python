@@ -1,7 +1,13 @@
 OpenTelemetry Util for GenAI - LoongSuite 扩展
 =================================================
 
-本文档描述 LoongSuite 对 OpenTelemetry GenAI Util 的扩展：适用范围、接入步骤与配置项。\ **对外发行**\ 时 PyPI 包名为 \ **loongsuite-util-genai**\ ；Python 导入命名空间仍为 \ ``opentelemetry.util.genai``\ （与上游 GenAI Util 一致，见下节）。本仓库源码目录为 \ ``util/opentelemetry-util-genai``\ 。
+本文档描述 LoongSuite 对 OpenTelemetry GenAI Util 的扩展：适用范围、接入步骤与配置项。\ **对外发行**\ 时 PyPI 包名为 \ **loongsuite-otel-util-genai**\ ；Python 导入命名空间仍为 \ ``opentelemetry.util.genai``\ （与上游 GenAI Util 一致，见下节）。本仓库源码目录为 \ ``util/opentelemetry-util-genai``\ 。
+
+.. note::
+
+   旧发行名 ``loongsuite-util-genai`` 仍可供历史安装使用，但新的 LoongSuite GenAI
+   工具库更新会发布到 ``loongsuite-otel-util-genai``。迁移时只需要更新 pip
+   依赖名；Python import 仍保持 ``opentelemetry.util.genai``。
 
 ------------------------------------------------------------------------
 1. 概述
@@ -12,7 +18,7 @@ OpenTelemetry Util for GenAI - LoongSuite 扩展
 
 本模块在设计与演进上作为 OpenTelemetry 生态中 GenAI Util（包名 ``opentelemetry-util-genai``）的扩展：在兼容上游 API 与约定方向的前提下，由 LoongSuite **先行落地** 更丰富、更完整的 GenAI 语义与属性模型，并在合入社区前于本仓库迭代。覆盖范围包括 Agent、检索、记忆、入口与 ReAct 等场景。
 
-**发行名称**：交付时，本模块以 **loongsuite-util-genai** 发布至制品库（如 PyPI）；安装后提供的仍是 ``opentelemetry.util.genai`` 包及 ``ExtendedTelemetryHandler`` 等扩展接口，与从本 monorepo 构建安装的产物一致。
+**发行名称**：交付时，本模块以 **loongsuite-otel-util-genai** 发布至制品库（如 PyPI）；安装后提供的仍是 ``opentelemetry.util.genai`` 包及 ``ExtendedTelemetryHandler`` 等扩展接口，与从本 monorepo 构建安装的产物一致。
 
 定位与能力
 ~~~~~~~~~~
@@ -22,7 +28,10 @@ OpenTelemetry Util for GenAI - LoongSuite 扩展
 本实现在上游 GenAI Util 能力之上提供扩展，主要包括：
 
 - **llm**：聊天/补全类调用；支持多模态消息的**外置存储与 URI 替换**（见第 4 节），减轻 Trace 体积。
-- **invoke_agent / create_agent**：Agent 调用与创建。
+- **invoke_agent / create_agent**：Agent 调用与创建；``invoke_agent`` 可将
+  Agent 名称写入 Baggage key ``gen_ai.agent.name``，使其下游 LLM、
+  工具、检索、ReAct step 等 GenAI 子 Span 自动带上
+  ``gen_ai.agent.name`` 属性。
 - **embedding**：向量嵌入。
 - **execute_tool**：工具/函数执行。
   - 当工具执行对应某个 skill 的加载动作时，可额外写入 ``gen_ai.skill.*`` 语义属性。
@@ -42,7 +51,7 @@ OpenTelemetry Util for GenAI - LoongSuite 扩展
 安装注意事项
 ~~~~~~~~~~~~
 
-- **与上游包并存**：**loongsuite-util-genai** 与社区发行 **opentelemetry-util-genai** 混装或重复指定时容易引发依赖解析冲突。**建议优先采用 LoongSuite 发行链路**，通过 ``loongsuite-instrument`` 及根目录 ``README.md`` 中的安装说明完成探针与本模块的组合安装与启动。
+- **与上游包并存**：**loongsuite-otel-util-genai** 与社区发行 **opentelemetry-util-genai** 混装或重复指定时容易引发依赖解析冲突。**建议优先采用 LoongSuite 发行链路**，通过 ``loongsuite-instrument`` 及根目录 ``README.md`` 中的安装说明完成探针与本模块的组合安装与启动。
 - **monorepo 本地安装探针时**：若 instrumentor 是从 **本仓库本地路径** 安装的（例如 ``pip install ./instrumentation-loongsuite/...``），则 **必须** 先从 **同一 monorepo 源码树** 安装本模块（例如 ``pip install -e ./util/opentelemetry-util-genai``）。否则安装 instrumentor 时，解析结果可能回落为**上游** GenAI Util，与本地探针版本不一致，导致扩展能力或行为不符合预期。
 
 2.1. 使用 LoongSuite / OpenTelemetry Instrumentation 接入
@@ -54,13 +63,13 @@ OpenTelemetry Util for GenAI - LoongSuite 扩展
 
 ::
 
-    pip install loongsuite-util-genai
+    pip install loongsuite-otel-util-genai
 
 从本 monorepo 本地安装时（与发行包等价源码树）::
 
     pip install -e ./util/opentelemetry-util-genai
 
-Framework 探针若已声明对本包的依赖，会随探针一并安装；单独手写 GenAI Span 时仍需安装 \ **loongsuite-util-genai**\ （或上述本地路径）。
+Framework 探针若已声明对本包的依赖，会随探针一并安装；单独手写 GenAI Span 时仍需安装 \ **loongsuite-otel-util-genai**\ （或上述本地路径）。
 
 **LLM 示例代码**
 
@@ -117,7 +126,7 @@ Framework 探针若已声明对本包的依赖，会随探针一并安装；单�
 
 ::
 
-    pip install loongsuite-util-genai opentelemetry-sdk
+    pip install loongsuite-otel-util-genai opentelemetry-sdk
 
 按需增加导出器，例如 ``opentelemetry-exporter-otlp``。
 
@@ -397,13 +406,86 @@ Framework 探针若已声明对本包的依赖，会随探针一并安装；单�
 
 ::
 
-    pip install loongsuite-util-genai[multimodal_upload]
+    pip install loongsuite-otel-util-genai[multimodal_upload]
 
-音频转码还需安装可选依赖：先执行 ``pip install loongsuite-util-genai``，再按 ``pyproject.toml`` 中 ``audio_conversion`` extra 的说明添加转码相关包（并打开对应环境变量）。
+音频转码还需安装可选依赖：先执行 ``pip install loongsuite-otel-util-genai``，再按 ``pyproject.toml`` 中 ``audio_conversion`` extra 的说明添加转码相关包（并打开对应环境变量）。
 
 **资源释放**：启用多模态时，\ ``ExtendedTelemetryHandler``\ 在首次初始化时注册 \ ``atexit``\ ，进程退出时依次关闭 Handler / PreUploader / Uploader。常驻服务可显式调用 \ ``ExtendedTelemetryHandler.shutdown()``\ （见第 5 节）。
 
 **自定义上传实现**：通过 ``pyproject.toml`` 中的 entry point ``opentelemetry_genai_multimodal_uploader``、``opentelemetry_genai_multimodal_pre_uploader`` 注册实现；本仓库默认提供 ``fs`` hook（见包内 ``pyproject.toml``）。
+
+**运行时动态配置**
+
+进程内维护一份多模态配置 snapshot（``MultimodalRuntimeConfig`` / ``MultimodalConfigSnapshot``）。启动时仍由上述环境变量完成 bootstrap；之后可通过公开 API 热更新，无需重启进程：
+
+::
+
+    from opentelemetry.util.genai._multimodal_upload import (
+        get_multimodal_config_snapshot,
+        update_multimodal_runtime_config,
+    )
+
+    update_multimodal_runtime_config(
+        upload_mode="both",
+        storage_base_path="file:///var/log/genai/multimodal",
+        uploader_hook_name="fs",
+        pre_uploader_hook_name="fs",
+    )
+    snapshot = get_multimodal_config_snapshot()
+
+策略字段（如 ``upload_mode``、``download_enabled``、``local_file_enabled``、
+``allowed_root_paths``）变更会递增 ``strategy_version``，立即作用于后续请求；
+构造字段（如 ``storage_base_path``、uploader/pre-uploader hook 名）变更会递增
+``uploader_generation``，并在下次上传前通过 ``get_or_rebuild_uploader_pair()``
+热重建 uploader/pre-uploader。
+
+**可选上传记录**：``FsUploader`` 终态成功/失败时会调用全局 ``MultimodalUsageRecorder``（默认 no-op）。需要时可通过 ``set_multimodal_usage_recorder()`` 注册自定义实现。
+
+预授权 OSS 模式（presign）
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+多模态数据落在服务端预授权的 OSS Bucket 里时，应用本地不持有任何 OSS AK/SK：每个对象上传前先用 LicenseKey 申请一个短时有效的预签名 URL，再直接把数据 ``PUT`` 到该 URL。
+
+Bucket 由服务端持有和决定，本地不需要（也无法）指定，因此对象地址不含 bucket，与 ``arms`` 模式同构：
+
+::
+
+    sls://{project}/{logstore}[/{prefix}]/{objectName}
+
+这个地址在上传发起前即可本地确定，所以 Span 属性同步写出、上传保持异步，两者不会不一致。实际存储位置为 ``{bucket}/{project}/{logstore}[/{prefix}]/{objectName}``，仅多一个服务端自持的 bucket 前缀。
+
+- hook 名：``presign``（亦接受 ``oss-presign`` / ``oss_presign`` / ``presigned-oss`` / ``presigned_oss`` 别名）。
+- 申请链路：``POST {endpoint}/apm/meta/api/v1/multimodal/upload/presign``，请求头 ``x-arms-license-key``、``x-cms-workspace``，请求体 ``{"project", "logstore", "objectName"}``。响应中的上传 URL 支持 ``uploadUrl`` / ``signedUrl`` / ``url`` 等字段名，可被 ``data`` / ``result`` 包裹，也允许响应体直接是一个裸 URL 文本；``method`` 缺省为 ``PUT``。
+- 上传阶段不自注入 ``Content-Type``：预签名 URL 的签名可能已覆盖该 header，客户端再加会导致 OSS 返回 403 SignatureDoesNotMatch。
+
+- 环境变量：
+
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY``：鉴权用的 LicenseKey，缺省回落到 ``ARMS_LICENSE_KEY``。**必填**，取不到时整条多模态链路降级为关闭。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE``：对象归属的 CMS workspace，缺省回落到 ``ARMS_WORKSPACE``；留空时由服务端按 LicenseKey 推导。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT``：申请预签名 URL 的 endpoint，需填写包含 http:// 或 https:// 的 base URL（不带末尾斜杠），原样追加 presign API 路径。挂载 ARMS 探针时可留空以复用其 OneEndpoint 探活结果，独立使用时\ **需显式配置**\ 。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT``：申请与上传超时（秒，默认 ``30``）。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX``：可选；给本应用所有对象加统一路径前缀，如 ``genai/my-app``。首尾 ``/`` 会被去掉，非法值（空段、``.``、``..``）记 warning 并视为未配置。
+  - ``APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT`` / ``_SLS_LOGSTORE``：对象地址与请求体里的 project / logstore。project 取不到时本模式整体降级；logstore 缺省为 ``logstore-multimodal``，该缺省值同时作用于 URI 与请求体，二者不会分叉。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET`` 在本模式下\ **已废弃且被忽略**\ ，仅对 ``oss`` hook 仍有意义。
+
+出于安全考虑，LicenseKey、workspace 与 endpoint 只从环境变量读取，\ **不允许**\ 通过运行时动态配置改写。
+
+::
+
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER=presign
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER=presign
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY='<your-license-key>'
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT=https://cn-hangzhou.log.aliyuncs.com
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX=genai/my-app
+    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT=proj-xtrace-xxx-cn-hangzhou
+    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_LOGSTORE=multimodal
+
+SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploader 与 pre-uploader 同时返回 ``None``，多模态链路整体降级为关闭：消息中的多模态内容保持原样，不会被替换成无法访问的 ``sls://`` URI。这样避开了“属性看起来正常、实际指向不存在的对象”这种更难排查的状态。
+
+反过来也要注意：地址在上传发起前就已写入属性，**属性被替换不代表上传成功**。确认是否真的落地要看上传链路日志里 presign 返回 200 且后续 OSS ``PUT ... 200 OK``。
+
+纯 SDK（手动埋点）方式下没有探针注入身份，presign 所需的 project、endpoint 与 LicenseKey 都必须显式配置。
 
 ------------------------------------------------------------------------
 5. 补充说明
@@ -463,4 +545,4 @@ Framework 探针若已声明对本包的依赖，会随探针一并安装；单�
 - OpenTelemetry GenAI Utils 设计说明：`Design Document <https://docs.google.com/document/d/1w9TbtKjuRX_wymS8DRSwPA03_VhrGlyx65hHAdNik1E/edit?tab=t.qneb4vabc1wc#heading=h.kh4j6stirken>`_
 - `OpenTelemetry 项目 <https://opentelemetry.io/>`_
 - `OpenTelemetry GenAI 语义约定 <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
-- LoongSuite Python Agent 仓库：`loongsuite-python-agent <https://github.com/alibaba/loongsuite-python-agent>`_（仓库根目录 ``README.md``：安装 Instrumentation 与 ``loongsuite-instrument`` 的 Quick start）
+- LoongSuite Python Agent 仓库：`loongsuite-python <https://github.com/alibaba/loongsuite-python>`_（仓库根目录 ``README.md``：安装 Instrumentation 与 ``loongsuite-instrument`` 的 Quick start）

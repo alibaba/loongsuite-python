@@ -18,6 +18,8 @@ Tests verify that the instrumented methods produce correct OpenTelemetry spans
 with the expected names, kinds, and attributes.
 """
 
+import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,6 +27,7 @@ from qwen_agent.agent import Agent
 from qwen_agent.llm.base import BaseChatModel
 from qwen_agent.llm.schema import ContentItem, FunctionCall, Message
 
+from opentelemetry.instrumentation.qwen_agent import QwenAgentInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -130,6 +133,50 @@ class TestLLMChatSpan:
             f"Expected 'dashscope', got attrs: {attrs}"
         )
 
+    def test_non_stream_chat_records_token_usage(
+        self, span_exporter, instrument
+    ):
+        """Non-streaming chat() should record token usage from Message.extra."""
+        model = _StubChatModel(
+            model="deepseek-v3", model_type="qwen_dashscope"
+        )
+
+        fake_response = [
+            Message(
+                role="assistant",
+                content="4",
+                extra={
+                    "model_service_info": SimpleNamespace(
+                        usage={
+                            "input_tokens": 21,
+                            "output_tokens": 1,
+                            "total_tokens": 22,
+                            "prompt_tokens_details": {"cached_tokens": 4},
+                        }
+                    )
+                },
+            )
+        ]
+
+        with patch.object(
+            _StubChatModel,
+            "_chat_no_stream",
+            return_value=fake_response,
+        ):
+            model.chat(
+                messages=[Message(role="user", content="What is 2+2?")],
+                stream=False,
+            )
+
+        spans = span_exporter.get_finished_spans()
+        chat_spans = [s for s in spans if s.name.startswith("chat")]
+        assert len(chat_spans) >= 1
+        attrs = dict(chat_spans[0].attributes or {})
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 21
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 1
+        assert attrs.get("gen_ai.usage.total_tokens") == 22
+        assert attrs.get("gen_ai.usage.cache_read.input_tokens") == 4
+
     def test_stream_chat_creates_span(self, span_exporter, instrument):
         """Streaming chat() should create a chat span after the iterator is consumed."""
         model = _StubChatModel(model="qwen-turbo", model_type="qwen_dashscope")
@@ -161,6 +208,122 @@ class TestLLMChatSpan:
         span = chat_spans[0]
         assert span.name == "chat qwen-turbo"
         assert span.kind == SpanKind.CLIENT
+
+    def test_stream_chat_records_token_usage(self, span_exporter, instrument):
+        """Streaming chat() should record final cumulative token usage."""
+        model = _StubChatModel(
+            model="deepseek-v3", model_type="qwen_dashscope"
+        )
+
+        chunk1 = [
+            Message(
+                role="assistant",
+                content="The",
+                extra={
+                    "model_service_info": {
+                        "usage": {
+                            "input_tokens": 18,
+                            "output_tokens": 1,
+                            "total_tokens": 19,
+                        }
+                    }
+                },
+            )
+        ]
+        chunk2 = [
+            Message(
+                role="assistant",
+                content="The answer is 4.",
+                extra={
+                    "model_service_info": {
+                        "usage": {
+                            "input_tokens": 18,
+                            "output_tokens": 5,
+                            "total_tokens": 23,
+                        }
+                    }
+                },
+            )
+        ]
+
+        def fake_stream(messages, **kwargs):
+            yield chunk1
+            yield chunk2
+
+        with patch.object(
+            _StubChatModel,
+            "_chat_stream",
+            side_effect=fake_stream,
+        ):
+            response_iter = model.chat(
+                messages=[Message(role="user", content="What is 2+2?")],
+                stream=True,
+            )
+            list(response_iter)
+
+        spans = span_exporter.get_finished_spans()
+        chat_spans = [s for s in spans if s.name.startswith("chat")]
+        assert len(chat_spans) >= 1
+        attrs = dict(chat_spans[0].attributes or {})
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 18
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 5
+        assert attrs.get("gen_ai.usage.total_tokens") == 23
+
+    def test_stream_chat_keeps_most_complete_usage(
+        self, span_exporter, instrument
+    ):
+        """Streaming chat() should keep the largest cumulative usage seen."""
+        model = _StubChatModel(
+            model="deepseek-v3", model_type="qwen_dashscope"
+        )
+
+        chunk1 = [
+            Message(
+                role="assistant",
+                content="The",
+                extra={
+                    "model_service_info": {
+                        "usage": {"input_tokens": 18, "output_tokens": 1}
+                    }
+                },
+            )
+        ]
+        chunk2 = [
+            Message(
+                role="assistant",
+                content="The answer",
+                extra={
+                    "model_service_info": {
+                        "usage": {"input_tokens": 18, "output_tokens": 5}
+                    }
+                },
+            )
+        ]
+        chunk3 = [Message(role="assistant", content="The answer is 4.")]
+
+        def fake_stream(messages, **kwargs):
+            yield chunk1
+            yield chunk2
+            yield chunk3
+
+        with patch.object(
+            _StubChatModel,
+            "_chat_stream",
+            side_effect=fake_stream,
+        ):
+            response_iter = model.chat(
+                messages=[Message(role="user", content="What is 2+2?")],
+                stream=True,
+            )
+            list(response_iter)
+
+        spans = span_exporter.get_finished_spans()
+        chat_spans = [s for s in spans if s.name.startswith("chat")]
+        assert len(chat_spans) >= 1
+        attrs = dict(chat_spans[0].attributes or {})
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 18
+        assert attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 5
+        assert attrs.get("gen_ai.usage.total_tokens") == 23
 
     def test_chat_with_function_call_response(self, span_exporter, instrument):
         """Chat response containing a function_call should still produce a valid span."""
@@ -334,6 +497,189 @@ class TestAgentRunSpan:
         # The wrapper should produce exactly one span per run() call
         assert len(agent_spans) == 1
 
+    def test_agent_run_records_only_final_output_message(
+        self,
+        span_exporter,
+        tracer_provider,
+        logger_provider,
+        meter_provider,
+        monkeypatch,
+    ):
+        """Agent output should keep the final answer, not tool calls/results."""
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
+        instrumentor = QwenAgentInstrumentor()
+        instrumentor.instrument(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            skip_dep_check=True,
+        )
+
+        llm = MagicMock()
+        llm.model = "qwen-plus"
+        llm.model_type = "qwen_dashscope"
+
+        agent = _StubAgent.create(name="OnePilotBot", llm=llm)
+
+        response_msgs = [
+            Message(
+                role="assistant",
+                content="",
+                function_call=FunctionCall(
+                    name="get_operational_snapshot",
+                    arguments='{"incident_id": "INC-1"}',
+                ),
+            ),
+            Message(
+                role="function",
+                name="get_operational_snapshot",
+                content='{"p95_latency_ms": 1840}',
+            ),
+            Message(
+                role="assistant",
+                content="",
+                function_call=FunctionCall(
+                    name="score_bundle_plan",
+                    arguments='{"plan_name": "gray-rollout"}',
+                ),
+            ),
+            Message(
+                role="function",
+                name="score_bundle_plan",
+                content='{"score": 80}',
+            ),
+            Message(role="assistant", content="Final verdict: continue."),
+        ]
+
+        def fake_run(messages, **kwargs):
+            yield response_msgs
+
+        try:
+            with patch.object(_StubAgent, "_run", side_effect=fake_run):
+                list(agent.run([Message(role="user", content="diagnose")]))
+        finally:
+            instrumentor.uninstrument()
+
+        spans = span_exporter.get_finished_spans()
+        agent_spans = [s for s in spans if "invoke_agent" in s.name]
+        assert len(agent_spans) == 1
+
+        attrs = dict(agent_spans[0].attributes or {})
+        output = json.loads(attrs["gen_ai.output.messages"])
+        assert len(output) == 1
+        assert output[0]["role"] == "assistant"
+        assert output[0]["finish_reason"] == "stop"
+        assert output[0]["parts"] == [
+            {"content": "Final verdict: continue.", "type": "text"}
+        ]
+
+    def test_agent_run_without_final_answer_skips_tool_output_messages(
+        self,
+        span_exporter,
+        tracer_provider,
+        logger_provider,
+        meter_provider,
+        monkeypatch,
+    ):
+        """Agent output should not fall back to intermediate tool messages."""
+        monkeypatch.setenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "SPAN_ONLY"
+        )
+        instrumentor = QwenAgentInstrumentor()
+        instrumentor.instrument(
+            tracer_provider=tracer_provider,
+            logger_provider=logger_provider,
+            meter_provider=meter_provider,
+            skip_dep_check=True,
+        )
+
+        llm = MagicMock()
+        llm.model = "qwen-plus"
+        llm.model_type = "qwen_dashscope"
+
+        agent = _StubAgent.create(name="ToolOnlyBot", llm=llm)
+
+        response_msgs = [
+            Message(
+                role="assistant",
+                content="",
+                function_call=FunctionCall(
+                    name="get_operational_snapshot",
+                    arguments='{"incident_id": "INC-1"}',
+                ),
+            ),
+            Message(
+                role="function",
+                name="get_operational_snapshot",
+                content='{"p95_latency_ms": 1840}',
+            ),
+        ]
+
+        def fake_run(messages, **kwargs):
+            yield response_msgs
+
+        try:
+            with patch.object(_StubAgent, "_run", side_effect=fake_run):
+                list(agent.run([Message(role="user", content="diagnose")]))
+        finally:
+            instrumentor.uninstrument()
+
+        spans = span_exporter.get_finished_spans()
+        agent_spans = [s for s in spans if "invoke_agent" in s.name]
+        assert len(agent_spans) == 1
+
+        attrs = dict(agent_spans[0].attributes or {})
+        assert "gen_ai.output.messages" not in attrs
+
+    def test_nested_agent_run_creates_child_invoke_agent_span(
+        self, span_exporter, instrument
+    ):
+        """Nested runs on different agent instances should not be suppressed."""
+        parent_llm = MagicMock()
+        parent_llm.model = "qwen-turbo"
+        parent_llm.model_type = "qwen_dashscope"
+        child_llm = MagicMock()
+        child_llm.model = "qwen-plus"
+        child_llm.model_type = "qwen_dashscope"
+
+        parent_agent = _StubAgent.create(name="ParentBot", llm=parent_llm)
+        child_agent = _StubAgent.create(name="ChildBot", llm=child_llm)
+
+        def fake_run(self, messages, **kwargs):
+            if self is parent_agent:
+                yield from child_agent.run(
+                    [Message(role="user", content="child task")]
+                )
+                yield [Message(role="assistant", content="parent final")]
+            elif self is child_agent:
+                yield [Message(role="assistant", content="child final")]
+            else:
+                yield [Message(role="assistant", content="unexpected")]
+
+        with patch.object(
+            _StubAgent, "_run", autospec=True, side_effect=fake_run
+        ):
+            results = list(
+                parent_agent.run([Message(role="user", content="parent task")])
+            )
+
+        assert len(results) == 2
+
+        spans = span_exporter.get_finished_spans()
+        agent_spans = [s for s in spans if "invoke_agent" in s.name]
+        span_by_name = {s.name: s for s in agent_spans}
+        assert set(span_by_name) == {
+            "invoke_agent ParentBot",
+            "invoke_agent ChildBot",
+        }
+
+        parent_span = span_by_name["invoke_agent ParentBot"]
+        child_span = span_by_name["invoke_agent ChildBot"]
+        assert child_span.parent is not None
+        assert child_span.parent.span_id == parent_span.context.span_id
+
 
 # ---------------------------------------------------------------------------
 # Tool call span tests
@@ -451,7 +797,17 @@ class TestSpanHierarchy:
         model = _StubChatModel(model="qwen-max", model_type="qwen_dashscope")
         agent = _StubAgent.create(name="NestBot", llm=model)
 
-        llm_response = [Message(role="assistant", content="The answer is 42.")]
+        llm_response = [
+            Message(
+                role="assistant",
+                content="The answer is 42.",
+                extra={
+                    "model_service_info": {
+                        "usage": {"input_tokens": 21, "output_tokens": 7}
+                    }
+                },
+            )
+        ]
 
         def fake_run(messages, **kwargs):
             # Simulate the agent calling LLM internally
@@ -479,6 +835,11 @@ class TestSpanHierarchy:
         assert chat_span.context.trace_id == agent_span.context.trace_id
         assert chat_span.parent is not None
         assert chat_span.parent.span_id == agent_span.context.span_id
+
+        agent_attrs = dict(agent_span.attributes or {})
+        assert agent_attrs.get(GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS) == 21
+        assert agent_attrs.get(GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS) == 7
+        assert agent_attrs.get("gen_ai.usage.total_tokens") == 28
 
     def test_agent_run_with_tool_call_produces_nested_spans(
         self, span_exporter, instrument

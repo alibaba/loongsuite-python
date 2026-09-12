@@ -1,0 +1,55 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loongsuite-instrumentation-minisweagent"
+dynamic = ["version"]
+description = "LoongSuite mini-swe-agent instrumentation"
+license = "Apache-2.0"
+requires-python = ">=3.10,<4"
+authors = [
+  { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "opentelemetry-api >= 1.37.0",
+  "opentelemetry-instrumentation >= 0.58b0",
+  "opentelemetry-semantic-conventions >= 0.58b0",
+  "opentelemetry-util-genai",
+  "wrapt >= 1.17.3, < 2.0.0",
+]
+
+[project.optional-dependencies]
+instruments = [
+  "mini-swe-agent >= 2.2.0",
+]
+
+[project.entry-points.opentelemetry_instrumentor]
+minisweagent = "opentelemetry.instrumentation.minisweagent:MiniSweAgentInstrumentor"
+
+[project.urls]
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-minisweagent"
+Repository = "https://github.com/alibaba/loongsuite-python"
+
+[tool.hatch.version]
+path = "src/opentelemetry/instrumentation/minisweagent/version.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opentelemetry"]

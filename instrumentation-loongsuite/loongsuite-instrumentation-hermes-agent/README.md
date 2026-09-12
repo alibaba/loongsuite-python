@@ -80,7 +80,10 @@ export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT
 ## Supported Signals
 
 - **AGENT**: top-level Hermes agent invocation
-- **ENTRY**: AI application entry spans when Hermes `AIAgent.platform` identifies an entrypoint such as CLI, TUI, API Server, or gateway adapters
+- **ENTRY**: AI application entry spans when Hermes resolves an entry source
+  from `AIAgent.platform`, `HERMES_SESSION_SOURCE`, or the default `cli`
+  source used by platform-less `AIAgent` instances. Every top-level
+  instrumented `AIAgent.run_conversation` now emits `ENTRY` -> `AGENT`.
 - **STEP**: Hermes ReAct step lifecycle
 - **LLM**: synchronous and streaming model calls
 - **TOOL**: Hermes tool execution, including tool call id, arguments, and result

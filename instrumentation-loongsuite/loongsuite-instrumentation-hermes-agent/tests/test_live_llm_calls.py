@@ -18,7 +18,12 @@ import json
 
 import pytest
 from conftest import HermesAgentInstrumentor, extract_metric_points
-from run_agent import AIAgent
+
+run_agent = pytest.importorskip(
+    "run_agent",
+    reason="Hermes runtime integration tests require the hermes-agent source.",
+)
+AIAgent = run_agent.AIAgent
 
 
 def _metric_value(point):

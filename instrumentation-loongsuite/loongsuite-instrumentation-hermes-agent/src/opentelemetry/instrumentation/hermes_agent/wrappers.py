@@ -36,7 +36,7 @@ from .helpers import (
     provider_name,
     push_state,
     reset_state,
-    should_create_entry_for_agent,
+    resolve_entry_platform,
     start_step,
     state,
     step_finish_reason,
@@ -148,8 +148,13 @@ class RunConversationWrapper:
         state_token = push_state(instance)
         current_state = state(instance)
         entry_invocation = None
+        # EntryInvocation has no source field yet; resolve the Hermes source
+        # here so entry creation follows Hermes's own session source default.
+        # TODO(loongsuite-hermes): pass entry_platform into EntryInvocation if
+        # opentelemetry-util-genai adds a session source field.
+        entry_platform = resolve_entry_platform(instance)
         if (
-            should_create_entry_for_agent(instance)
+            entry_platform
             and not _current_span_is_genai_operation()
             and not _ACTIVE_TOOL_NAMES.get()
         ):

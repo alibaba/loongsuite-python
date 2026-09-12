@@ -63,5 +63,5 @@ export OTEL_PYTHON_CONFIGURATOR=loongsuite
 
 ## References
 
-- [LoongSuite Python Agent](https://github.com/alibaba/loongsuite-python-agent)
+- [LoongSuite Python Agent](https://github.com/alibaba/loongsuite-python)
 - [Root README](../README.md)

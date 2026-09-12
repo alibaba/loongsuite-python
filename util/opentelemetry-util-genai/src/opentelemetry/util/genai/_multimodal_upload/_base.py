@@ -104,6 +104,7 @@ class PreUploader(ABC):
         start_time_utc_nano: int,
         input_messages: Optional[List[Any]],
         output_messages: Optional[List[Any]],
+        config_snapshot: Optional[Any] = None,
     ) -> List[PreUploadItem]:
         """
         Preprocess multimodal data in messages:
@@ -117,6 +118,8 @@ class PreUploader(ABC):
             start_time_utc_nano: Start time in nanoseconds
             input_messages: List of input messages (with .parts attribute), will be modified in-place
             output_messages: List of output messages (with .parts attribute), will be modified in-place
+            config_snapshot: Optional runtime config snapshot; when omitted, implementation
+                may read process-wide multimodal config itself
 
         Returns:
             List of PreUploadItem to be uploaded, returns empty list on failure

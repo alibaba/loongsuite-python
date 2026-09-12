@@ -74,9 +74,11 @@ class TestErrorScenarios(TestBase):
         os.environ["CREWAI_TRACING_ENABLED"] = "false"
 
         # Enable experimental mode and content capture for testing
-        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai"
+        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = (
+            "gen_ai_latest_experimental"
+        )
         os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
-            "span_only"
+            "SPAN_ONLY"
         )
 
         if _OpenTelemetrySemanticConventionStability:
@@ -101,11 +103,11 @@ class TestErrorScenarios(TestBase):
 
     def test_api_key_missing(self):
         """
-        Test execution with missing API key.
+        Test execution with authentication failure.
 
         Business Demo:
         - Creates a Crew with 1 Agent
-        - API key is empty/missing
+        - API key is rejected by the LLM service
         - Executes 1 Task that fails due to authentication
 
         Verification:
@@ -113,11 +115,11 @@ class TestErrorScenarios(TestBase):
         - Span records authentication exception in events
         - Input messages are still captured for context
         """
-        # Temporarily remove API keys
+        # Use non-empty fake keys so provider validation reaches kickoff.
         original_dashscope_key = os.environ.get("DASHSCOPE_API_KEY")
         original_openai_key = os.environ.get("OPENAI_API_KEY")
-        os.environ["DASHSCOPE_API_KEY"] = ""
-        os.environ["OPENAI_API_KEY"] = ""
+        os.environ["DASHSCOPE_API_KEY"] = "fake-key"
+        os.environ["OPENAI_API_KEY"] = "fake-key"
 
         try:
             agent = Agent(
@@ -148,9 +150,13 @@ class TestErrorScenarios(TestBase):
 
         finally:
             # Restore API keys
-            if original_dashscope_key:
+            if original_dashscope_key is None:
+                os.environ.pop("DASHSCOPE_API_KEY", None)
+            else:
                 os.environ["DASHSCOPE_API_KEY"] = original_dashscope_key
-            if original_openai_key:
+            if original_openai_key is None:
+                os.environ.pop("OPENAI_API_KEY", None)
+            else:
                 os.environ["OPENAI_API_KEY"] = original_openai_key
 
         # Verify spans
@@ -173,7 +179,7 @@ class TestErrorScenarios(TestBase):
                     break
 
             # Verify inputs are still there
-            if span.attributes.get("gen_ai.operation.name") in [
+            if span.attributes.get("gen_ai.crewai.operation") in [
                 "task.execute",
                 "agent.execute",
             ]:
@@ -306,7 +312,7 @@ class TestErrorScenarios(TestBase):
         agent_error_spans = [
             s
             for s in error_spans
-            if s.attributes.get("gen_ai.operation.name") == "agent.execute"
+            if s.attributes.get("gen_ai.crewai.operation") == "agent.execute"
         ]
         if agent_error_spans:
             span = agent_error_spans[0]

@@ -86,7 +86,7 @@ def list_pypi_distribution_names(
         util_genai_dir.is_dir()
         and (util_genai_dir / "pyproject.toml").is_file()
     ):
-        names.append("loongsuite-util-genai")
+        names.append("loongsuite-otel-util-genai")
 
     distro_dir = base_dir / "loongsuite-distro"
     if distro_dir.is_dir() and (distro_dir / "pyproject.toml").is_file():

@@ -41,8 +41,8 @@ instruments = [
 langgraph = "opentelemetry.instrumentation.langgraph:LangGraphInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-langgraph"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-langgraph"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/langgraph/version.py"

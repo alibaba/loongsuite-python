@@ -41,6 +41,7 @@ pytest-asyncio
 openai
 opentelemetry-test-utils
 vcrpy
+aiohttp<3.12
 pytest-recording
 
 -e opentelemetry-instrumentation

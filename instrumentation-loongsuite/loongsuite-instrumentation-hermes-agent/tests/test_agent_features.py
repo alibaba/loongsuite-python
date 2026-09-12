@@ -17,7 +17,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from hermes_state import SessionDB
+
+hermes_state = pytest.importorskip(
+    "hermes_state",
+    reason="Hermes runtime integration tests require the hermes-agent source.",
+)
+SessionDB = hermes_state.SessionDB
 
 
 def _spans_by_kind(span_exporter, span_kind: str):

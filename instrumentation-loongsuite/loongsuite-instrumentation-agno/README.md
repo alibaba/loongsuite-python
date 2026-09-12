@@ -1,81 +1,91 @@
 # LoongSuite Agno Instrumentation
 
-Agno Python Agent provides observability for Agno applications. This document provides examples of usage and results in the Agno instrumentation. For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+This package instruments Agno 2.x agent applications with LoongSuite GenAI
+semantic conventions through `opentelemetry-util-genai`.
+
+It captures:
+
+- agent runs as `invoke_agent` spans with `gen_ai.span.kind=AGENT`
+- model calls as `chat` spans with `gen_ai.span.kind=LLM`
+- Agno function calls as `execute_tool` spans with `gen_ai.span.kind=TOOL`
+- token usage, prompt/response content, tool definitions, tool arguments and
+  tool results according to the configured GenAI content capture mode
+
+When `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY` is enabled,
+prompt, response, and tool I/O content is written to trace span attributes.
+Avoid enabling content capture for sensitive production data unless that is an
+intentional observability policy.
 
 ## Installation
-  
-```shell
-# Step 1: install LoongSuite distro
-pip install loongsuite-distro
 
-# Step 2 (Option A): install instrumentations from LoongSuite release
+```shell
+pip install loongsuite-distro
 loongsuite-bootstrap -a install --latest
-# for specific version: loongsuite-bootstrap -a install --version X.Y.Z
 ```
 
-## RUN
+For local source validation:
 
-### Build the Example
+```shell
+pip install -e ./opentelemetry-instrumentation \
+  -e ./util/opentelemetry-util-genai \
+  -e ./instrumentation-loongsuite/loongsuite-instrumentation-agno
+```
 
-Follow the official [Agno Documentation](https://docs.agno.com/introduction) to create a sample file named `demo.py`
+## Example
+
+Create `demo.py`:
+
 ```python
 import os
-os.environ["DEEPSEEK_API_KEY"] = "YOUR-API-KEY"
+
 from agno.agent import Agent
-from agno.models.deepseek import DeepSeek
-from agno.tools.reasoning import ReasoningTools
-from agno.tools.yfinance import YFinanceTools
+from agno.models.dashscope import DashScope
+
+
+def get_weather(city: str) -> str:
+    return f"{city}: sunny, 24C"
+
+
 agent = Agent(
-    model=DeepSeek(id="deepseek-reasoner"),
-    tools=[
-        ReasoningTools(add_instructions=True),
-    ],
-    instructions=[
-        "Use tables to display data",
-        "Only output the report, no other text",
-    ],
-    markdown=True,
+    name="AgnoDashScopeDemo",
+    model=DashScope(
+        id=os.getenv("DASHSCOPE_MODEL", "qwen-plus"),
+        api_key=os.environ["DASHSCOPE_API_KEY"],
+        base_url=os.getenv(
+            "DASHSCOPE_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
+    ),
+    tools=[get_weather],
+    instructions=["When weather is requested, use the get_weather tool."],
 )
-agent.print_response(
-    "Write a report on NVDA",
-    stream=False,
-)
+
+response = agent.run("What is the weather in Hangzhou?")
+print(response.content)
+
+for event in agent.run("Stream a short answer.", stream=True):
+    if getattr(event, "content", None):
+        print(event.content, end="")
 ```
 
-### Collect Data
+Collect telemetry:
 
-Use LoongSuite recommended runtime:
+```shell
+export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_SERVICE_NAME=loongsuite-agno-demo
+export DASHSCOPE_API_KEY=YOUR_API_KEY
 
-```shell 
-export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
-
-loongsuite-instrument \
---exporter_otlp_protocol grpc \
---traces_exporter otlp \
---exporter_otlp_insecure true \
---exporter_otlp_endpoint YOUR-END-POINT \
---service_name demo \
-python demo.py
+loongsuite-instrument python demo.py
 ```
 
-## RESULT
+The repository also includes
+`examples/agno_dashscope_smoke.py`, which exercises non-streaming,
+streaming, and concurrent real DashScope calls:
 
-Access the Jaeger UI to view the collected trace data. Trace information should contains:
-
-### 1. Prompt
-
-![promot](_assets/img/agno_demo_prompt.png)
-
-### 2. Reasoning & Response
-
-![reasoning](_assets/img/agno_demo_reasoning.png)
-
-![response](_assets/img/agno_demo_response.png)
-
-### 3. ToolCalls
-
-![toolcall](_assets/img/agno_demo_toolcall.png)
-
-### 4. Other
-
-We also collect other information interest to users, including historical messages, token consumption, model types, etc.
+```shell
+AGNO_SMOKE_MODE=all loongsuite-instrument \
+  python instrumentation-loongsuite/loongsuite-instrumentation-agno/examples/agno_dashscope_smoke.py
+```

@@ -103,6 +103,12 @@ with:
 - `gen_ai.skill.description`
 - `gen_ai.skill.version`
 
+AgentScope v2 exposes skill loading through its built-in `Skill` viewer tool.
+The v2 middleware records the requested `skill` argument as
+`gen_ai.skill.name` and `gen_ai.skill.id`; when QwenPaw or AgentScope exposes
+the registered skill directory, it also resolves the available description,
+workspace-scoped id, and version metadata.
+
 The matching is intentionally conservative:
 
 - only registered skills can match
@@ -133,7 +139,7 @@ Export telemetry data to:
 
 ## Examples
 
-See the [main README](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md) for complete usage examples.
+See the [main README](https://github.com/alibaba/loongsuite-python/blob/main/README.md) for complete usage examples.
 
 ## License
 

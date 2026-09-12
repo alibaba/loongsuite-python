@@ -102,6 +102,183 @@ def _extract_content_text(content: Any) -> str:
     return str(content) if content else ""
 
 
+def _field_value(value: Any, *names: str) -> Any:
+    """Read the first present field from a mapping or SDK response object."""
+    if value is None:
+        return None
+
+    for name in names:
+        if isinstance(value, dict):
+            if name in value:
+                return value[name]
+            continue
+
+        try:
+            attr_value = getattr(value, name)
+        except Exception:
+            attr_value = None
+        if attr_value is not None:
+            return attr_value
+
+        get_method = getattr(value, "get", None)
+        if callable(get_method):
+            try:
+                got_value = get_method(name)
+            except Exception:
+                got_value = None
+            if got_value is not None:
+                return got_value
+
+    return None
+
+
+def _int_value(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_token_values(usage: Any) -> Dict[str, int]:
+    if usage is None:
+        return {}
+
+    input_tokens = _int_value(
+        _field_value(usage, "input_tokens", "prompt_tokens")
+    )
+    output_tokens = _int_value(
+        _field_value(usage, "output_tokens", "completion_tokens")
+    )
+    cache_read_tokens = _int_value(
+        _field_value(usage, "cache_read_input_tokens", "cached_prompt_tokens")
+    )
+    cache_creation_tokens = _int_value(
+        _field_value(usage, "cache_creation_input_tokens")
+    )
+
+    for detail_name in ("prompt_tokens_details", "input_tokens_details"):
+        details = _field_value(usage, detail_name)
+        if details is not None and cache_read_tokens is None:
+            cache_read_tokens = _int_value(
+                _field_value(details, "cached_tokens")
+            )
+
+    values: Dict[str, int] = {}
+    if input_tokens is not None:
+        values["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        values["output_tokens"] = output_tokens
+    if cache_read_tokens is not None and cache_read_tokens > 0:
+        values["cache_read_input_tokens"] = cache_read_tokens
+    if cache_creation_tokens is not None and cache_creation_tokens > 0:
+        values["cache_creation_input_tokens"] = cache_creation_tokens
+
+    return values
+
+
+def _usage_score(usage_values: Dict[str, int]) -> int:
+    return (usage_values.get("input_tokens") or 0) + (
+        usage_values.get("output_tokens") or 0
+    )
+
+
+def _usage_sources(value: Any) -> List[Any]:
+    sources = []
+    usage = _field_value(value, "usage")
+    if usage is not None:
+        sources.append(usage)
+
+    extra = _field_value(value, "extra")
+    if extra is not None:
+        extra_usage = _field_value(extra, "usage", "usage_metadata")
+        if extra_usage is not None:
+            sources.append(extra_usage)
+
+        service_info = _field_value(extra, "model_service_info")
+        if service_info is not None:
+            sources.append(service_info)
+
+    service_info = _field_value(value, "model_service_info")
+    if service_info is not None:
+        sources.append(service_info)
+
+    return sources
+
+
+def _extract_usage_values(value: Any, depth: int = 0) -> Dict[str, int]:
+    """Extract token usage from qwen-agent Message/extra/model_service_info."""
+    if value is None or depth > 4:
+        return {}
+
+    best_values: Dict[str, int] = {}
+    values = _usage_token_values(value)
+    if values:
+        best_values = values
+
+    if isinstance(value, (list, tuple)):
+        for item in reversed(value):
+            item_values = _extract_usage_values(item, depth + 1)
+            if _usage_score(item_values) > _usage_score(best_values):
+                best_values = item_values
+        return best_values
+
+    for source in _usage_sources(value):
+        source_values = _extract_usage_values(source, depth + 1)
+        if _usage_score(source_values) > _usage_score(best_values):
+            best_values = source_values
+
+    return best_values
+
+
+def _apply_usage_to_llm_invocation(
+    invocation: LLMInvocation, value: Any
+) -> None:
+    """Apply qwen-agent token usage metadata to an LLMInvocation.
+
+    Qwen-Agent stores DashScope responses under Message.extra["model_service_info"]
+    for both streaming and non-streaming calls. Streaming chunks can carry
+    cumulative usage, so only replace existing values when the candidate usage
+    has at least as many observed tokens as the current invocation.
+    """
+    usage_values = _extract_usage_values(value)
+    if not usage_values:
+        return
+
+    current_score = (invocation.input_tokens or 0) + (
+        invocation.output_tokens or 0
+    )
+    if current_score and _usage_score(usage_values) < current_score:
+        return
+
+    if "input_tokens" in usage_values:
+        invocation.input_tokens = usage_values["input_tokens"]
+    if "output_tokens" in usage_values:
+        invocation.output_tokens = usage_values["output_tokens"]
+    if "cache_read_input_tokens" in usage_values:
+        invocation.usage_cache_read_input_tokens = usage_values[
+            "cache_read_input_tokens"
+        ]
+    if "cache_creation_input_tokens" in usage_values:
+        invocation.usage_cache_creation_input_tokens = usage_values[
+            "cache_creation_input_tokens"
+        ]
+
+
+def apply_token_usage_from_qwen_messages(
+    invocation: LLMInvocation,
+    messages: Any,
+) -> None:
+    """Populate token usage from qwen-agent Message metadata.
+
+    Kept as a compatibility entrypoint for callers that used the previous
+    helper name; the instrumentation wrapper now calls the generic extractor
+    directly so it can process individual streaming chunks.
+    """
+    _apply_usage_to_llm_invocation(invocation, messages)
+
+
 def _convert_qwen_messages_to_input_messages(
     messages: Any,
 ) -> List[InputMessage]:
@@ -291,6 +468,36 @@ def _convert_qwen_messages_to_output_messages(
     return output_messages
 
 
+def _convert_qwen_agent_final_output_messages(
+    messages: Any,
+) -> List[OutputMessage]:
+    """Convert only the final qwen-agent answer to GenAI OutputMessage format."""
+    if not messages:
+        return []
+
+    if not isinstance(messages, list):
+        messages = [messages]
+
+    for msg in reversed(messages):
+        try:
+            role = _field_value(msg, "role") or "assistant"
+            function_call = _field_value(msg, "function_call")
+            content = _field_value(msg, "content") or ""
+
+            if role in ("function", "tool") or function_call:
+                continue
+
+            text = _extract_content_text(content)
+            if text:
+                return _convert_qwen_messages_to_output_messages([msg])
+        except Exception as e:
+            logger.debug(f"Error extracting final agent output message: {e}")
+            continue
+
+    logger.debug("No final qwen-agent assistant text output message found")
+    return []
+
+
 def _get_tool_definitions(
     functions: Optional[List[Dict]],
 ) -> Optional[List[FunctionToolDefinition]]:
@@ -462,6 +669,7 @@ def _create_tool_invocation(
 
     return ExecuteToolInvocation(
         tool_name=tool_name,
+        tool_type="function",
         tool_call_arguments=parsed_args,
         tool_description=tool_description,
     )

@@ -1,0 +1,7 @@
+langchain>=1.3,<2.0
+langchain-openai>=1.4,<2.0
+langgraph>=1.2,<2.0
+loongsuite-distro
+loongsuite-instrumentation-langchain
+loongsuite-instrumentation-langgraph
+pydantic>=2,<3

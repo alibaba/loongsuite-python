@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 FULL_RUN_LABELS = {"prepare-release", "backport"}
 FULL_RUN_FILES = {
     ".github/scripts/detect_loongsuite_changes.py",
+    ".github/scripts/select_loongsuite_matrix.py",
     ".github/workflows/generate_workflows_loongsuite.py",
     ".pre-commit-config.yaml",
     ".pylintrc",
@@ -34,7 +35,7 @@ FULL_RUN_FILES = {
 }
 FULL_RUN_PREFIXES = (
     ".github/scripts/tests/",
-    ".github/workflows/generate_workflows_lib/src/generate_workflows_lib/",
+    ".github/workflows/generate_workflows_lib/",
     ".github/workflows/loongsuite_",
     ".github/workflows/loongsuite-",
     "loongsuite-distro/",
@@ -44,6 +45,9 @@ FULL_RUN_PREFIXES = (
 TOX_LOONGSUITE_INI_PATH = "tox-loongsuite.ini"
 UTIL_GENAI_PREFIX = "util/opentelemetry-util-genai/"
 LOONGSUITE_INSTRUMENTATION_PREFIX = "instrumentation-loongsuite/"
+BOOTSTRAP_REGISTRY_PREFIX = (
+    "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+)
 DOC_ONLY_SUFFIXES = (".md", ".rst")
 REPO_ROOT = Path.cwd()
 TOX_LOONGSUITE_INI = REPO_ROOT / TOX_LOONGSUITE_INI_PATH
@@ -143,6 +147,30 @@ def _loongsuite_package_from_path(path: str) -> str | None:
         return None
 
     package = package_path.parts[1]
+    if package.startswith("loongsuite-instrumentation-"):
+        return package
+
+    return None
+
+
+def _loongsuite_package_from_bootstrap_registry_path(path: str) -> str | None:
+    normalized = path.strip("/")
+    if not normalized.startswith(BOOTSTRAP_REGISTRY_PREFIX):
+        return None
+
+    relative_path = normalized.removeprefix(BOOTSTRAP_REGISTRY_PREFIX)
+    if "/" in relative_path:
+        return None
+
+    registry_path = PurePosixPath(relative_path)
+    if registry_path.suffix != ".py":
+        return None
+
+    module_name = registry_path.stem
+    if module_name == "__init__" or module_name.startswith("_"):
+        return None
+
+    package = module_name.replace("_", "-")
     if package.startswith("loongsuite-instrumentation-"):
         return package
 
@@ -299,6 +327,7 @@ def _detect_outputs() -> dict[str, str]:
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     event = _load_event()
 
+    # Push and merge_group events intentionally run the full suite.
     if event_name != "pull_request":
         return _full_outputs("non-pull-request event")
 
@@ -335,6 +364,16 @@ def _detect_outputs() -> dict[str, str]:
 
         if normalized == TOX_LOONGSUITE_INI_PATH:
             tox_changed = True
+            continue
+
+        registry_package = _loongsuite_package_from_bootstrap_registry_path(
+            changed_file
+        )
+        if registry_package:
+            if registry_package not in known_packages:
+                unknown_packages.add(registry_package)
+            else:
+                packages.add(registry_package)
             continue
 
         if _requires_full_run(changed_file):

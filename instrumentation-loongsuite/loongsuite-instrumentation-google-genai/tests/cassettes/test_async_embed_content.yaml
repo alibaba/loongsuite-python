@@ -1,0 +1,54 @@
+interactions:
+- request:
+    body: '{"requests": [{"content": {"parts": [{"text": "LoongSuite async embedding
+      verification"}], "role": "user"}, "outputDimensionality": 8, "model": "models/gemini-embedding-001"}]}'
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '176'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.14.0 gl-python/3.12.10
+      x-goog-api-client:
+      - google-genai-sdk/2.14.0 gl-python/3.12.10
+      x-goog-api-key:
+      - test-google-key
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents
+  response:
+    body:
+      string: "{\n  \"embeddings\": [\n    {\n      \"values\": [\n        -0.012145887,\n
+        \       0.027226992,\n        -0.010417095,\n        -0.10146105,\n        -0.010073216,\n
+        \       -0.021136053,\n        0.003264262,\n        0.009064443\n      ]\n
+        \   }\n  ]\n}\n"
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '235'
+      content-type:
+      - application/json; charset=UTF-8
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

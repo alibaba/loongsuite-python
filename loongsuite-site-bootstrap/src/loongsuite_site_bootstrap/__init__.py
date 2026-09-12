@@ -43,7 +43,14 @@ from pathlib import Path
 from loongsuite_site_bootstrap.version import __version__
 
 LOONGSUITE_PYTHON_SITE_BOOTSTRAP = "LOONGSUITE_PYTHON_SITE_BOOTSTRAP"
+LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS = (
+    "LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS"
+)
+LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE = (
+    "LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE"
+)
 _LOGGER: logging.Logger = logging.getLogger(__name__)
+_INITIALIZED = False
 
 
 def _configure_bootstrap_logging() -> None:
@@ -75,6 +82,46 @@ def _coerce_env_value(value: object) -> str | None:
 def _is_truthy_string(val: str) -> bool:
     """True only for case-insensitive ``true``; any other string is off."""
     return val.strip().lower() == "true"
+
+
+def _is_falsey_string(val: str) -> bool:
+    """Return True for common explicit-off strings."""
+    return val.strip().lower() in {"false", "0", "no", "off"}
+
+
+def _should_log_success() -> bool:
+    val = os.environ.get(LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS)
+    if val is None:
+        return True
+    return not _is_falsey_string(val)
+
+
+def _write_status_file(initialized: bool, error: str | None = None) -> None:
+    path_value = os.environ.get(LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE)
+    if not path_value:
+        return
+    path = Path(path_value).expanduser()
+    payload: dict[str, object] = {
+        "initialized": initialized,
+        "pid": os.getpid(),
+        "version": __version__,
+    }
+    if error:
+        payload["error"] = error
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(
+            json.dumps(payload, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp_path, path)
+    except Exception:
+        _LOGGER.debug(
+            "loongsuite-site-bootstrap: failed to write status file %s",
+            path,
+            exc_info=True,
+        )
 
 
 def _read_bootstrap_config_file() -> dict[str, str] | None:
@@ -164,6 +211,7 @@ def _run_bootstrap_if_enabled() -> None:
 
 
 def _run_auto_instrumentation() -> None:
+    global _INITIALIZED  # noqa: PLW0603
     # Align with loongsuite-distro + opentelemetry-instrument / sitecustomize
     os.environ.setdefault("OTEL_PYTHON_DISTRO", "loongsuite")
     os.environ.setdefault("OTEL_PYTHON_CONFIGURATOR", "loongsuite")
@@ -175,6 +223,8 @@ def _run_auto_instrumentation() -> None:
 
         initialize()
     except Exception:
+        _INITIALIZED = False
+        _write_status_file(False, "OpenTelemetry auto-instrumentation failed")
         _LOGGER.exception(
             "loongsuite-site-bootstrap: OpenTelemetry auto-instrumentation failed "
             "(import or initialize); continuing without instrumentation. "
@@ -182,12 +232,26 @@ def _run_auto_instrumentation() -> None:
         )
         return
 
-    _LOGGER.info(
-        "loongsuite-site-bootstrap: started successfully "
-        "(OpenTelemetry auto-instrumentation initialized)."
-    )
+    _INITIALIZED = True
+    os.environ["LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STARTED"] = "true"
+    _write_status_file(True)
+    if _should_log_success():
+        _LOGGER.info(
+            "loongsuite-site-bootstrap: started successfully "
+            "(OpenTelemetry auto-instrumentation initialized)."
+        )
+
+
+def is_initialized() -> bool:
+    return _INITIALIZED
 
 
 _run_bootstrap_if_enabled()
 
-__all__ = ["LOONGSUITE_PYTHON_SITE_BOOTSTRAP", "__version__"]
+__all__ = [
+    "LOONGSUITE_PYTHON_SITE_BOOTSTRAP",
+    "LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS",
+    "LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE",
+    "__version__",
+    "is_initialized",
+]

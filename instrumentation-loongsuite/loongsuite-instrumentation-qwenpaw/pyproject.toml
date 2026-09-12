@@ -43,8 +43,8 @@ instruments-any = [
 qwenpaw = "opentelemetry.instrumentation.qwenpaw:QwenPawInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/qwenpaw/version.py"

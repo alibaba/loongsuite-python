@@ -29,15 +29,15 @@ if "DASHSCOPE_API_KEY" not in os.environ:
     # The actual API key should be set via environment variable before running tests
     os.environ["DASHSCOPE_API_KEY"] = "test_dashscope_api_key"
 
-from opentelemetry.instrumentation._semconv import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
-)
 from opentelemetry.instrumentation.dashscope import DashScopeInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
+)
+from opentelemetry.util.genai._configuration import (
+    OTEL_SEMCONV_STABILITY_OPT_IN,
+    is_experimental_mode,
 )
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -74,7 +74,7 @@ def instrument(tracer_provider):
 def instrument_no_content(tracer_provider):
     """Instrument DashScope SDK with message content capture disabled."""
     # Reset global state to allow environment variable changes to take effect
-    _OpenTelemetrySemanticConventionStability._initialized = False
+    is_experimental_mode.cache_clear()
 
     os.environ.update(
         {
@@ -92,14 +92,14 @@ def instrument_no_content(tracer_provider):
     os.environ.pop(OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, None)
     instrumentor.uninstrument()
     # Reset global state after test
-    _OpenTelemetrySemanticConventionStability._initialized = False
+    is_experimental_mode.cache_clear()
 
 
 @pytest.fixture(scope="function")
 def instrument_with_content(tracer_provider):
     """Instrument DashScope SDK with message content capture enabled."""
     # Reset global state to allow environment variable changes to take effect
-    _OpenTelemetrySemanticConventionStability._initialized = False
+    is_experimental_mode.cache_clear()
 
     os.environ.update(
         {
@@ -117,7 +117,7 @@ def instrument_with_content(tracer_provider):
     os.environ.pop(OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, None)
     instrumentor.uninstrument()
     # Reset global state after test
-    _OpenTelemetrySemanticConventionStability._initialized = False
+    is_experimental_mode.cache_clear()
 
 
 @pytest.fixture(scope="module")

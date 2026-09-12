@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Unit tests for data extraction helper functions in _utils.py."""
+"""Unit tests for LangChain data extraction helper functions."""
 
+from opentelemetry.instrumentation.langchain.internal._tracer import (
+    _extract_deepagents_skills_metadata,
+    _extract_tool_call_arguments,
+)
 from opentelemetry.instrumentation.langchain.internal._utils import (
     _convert_lc_message_to_input,
     _extract_finish_reasons,
@@ -71,6 +75,43 @@ class TestExtractProvider:
     def test_default_langchain(self):
         run = _FakeRun()
         assert _extract_provider(run) == "langchain"
+
+
+class TestExtractToolCallArguments:
+    def test_input_key_takes_precedence(self):
+        assert _extract_tool_call_arguments({"input": "hello"}) == "hello"
+
+    def test_query_key_is_used_when_input_missing(self):
+        assert _extract_tool_call_arguments({"query": "search text"}) == (
+            "search text"
+        )
+
+    def test_structured_inputs_are_preserved(self):
+        args = {"file_path": "/skills/probe/SKILL.md", "limit": 1000}
+        assert _extract_tool_call_arguments(args) == args
+
+    def test_none_becomes_empty_string(self):
+        assert _extract_tool_call_arguments(None) == ""
+
+    def test_non_dict_input_is_returned(self):
+        assert _extract_tool_call_arguments(["raw"]) == ["raw"]
+
+
+class TestExtractDeepAgentsSkillsMetadata:
+    def test_top_level_metadata(self):
+        assert _extract_deepagents_skills_metadata(
+            {"skills_metadata": [{"name": "probe"}]}
+        ) == [{"name": "probe"}]
+
+    def test_nested_output_metadata(self):
+        assert _extract_deepagents_skills_metadata(
+            {"output": {"skills_metadata": [{"name": "nested"}]}}
+        ) == [{"name": "nested"}]
+
+    def test_ignores_non_dict_items(self):
+        assert _extract_deepagents_skills_metadata(
+            {"skills_metadata": [{"name": "probe"}, "bad"]}
+        ) == [{"name": "probe"}]
 
 
 class TestConvertMessage:

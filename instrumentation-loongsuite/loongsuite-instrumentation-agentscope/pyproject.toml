@@ -30,12 +30,13 @@ dependencies = [
   "opentelemetry-instrumentation >= 0.58b0",
   "opentelemetry-semantic-conventions >= 0.58b0",
   "opentelemetry-util-genai",
+  "packaging >= 18.0",
   "wrapt >= 1.17.3, < 2.0.0",
 ]
 
 [project.optional-dependencies]
 instruments = [
-  "agentscope >= 1.0.0",
+  "agentscope >= 1.0.0, < 3.0.0",
 ]
 
 test = [
@@ -43,17 +44,17 @@ test = [
   "pytest-asyncio ~= 0.23.0",
   "pytest-cov ~= 4.1.0",
   "pytest-vcr ~= 1.0.2",
-  "vcrpy ~= 5.1.0",
+  "vcrpy >= 8.1.1",
   "pyyaml ~= 6.0",
-  "agentscope >= 1.0.0",
+  "agentscope >= 1.0.0, < 3.0.0",
 ]
 
 [project.entry-points.opentelemetry_instrumentor]
 agentscope = "opentelemetry.instrumentation.agentscope:AgentScopeInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-agentscope"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-agentscope"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/agentscope/version.py"

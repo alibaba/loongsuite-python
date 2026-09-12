@@ -50,8 +50,8 @@ test = [
 qwen_agent = "opentelemetry.instrumentation.qwen_agent:QwenAgentInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-qwen-agent"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-qwen-agent"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/qwen_agent/version.py"

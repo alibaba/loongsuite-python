@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
+There are no changelog entries for this release.
+
+## Version 0.8.0 (2026-07-31)
+
+There are no changelog entries for this release.
+
+## Version 0.7.0 (2026-07-03)
+
+### Fixed
+
+- Create Hermes `ENTRY` spans for platform-less `AIAgent` calls by mirroring
+  Hermes session source resolution: `platform`, `HERMES_SESSION_SOURCE`, then
+  `cli`. This changes no-platform runs from `AGENT`-only to `ENTRY` -> `AGENT`
+  while leaving explicit CLI, IM, TUI, and API Server platform paths unchanged;
+  disable the Hermes instrumentation if a process must keep no-platform top
+  level agent calls as `AGENT`-only.
+
+## Version 0.6.0 (2026-06-03)
+
+There are no changelog entries for this release.
+
 ## Version 0.5.0 (2026-05-11)
 
 ### Added

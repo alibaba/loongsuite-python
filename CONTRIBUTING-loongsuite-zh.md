@@ -1,4 +1,4 @@
-# 贡献代码到 loongsuite-python-agent
+# 贡献代码到 loongsuite-python
 
 为了得到更快速的响应，强烈建议您进入 DingTalk SIG 进行讨论。
 
@@ -8,7 +8,7 @@ LoongSuite Python SIG:
 
 ## 目录
 
-- [贡献代码到 loongsuite-python-agent](#贡献代码到-loongsuite-python-agent)
+- [贡献代码到 loongsuite-python](#贡献代码到-loongsuite-python)
   - [目录](#目录)
   - [开发](#开发)
     - [虚拟环境](#虚拟环境)
@@ -125,19 +125,19 @@ def test_simple_start_span(benchmark):
 
 ### 如何创建 PR
 
-欢迎所有人通过 GitHub Pull Request(PR) 为 `loongsuite-python-agent` 贡献代码。
+欢迎所有人通过 GitHub Pull Request(PR) 为 `loongsuite-python` 贡献代码。
 
 要创建新的 PR，请在 GitHub 上 fork 项目并克隆上游仓库：
 
 ```sh
-git clone https://github.com/alibaba/loongsuite-python-agent.git
-cd loongsuite-python-agent
+git clone https://github.com/alibaba/loongsuite-python.git
+cd loongsuite-python
 ```
 
 将您的 fork 添加为 origin：
 
 ```sh
-git remote add fork https://github.com/YOUR_GITHUB_USERNAME/loongsuite-python-agent.git
+git remote add fork https://github.com/YOUR_GITHUB_USERNAME/loongsuite-python.git
 ```
 
 确保您已安装所有支持的 Python 版本，首次安装 `tox`：
@@ -171,7 +171,7 @@ git commit
 git push fork feature
 ```
 
-针对 `loongsuite-python-agent` 仓库打开 PR。
+针对 `loongsuite-python` 仓库打开 PR。
 
 ### 如何接收评论
 
@@ -184,7 +184,7 @@ git push fork feature
 
 请在 PR 中 @ 对应组件的贡献者，如果您找不到合适的 Reviewer，则可以联系 Maintainer 解决。
 
-为了得到更快速的响应，强烈建议您进入 DingTalk SIG 进行讨论。请查看[贡献代码到 loongsuite-python-agent](#贡献代码到-loongsuite-python-agent)
+为了得到更快速的响应，强烈建议您进入 DingTalk SIG 进行讨论。请查看[贡献代码到 loongsuite-python](#贡献代码到-loongsuite-python)
 
 > [!TIP]
 > 即使您是新手，您的审查也很重要——对项目很有价值。请随时参与任何开放的 PR：检查文档、运行测试、提出问题，或在看起来不错时给出 +1。任何人都可以审查 PR 并帮助它们被合并。每条评论都推动项目向前发展，所以如果您有专业知识来审查 PR，请不要犹豫。
@@ -204,7 +204,7 @@ git push fork feature
 
 ## 设计选择
 
-与其他 LoongSuite 探针一样，loongsuite-python-agent 遵循
+与其他 LoongSuite 探针一样，loongsuite-python 遵循
 [opentelemetry-specification](https://github.com/open-telemetry/opentelemetry-specification)。
 
 推荐阅读 [库指南](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/library-guidelines.md)。
@@ -224,7 +224,7 @@ OpenTelemetry 是一个不断发展的规范，其中需求和
 
 ## 本地运行测试
 
-1. 转到您的 Python Agent 仓库目录。`git clone git@github.com:alibaba/loongsuite-python-agent.git && cd loongsuite-python-agent`。
+1. 转到您的 Python Agent 仓库目录。`git clone git@github.com:alibaba/loongsuite-python.git && cd loongsuite-python`。
 2. 确保您已安装 `tox`。`pip install tox`。
 3. 运行 `tox` 不带任何参数以运行所有包的测试。阅读更多关于 [tox](https://tox.readthedocs.io/en/latest/) 的信息。
 
@@ -247,7 +247,7 @@ tox -e py312-test-instrumentation-aiopg
 CORE_REPO_SHA=c49ad57bfe35cfc69bfa863d74058ca9bec55fc3 tox
 ```
 
-持续集成会根据[此处](https://github.com/alibaba/loongsuite-python-agent/blob/main/.github/workflows/test_0.yml#L14)的配置覆盖该环境变量。
+持续集成会根据[此处](https://github.com/alibaba/loongsuite-python/blob/main/.github/workflows/test_0.yml#L14)的配置覆盖该环境变量。
 
 ## 风格指南
 
@@ -262,28 +262,28 @@ CORE_REPO_SHA=c49ad57bfe35cfc69bfa863d74058ca9bec55fc3 tox
   - 为了确保一致性，我们鼓励与 [STABLE](https://opentelemetry.io/docs/specs/otel/document-status/#lifecycle-status) 语义约定（如果可用）对齐的贡献。这种方法有助于我们避免潜在的混淆，并减少支持多个过时版本的语义约定的需要。但是，我们仍然愿意考虑有充分理由的例外情况。
   - 与过时的 HTTP 语义约定相关的贡献（在成为[稳定](https://github.com/open-telemetry/semantic-conventions/tree/v1.23.0)之前的约定）可能会被劝阻，因为它们增加了复杂性和误解的可能性。
 - 包含一个在 [Pypi](https://pypi.org/) 中尚未被占用的名称。如果所需名称已被占用，请联系维护者。
-- 继承自 [BaseInstrumentor](https://github.com/alibaba/loongsuite-python-agent/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/opentelemetry-instrumentation/src/opentelemetry/instrumentation/instrumentor.py#L35)
+- 继承自 [BaseInstrumentor](https://github.com/alibaba/loongsuite-python/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/opentelemetry-instrumentation/src/opentelemetry/instrumentation/instrumentor.py#L35)
 - 支持自动 instrumentation
   - [在此处](./instrumentation-loongsuite/)新增一个新的 instrumentation 包，命名必须以 loongsuite-instrumentation 开头
-  - 添加入口点（例如 <https://github.com/alibaba/loongsuite-python-agent/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-requests/pyproject.toml#L44>）
+  - 添加入口点（例如 <https://github.com/alibaba/loongsuite-python/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-requests/pyproject.toml#L44>）
   - 添加新的 instrumentation 包后运行 `python scripts/generate_instrumentation_bootstrap.py`。
-- 在其他 instrumentation 中通用且可以抽象的功能[在此处](https://github.com/alibaba/loongsuite-python-agent/tree/main/opentelemetry-instrumentation/src/opentelemetry/instrumentation)，如果需要修改其中的内容，建议优先提交 issue 或 draft PR，Maintainer 会协助你贡献到上游的 OpenTelemetry 社区。
-- HTTP instrumentation 的请求/响应 [hooks](https://github.com/alibaba/loongsuite-python-agent/issues/408)
+- 在其他 instrumentation 中通用且可以抽象的功能[在此处](https://github.com/alibaba/loongsuite-python/tree/main/opentelemetry-instrumentation/src/opentelemetry/instrumentation)，如果需要修改其中的内容，建议优先提交 issue 或 draft PR，Maintainer 会协助你贡献到上游的 OpenTelemetry 社区。
+- HTTP instrumentation 的请求/响应 [hooks](https://github.com/alibaba/loongsuite-python/issues/408)
 - `suppress_instrumentation` 功能
-  - 例如 <https://github.com/alibaba/loongsuite-python-agent/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/opentelemetry-instrumentation/src/opentelemetry/instrumentation/utils.py#L191>
+  - 例如 <https://github.com/alibaba/loongsuite-python/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/opentelemetry-instrumentation/src/opentelemetry/instrumentation/utils.py#L191>
 - 抑制传播功能
-  - https://github.com/alibaba/loongsuite-python-agent/issues/344 了解更多上下文
+  - https://github.com/alibaba/loongsuite-python/issues/344 了解更多上下文
 - `exclude_urls` 功能
-  - 例如 <https://github.com/alibaba/loongsuite-python-agent/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-flask/src/opentelemetry/instrumentation/flask/__init__.py#L327>
+  - 例如 <https://github.com/alibaba/loongsuite-python/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-flask/src/opentelemetry/instrumentation/flask/__init__.py#L327>
 - `url_filter` 功能
-  - 例如 <https://github.com/alibaba/loongsuite-python-agent/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-aiohttp-client/src/opentelemetry/instrumentation/aiohttp_client/__init__.py#L268>
+  - 例如 <https://github.com/alibaba/loongsuite-python/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-aiohttp-client/src/opentelemetry/instrumentation/aiohttp_client/__init__.py#L268>
 - 在非采样 span 上的 `is_recording()` 优化
-  - 例如 <https://github.com/alibaba/loongsuite-python-agent/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-requests/src/opentelemetry/instrumentation/requests/__init__.py#L234>
+  - 例如 <https://github.com/alibaba/loongsuite-python/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-requests/src/opentelemetry/instrumentation/requests/__init__.py#L234>
 - 适当的错误处理
-  - 例如 <https://github.com/alibaba/loongsuite-python-agent/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-requests/src/opentelemetry/instrumentation/requests/__init__.py#L220>
+  - 例如 <https://github.com/alibaba/loongsuite-python/blob/2518a4ac07cb62ad6587dd8f6cbb5f8663a7e179/instrumentation/opentelemetry-instrumentation-requests/src/opentelemetry/instrumentation/requests/__init__.py#L220>
 - 隔离同步和异步测试
   - 对于同步测试，典型的测试用例类继承自 `opentelemetry.test.test_base.TestBase`。但是，如果您想编写异步测试，测试用例类还应继承自 `IsolatedAsyncioTestCase`。将异步测试添加到公共测试类可能导致测试通过但实际上没有运行，这可能会产生误导。
-  - 例如 <https://github.com/alibaba/loongsuite-python-agent/blob/60fb936b7e5371b3e5587074906c49fb873cbd76/instrumentation/opentelemetry-instrumentation-grpc/tests/test_aio_server_interceptor.py#L84>
+  - 例如 <https://github.com/alibaba/loongsuite-python/blob/60fb936b7e5371b3e5587074906c49fb873cbd76/instrumentation/opentelemetry-instrumentation-grpc/tests/test_aio_server_interceptor.py#L84>
 - 大多数 instrumentation 具有相同的版本。如果您要开发新的 instrumentation，它可能具有 `X.Y.dev` 版本，并依赖于 `opentelemetry-instrumentation` 和 `opentelemetry-semantic-conventions` 的[兼容版本](https://peps.python.org/pep-0440/#compatible-release)。这意味着您可能需要从 git 安装此仓库的 instrumentation 依赖项和核心仓库的依赖项。
 - 文档
   - 添加新 instrumentation 时，请记住在 `docs/instrumentation/` 中添加名为 `<instrumentation>/<instrumentation>.rst` 的条目，以便从索引中引用 instrumentation 文档。您可以使用[此处](./_template/autodoc_entry.rst)提供的条目模板
@@ -329,7 +329,7 @@ instruments-any = [
 
 * Approve PR：任意来源的 approve 都是允许的，您可以通过 approve 来推动 PR 的合并进程，但在合并事实达成之前，仍需 Maintainer 之一进行 approve。
 
-* 跟踪和创建问题：要跟踪与生成式 AI 相关的问题，请在创建或搜索问题时过滤或添加标签 [genai](https://github.com/alibaba/loongsuite-python-agent/issues?q=is%3Aissue%20state%3Aopen%20label%3Agenai)。如果您没有看到与您想要贡献的 instrumentation 相关的问题，请创建一个新的跟踪问题，以便社区了解其进展。
+* 跟踪和创建问题：要跟踪与生成式 AI 相关的问题，请在创建或搜索问题时过滤或添加标签 [genai](https://github.com/alibaba/loongsuite-python/issues?q=is%3Aissue%20state%3Aopen%20label%3Agenai)。如果您没有看到与您想要贡献的 instrumentation 相关的问题，请创建一个新的跟踪问题，以便社区了解其进展。
 
 ## 对贡献者的期望
 

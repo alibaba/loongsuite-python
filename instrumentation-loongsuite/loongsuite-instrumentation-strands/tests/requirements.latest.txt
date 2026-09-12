@@ -1,0 +1,6 @@
+strands-agents>=1.50.2,<2.0.0
+pytest
+pytest-asyncio
+pytest-cov
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-strands

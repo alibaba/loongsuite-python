@@ -37,6 +37,8 @@ from opentelemetry.util.genai.extended_types import (
 from opentelemetry.util.genai.types import Error
 
 from .utils import (
+    _apply_usage_to_llm_invocation,
+    _convert_qwen_agent_final_output_messages,
     _convert_qwen_messages_to_output_messages,
     _create_agent_invocation,
     _create_llm_invocation,
@@ -56,11 +58,14 @@ _react_step_invocation: ContextVar[Optional[ReactStepInvocation]] = ContextVar(
 _react_step_counter: ContextVar[int] = ContextVar(
     "qwen_react_step_counter", default=0
 )
+_active_agent_invocations: ContextVar[tuple[Any, ...]] = ContextVar(
+    "qwen_active_agent_invocations", default=()
+)
 
 # Reentrancy guards to prevent duplicate spans when Agent/BaseChatModel
 # are abstract classes and subclass calls super() (Proxy/Wrapper scenarios).
-_in_agent_run: ContextVar[bool] = ContextVar(
-    "_qwen_in_agent_run", default=False
+_agent_run_instance_stack: ContextVar[tuple[int, ...]] = ContextVar(
+    "_qwen_agent_run_instance_stack", default=()
 )
 _in_chat: ContextVar[bool] = ContextVar("_qwen_in_chat", default=False)
 _in_call_tool: ContextVar[bool] = ContextVar(
@@ -79,6 +84,42 @@ def _close_active_react_step(handler: ExtendedTelemetryHandler) -> None:
         _react_step_invocation.set(None)
 
 
+def _accumulate_llm_usage_on_active_agents(invocation: Any) -> None:
+    """Roll up child LLM token usage onto active invoke_agent spans.
+
+    The rollup is intentionally transitive: a parent agent records the total
+    nested LLM cost of its run, so consumers should not sum agent spans to
+    calculate global token usage.
+    """
+    active_agents = _active_agent_invocations.get()
+    if not active_agents:
+        return
+
+    for active_agent in active_agents:
+        if getattr(invocation, "input_tokens", None) is not None:
+            active_agent.input_tokens = (active_agent.input_tokens or 0) + (
+                invocation.input_tokens or 0
+            )
+        if getattr(invocation, "output_tokens", None) is not None:
+            active_agent.output_tokens = (active_agent.output_tokens or 0) + (
+                invocation.output_tokens or 0
+            )
+        if (
+            getattr(invocation, "usage_cache_read_input_tokens", None)
+            is not None
+        ):
+            active_agent.usage_cache_read_input_tokens = (
+                active_agent.usage_cache_read_input_tokens or 0
+            ) + (invocation.usage_cache_read_input_tokens or 0)
+        if (
+            getattr(invocation, "usage_cache_creation_input_tokens", None)
+            is not None
+        ):
+            active_agent.usage_cache_creation_input_tokens = (
+                active_agent.usage_cache_creation_input_tokens or 0
+            ) + (invocation.usage_cache_creation_input_tokens or 0)
+
+
 def wrap_agent_run(
     wrapped, instance, args, kwargs, handler: ExtendedTelemetryHandler
 ):
@@ -93,10 +134,12 @@ def wrap_agent_run(
     """
     # Reentrancy guard: prevent duplicate spans in Proxy/Wrapper scenarios
     # where a subclass calls super().run().
-    if _in_agent_run.get():
+    run_stack = _agent_run_instance_stack.get()
+    instance_id = id(instance)
+    if instance_id in run_stack:
         yield from wrapped(*args, **kwargs)
         return
-    run_token = _in_agent_run.set(True)
+    run_token = _agent_run_instance_stack.set(run_stack + (instance_id,))
 
     messages = args[0] if args else kwargs.get("messages", [])
 
@@ -104,7 +147,7 @@ def wrap_agent_run(
         invocation = _create_agent_invocation(instance, messages)
     except Exception as e:
         logger.debug(f"Failed to create agent invocation: {e}")
-        _in_agent_run.reset(run_token)
+        _agent_run_instance_stack.reset(run_token)
         yield from wrapped(*args, **kwargs)
         return
 
@@ -113,6 +156,9 @@ def wrap_agent_run(
     mode_token = _react_mode.set(is_react)
     counter_token = _react_step_counter.set(0)
     step_token = _react_step_invocation.set(None)
+    active_agent_token = _active_agent_invocations.set(
+        _active_agent_invocations.get() + (invocation,)
+    )
 
     handler.start_invoke_agent(invocation)
 
@@ -125,7 +171,7 @@ def wrap_agent_run(
         # Extract output from last yielded response
         if last_response:
             invocation.output_messages = (
-                _convert_qwen_messages_to_output_messages(last_response)
+                _convert_qwen_agent_final_output_messages(last_response)
             )
 
         # Close the last react_step span before closing invoke_agent.
@@ -153,7 +199,8 @@ def wrap_agent_run(
         _react_step_counter.reset(counter_token)
         _react_step_invocation.reset(step_token)
         _react_mode.reset(mode_token)
-        _in_agent_run.reset(run_token)
+        _active_agent_invocations.reset(active_agent_token)
+        _agent_run_instance_stack.reset(run_token)
 
 
 def wrap_chat_model_chat(
@@ -206,6 +253,7 @@ def wrap_chat_model_chat(
             else:
                 # Non-streaming: result is List[Message]
                 if result:
+                    _apply_usage_to_llm_invocation(invocation, result)
                     invocation.output_messages = (
                         _convert_qwen_messages_to_output_messages(result)
                     )
@@ -225,6 +273,7 @@ def wrap_chat_model_chat(
                             invocation.finish_reasons = ["tool_calls"]
                             break
 
+                _accumulate_llm_usage_on_active_agents(invocation)
                 handler.stop_llm(invocation)
                 return result
 
@@ -246,6 +295,7 @@ def _wrap_streaming_llm_response(
             if first_token:
                 invocation.monotonic_first_token_s = timeit.default_timer()
                 first_token = False
+            _apply_usage_to_llm_invocation(invocation, response)
             last_response = response
             yield response
 
@@ -269,6 +319,7 @@ def _wrap_streaming_llm_response(
                     invocation.finish_reasons = ["tool_calls"]
                     break
 
+        _accumulate_llm_usage_on_active_agents(invocation)
         handler.stop_llm(invocation)
 
     except GeneratorExit as e:

@@ -18,6 +18,10 @@ Focuses on testing the _detect_audio_format method's ability to recognize variou
 and audio format conversion (e.g., PCM16 to WAV)
 """
 
+import os
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +32,8 @@ from opentelemetry.util.genai._multimodal_upload.pre_uploader import (
     _audio_libs_available,
 )
 from opentelemetry.util.genai.types import Blob, InputMessage
+
+from .multimodal_test_helpers import reset_multimodal_runtime_state_for_test
 
 # Test audio file directory
 TEST_AUDIO_DIR = Path(__file__).parent / "test_audio_samples"
@@ -43,6 +49,7 @@ def _default_upload_mode_enabled_for_tests():
             "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_AUDIO_CONVERSION_ENABLED": "true",
         },
     ):
+        reset_multimodal_runtime_state_for_test()
         yield
 
 
@@ -64,6 +71,55 @@ class TestAudioFormatDetection:
 
         with open(filepath, "rb") as file_obj:
             return file_obj.read()
+
+    @staticmethod
+    def test_import_without_audio_libs_does_not_write_to_standard_streams():
+        """Missing optional audio libs should not emit import-time output."""
+        project_root = Path(__file__).parents[4]
+        util_genai_src = Path(__file__).parents[2] / "src"
+        instrumentation_src = (
+            project_root / "opentelemetry-instrumentation" / "src"
+        )
+        env = os.environ.copy()
+        pythonpath_parts = [
+            str(util_genai_src),
+            str(instrumentation_src),
+            env.get("PYTHONPATH", ""),
+        ]
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in pythonpath_parts if part
+        )
+
+        script = textwrap.dedent(
+            """
+            import importlib.abc
+            import logging
+            import sys
+
+            class BlockAudioLibs(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname == "numpy" or fullname.startswith("numpy."):
+                        raise ImportError(fullname)
+                    if fullname == "soundfile" or fullname.startswith("soundfile."):
+                        raise ImportError(fullname)
+                    return None
+
+            sys.meta_path.insert(0, BlockAudioLibs())
+            logging.basicConfig(level=logging.WARNING, stream=sys.stdout)
+            import opentelemetry.util.genai._multimodal_upload.pre_uploader  # noqa: F401
+            """
+        )
+
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert completed.stdout == ""
+        assert completed.stderr == ""
 
     # ========== Edge Case Tests ==========
 
@@ -175,6 +231,53 @@ class TestAudioFormatDetection:
             assert uploads[0].content_type == pcm_mime_type
 
     @staticmethod
+    def test_pcm16_conversion_missing_audio_libs_logs_single_warning(
+        caplog,
+    ):
+        """Missing optional audio libs should only log the actual conversion skip."""
+        with patch(
+            "opentelemetry.util.genai._multimodal_upload.pre_uploader._audio_libs_available",
+            False,
+        ):
+            with patch(
+                "opentelemetry.util.genai._multimodal_upload.pre_uploader.np",
+                None,
+            ):
+                with patch(
+                    "opentelemetry.util.genai._multimodal_upload.pre_uploader.sf",
+                    None,
+                ):
+                    pre_uploader = MultimodalPreUploader(
+                        base_path="/tmp/test_upload"
+                    )
+                    part = Blob(
+                        content=b"\x00\x01" * 1000,
+                        mime_type="audio/pcm16",
+                        modality="audio",
+                    )
+                    input_messages = [InputMessage(role="user", parts=[part])]
+
+                    with caplog.at_level(
+                        "WARNING",
+                        logger=(
+                            "opentelemetry.util.genai._multimodal_upload.pre_uploader"
+                        ),
+                    ):
+                        uploads = pre_uploader.pre_upload(
+                            span_context=None,
+                            start_time_utc_nano=1000000000000000000,
+                            input_messages=input_messages,
+                            output_messages=None,
+                        )
+
+        assert len(uploads) == 1
+        assert uploads[0].content_type == "audio/pcm16"
+        warning_messages = [record.getMessage() for record in caplog.records]
+        assert warning_messages == [
+            "Failed to convert PCM16 to WAV, using original format"
+        ]
+
+    @staticmethod
     def test_pcm16_conversion_disabled_by_default():
         """Test PCM16 conversion stays disabled when env var is unset"""
         with patch.dict(
@@ -185,6 +288,7 @@ class TestAudioFormatDetection:
             },
             clear=True,
         ):
+            reset_multimodal_runtime_state_for_test()
             pre_uploader = MultimodalPreUploader(base_path="/tmp/test_upload")
             pcm_data = b"\x00\x01" * 1000
             part = Blob(

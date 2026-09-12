@@ -1,0 +1,134 @@
+interactions:
+- request:
+    body: '{"contents": [{"parts": [{"text": "You must call get_temperature for Paris,
+      then reply with only the returned temperature."}], "role": "user"}], "tools":
+      [{"functionDeclarations": [{"description": "Return the current temperature for
+      a city.", "name": "get_temperature", "parameters": {"properties": {"city": {"type":
+      "STRING"}}, "required": ["city"], "type": "OBJECT"}}]}], "generationConfig":
+      {}}'
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '397'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.14.0+afc gl-python/3.12.10
+      x-goog-api-client:
+      - google-genai-sdk/2.14.0+afc gl-python/3.12.10
+      x-goog-api-key:
+      - test-google-key
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent
+  response:
+    body:
+      string: "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\":
+        [\n          {\n            \"functionCall\": {\n              \"name\": \"get_temperature\",\n
+        \             \"args\": {\n                \"city\": \"Paris\"\n              },\n
+        \             \"id\": \"G3pXycr5\"\n            },\n            \"thoughtSignature\":
+        \"dGVzdC10aG91Z2h0LXNpZ25hdHVyZQ==\"\n          }\n        ],\n        \"role\":
+        \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n
+        \     \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n
+        \ \"usageMetadata\": {\n    \"promptTokenCount\": 63,\n    \"candidatesTokenCount\":
+        16,\n    \"totalTokenCount\": 79,\n    \"promptTokensDetails\": [\n      {\n
+        \       \"modality\": \"TEXT\",\n        \"tokenCount\": 63\n      }\n    ],\n
+        \   \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.5-flash-lite\",\n
+        \ \"responseId\": \"p9FiauqAHtSGz7IPisOxqAU\"\n}\n"
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '882'
+      content-type:
+      - application/json; charset=UTF-8
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"contents": [{"parts": [{"text": "You must call get_temperature for Paris,
+      then reply with only the returned temperature."}], "role": "user"}, {"parts":
+      [{"functionCall": {"id": "G3pXycr5", "args": {"city": "Paris"}, "name": "get_temperature"},
+      "thoughtSignature": "dGVzdC10aG91Z2h0LXNpZ25hdHVyZQ=="}], "role": "model"},
+      {"parts": [{"functionResponse": {"name": "get_temperature", "response": {"result":
+      "17 C"}}}], "role": "user"}], "tools": [{"functionDeclarations": [{"description":
+      "Return the current temperature for a city.", "name": "get_temperature", "parameters":
+      {"properties": {"city": {"type": "STRING"}}, "required": ["city"], "type": "OBJECT"}}]}],
+      "generationConfig": {}}'
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '727'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.14.0+afc gl-python/3.12.10
+      x-goog-api-client:
+      - google-genai-sdk/2.14.0+afc gl-python/3.12.10
+      x-goog-api-key:
+      - test-google-key
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent
+  response:
+    body:
+      string: "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\":
+        [\n          {\n            \"text\": \"17 C\",\n            \"thoughtSignature\":
+        \"dGVzdC10aG91Z2h0LXNpZ25hdHVyZQ==\"\n          }\n        ],\n        \"role\":
+        \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n
+        \   }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 95,\n    \"candidatesTokenCount\":
+        3,\n    \"totalTokenCount\": 98,\n    \"promptTokensDetails\": [\n      {\n
+        \       \"modality\": \"TEXT\",\n        \"tokenCount\": 95\n      }\n    ],\n
+        \   \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.5-flash-lite\",\n
+        \ \"responseId\": \"qNFiarnfCoDUz7IP64nL-QQ\"\n}\n"
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '659'
+      content-type:
+      - application/json; charset=UTF-8
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

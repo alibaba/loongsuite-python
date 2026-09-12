@@ -11,7 +11,47 @@ import pytest
 agentscope = pytest.importorskip("agentscope")
 from agentscope.agent import AgentBase  # noqa: E402
 from agentscope.message import Msg  # noqa: E402
-from agentscope.model import ChatModelBase, ChatResponse  # noqa: E402
+from agentscope.model import (  # noqa: E402
+    ChatModelBase,
+    ChatResponse,
+)
+from agentscope.model._model_usage import ChatUsage  # noqa: E402
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_model_cache_usage(
+    instrument_with_content, span_exporter, streaming
+):
+    class CacheModel(ChatModelBase):
+        def __init__(self):
+            super().__init__("cache-model", streaming)
+
+        async def __call__(self, *args, **kwargs):
+            usage = ChatUsage(input_tokens=200, output_tokens=10, time=0.1)
+            usage["cache_input_tokens"] = 100
+            usage["cache_creation_input_tokens"] = 40
+            result = ChatResponse(
+                content=[{"type": "text", "text": "ok"}], usage=usage
+            )
+
+            async def chunks():
+                yield result
+
+            return chunks() if streaming else result
+
+    result = await CacheModel()([])
+    if streaming:
+        result = [chunk async for chunk in result][-1]
+    assert result.content[0]["text"] == "ok"
+    [span] = [
+        s
+        for s in span_exporter.get_finished_spans()
+        if s.name.startswith("chat ")
+    ]
+    assert span.attributes["gen_ai.usage.cache_read.input_tokens"] == 100
+    assert span.attributes["gen_ai.usage.cache_creation.input_tokens"] == 40
+    assert span.attributes["gen_ai.usage.input_tokens"] == 200
 
 
 @pytest.mark.asyncio

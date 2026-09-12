@@ -5,9 +5,9 @@ name: LoongSuite Lint {{ file_number }}
 
 on:
   push:
-    branches-ignore:
-    - 'release/*'
-    - 'otelbot/*'
+    # LoongSuite feature-branch pushes are covered by pull_request.
+    branches:
+    - main
   pull_request:
   merge_group:
 
@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${% raw %}{{ github.workflow }}-${{ github.head_ref || github.run_id }}{% endraw %}
+  group: ${% raw %}{{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref || github.run_id }}{% endraw %}
   cancel-in-progress: true
 
 env:
@@ -34,12 +34,14 @@ env:
 jobs:
   loongsuite_changes:
     name: LoongSuite changed packages
-    runs-on: ubuntu-latest
+    runs-on: {{ control_runner }}
     outputs:
       full: ${% raw %}{{ steps.detect.outputs.full }}{% endraw %}
       packages: ${% raw %}{{ steps.detect.outputs.packages }}{% endraw %}
       degraded: ${% raw %}{{ steps.detect.outputs.degraded }}{% endraw %}
       reason: ${% raw %}{{ steps.detect.outputs.reason }}{% endraw %}
+      has_jobs: ${% raw %}{{ steps.matrix.outputs.has_jobs }}{% endraw %}
+      matrix: ${% raw %}{{ steps.matrix.outputs.matrix }}{% endraw %}
     steps:
       - name: Checkout repo @ SHA - ${% raw %}{{ github.sha }}{% endraw %}
         uses: actions/checkout@v4
@@ -55,12 +57,14 @@ jobs:
         id: detect
         shell: bash
         run: |
+          set -euo pipefail
           detector=.github/scripts/detect_loongsuite_changes.py
           run_detector() {
             if ! python "$1"; then
               echo "::warning::LoongSuite change detector failed; falling back to full CI"
               {
                 echo "full=true"
+                # full=true is authoritative; packages is intentionally empty.
                 echo "packages=||"
                 echo "degraded=true"
                 echo "reason=detector command failed"
@@ -69,21 +73,43 @@ jobs:
           }
           if [[ "${% raw %}{{ github.event_name }}{% endraw %}" == "pull_request" ]] && git cat-file -e "${% raw %}{{ github.event.pull_request.base.sha }}{% endraw %}:$detector" 2>/dev/null; then
             git show "${% raw %}{{ github.event.pull_request.base.sha }}{% endraw %}:$detector" > /tmp/detect_loongsuite_changes.py
+            [[ -s /tmp/detect_loongsuite_changes.py ]] || { echo "::error::base-SHA detector blob is empty"; exit 1; }
             run_detector /tmp/detect_loongsuite_changes.py
           else
             run_detector "$detector"
           fi
 
-  {%- for job_data in job_datas %}
+      - name: Select LoongSuite lint matrix
+        id: matrix
+        shell: bash
+        env:
+          LOONGSUITE_ALL_JOBS: >-
+            {{ job_datas | tojson }}
+          LOONGSUITE_FULL: ${% raw %}{{ steps.detect.outputs.full }}{% endraw %}
+          LOONGSUITE_PACKAGES: ${% raw %}{{ steps.detect.outputs.packages }}{% endraw %}
+        run: |
+          set -euo pipefail
+          selector=.github/scripts/select_loongsuite_matrix.py
+          run_selector() {
+            python "$1"
+          }
+          if [[ "${% raw %}{{ github.event_name }}{% endraw %}" == "pull_request" ]] && git cat-file -e "${% raw %}{{ github.event.pull_request.base.sha }}{% endraw %}:$selector" 2>/dev/null; then
+            git show "${% raw %}{{ github.event.pull_request.base.sha }}{% endraw %}:$selector" > /tmp/select_loongsuite_matrix.py
+            [[ -s /tmp/select_loongsuite_matrix.py ]] || { echo "::error::base-SHA selector blob is empty"; exit 1; }
+            run_selector /tmp/select_loongsuite_matrix.py
+          else
+            run_selector "$selector"
+          fi
 
-  {{ job_data.name }}:
-    name: LoongSuite {{ job_data.ui_name }}
+  loongsuite_lint:
+    name: LoongSuite ${% raw %}{{ matrix.ui_name }}{% endraw %}
     needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|{{ job_data.package }}|')
-    runs-on: ubuntu-latest
+    if: ${% raw %}{{ needs.loongsuite_changes.outputs.has_jobs == 'true' }}{% endraw %}
+    runs-on: {{ runner }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${% raw %}{{ fromJSON(needs.loongsuite_changes.outputs.matrix) }}{% endraw %}
     steps:
       - name: Checkout repo @ SHA - ${% raw %}{{ github.sha }}{% endraw %}
         uses: actions/checkout@v4
@@ -97,5 +123,35 @@ jobs:
         run: pip install tox-uv
 
       - name: Run tests
-        run: tox -c tox-loongsuite.ini -e {{ job_data.tox_env }}
-  {%- endfor %}
+        run: tox -c tox-loongsuite.ini -e ${% raw %}{{ matrix.tox_env }}{% endraw %}
+
+  loongsuite_lint_result:
+    name: LoongSuite Lint {{ file_number }} result
+    needs:
+      - loongsuite_changes
+      - loongsuite_lint
+    if: ${% raw %}{{ always() }}{% endraw %}
+    runs-on: {{ control_runner }}
+    steps:
+      - name: Check LoongSuite lint result
+        shell: bash
+        run: |
+          changes_result="${% raw %}{{ needs.loongsuite_changes.result }}{% endraw %}"
+          lint_result="${% raw %}{{ needs.loongsuite_lint.result }}{% endraw %}"
+          has_jobs="${% raw %}{{ needs.loongsuite_changes.outputs.has_jobs }}{% endraw %}"
+          detector_degraded="${% raw %}{{ needs.loongsuite_changes.outputs.degraded }}{% endraw %}"
+          detector_reason="${% raw %}{{ needs.loongsuite_changes.outputs.reason }}{% endraw %}"
+          echo "::notice::LoongSuite detector degraded=$detector_degraded reason=$detector_reason"
+          if [[ "$changes_result" != "success" ]]; then
+            echo "::error::loongsuite_changes ended with $changes_result"
+            exit 1
+          fi
+          if [[ "$lint_result" == "skipped" && "$has_jobs" != "false" ]]; then
+            echo "::error::loongsuite_lint skipped unexpectedly with has_jobs=$has_jobs"
+            exit 1
+          fi
+          if [[ "$lint_result" != "success" && "$lint_result" != "skipped" ]]; then
+            echo "::error::loongsuite_lint ended with $lint_result"
+            exit 1
+          fi
+          echo "LoongSuite lint matrix completed with $lint_result"

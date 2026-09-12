@@ -24,11 +24,11 @@ Modes:
                      (empty Unreleased bodies get a one-line English placeholder).
   --bump-dev            Bump instrumentation-loongsuite, loongsuite-distro, and loongsuite-site-bootstrap versions to the next dev version.
   --pin-release-versions  Pin __version__ to the release version for PyPI packages (release branch; includes util-genai).
-  --rename-packages  Rename opentelemetry-util-genai to loongsuite-util-genai in pyproject.toml files.
+  --rename-packages  Rename opentelemetry-util-genai to loongsuite-otel-util-genai in pyproject.toml files.
 
 Changelog sources (in order):
   1. CHANGELOG-loongsuite.md              (root, label: loongsuite)
-  2. util/opentelemetry-util-genai/CHANGELOG-loongsuite.md  (label: loongsuite-util-genai)
+  2. util/opentelemetry-util-genai/CHANGELOG-loongsuite.md  (label: loongsuite-otel-util-genai)
   3. instrumentation-loongsuite/*/CHANGELOG.md              (per-package)
 
 Usage:
@@ -86,7 +86,7 @@ def _changelog_sources(repo: Path) -> List[Tuple[str, Path]]:
         repo / "util" / "opentelemetry-util-genai" / "CHANGELOG-loongsuite.md"
     )
     if util_cl.exists():
-        sources.append(("loongsuite-util-genai", util_cl))
+        sources.append(("loongsuite-otel-util-genai", util_cl))
 
     inst_dir = repo / "instrumentation-loongsuite"
     if inst_dir.is_dir():
@@ -150,7 +150,7 @@ def collect(
 ) -> None:
     """Collect all Unreleased sections into a single release-notes file."""
     parts: List[str] = []
-    parts.append(f"# loongsuite-python-agent {version}\n")
+    parts.append(f"# loongsuite-python {version}\n")
     parts.append("## Installation\n")
     parts.append("```bash")
     parts.append(f"pip install loongsuite-distro=={version}")
@@ -368,7 +368,7 @@ def bump_dev(
 
 
 def rename_packages(version: str, repo: Path) -> None:
-    """Permanently rename opentelemetry-util-genai to loongsuite-util-genai in pyproject.toml files.
+    """Permanently rename opentelemetry-util-genai to loongsuite-otel-util-genai in pyproject.toml files.
 
     This makes the release branch a self-contained snapshot where package names
     and dependencies already reflect the published names.
@@ -381,7 +381,7 @@ def rename_packages(version: str, repo: Path) -> None:
         )
         sys.exit(1)
 
-    util_dep_spec = f"loongsuite-util-genai ~= {version}"
+    util_dep_spec = f"loongsuite-otel-util-genai ~= {version}"
 
     # 1. Rename util/opentelemetry-util-genai itself
     util_pyproject = (
@@ -390,10 +390,10 @@ def rename_packages(version: str, repo: Path) -> None:
     if util_pyproject.exists():
         doc = tomlkit.parse(util_pyproject.read_text(encoding="utf-8"))
         old_name = doc["project"]["name"]
-        doc["project"]["name"] = "loongsuite-util-genai"
+        doc["project"]["name"] = "loongsuite-otel-util-genai"
         util_pyproject.write_text(tomlkit.dumps(doc), encoding="utf-8")
         print(
-            f"Renamed {util_pyproject.relative_to(repo)}: {old_name} -> loongsuite-util-genai"
+            f"Renamed {util_pyproject.relative_to(repo)}: {old_name} -> loongsuite-otel-util-genai"
         )
     else:
         print(f"WARNING: {util_pyproject} not found")
@@ -457,7 +457,7 @@ def main() -> None:
         "--rename-packages",
         action="store_true",
         default=True,
-        help="Rename opentelemetry-util-genai to loongsuite-util-genai (default, always runs unless other mode specified)",
+        help="Rename opentelemetry-util-genai to loongsuite-otel-util-genai (default, always runs unless other mode specified)",
     )
 
     parser.add_argument(

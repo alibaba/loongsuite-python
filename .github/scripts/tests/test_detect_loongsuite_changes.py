@@ -20,9 +20,10 @@ def _run_detector(
     event=None,
     known_packages=None,
     tox_diff=None,
+    event_name="pull_request",
 ):
     output_path = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event_name)
     monkeypatch.setenv("GITHUB_OUTPUT", str(output_path))
 
     if changed_files is None:
@@ -86,6 +87,40 @@ def test_util_genai_change_runs_full_suite(monkeypatch, tmp_path):
 
     assert outputs["full"] == "true"
     assert outputs["degraded"] == "false"
+
+
+def test_push_event_runs_full_suite(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        detect,
+        "_run_git_diff",
+        lambda base_ref: (_ for _ in ()).throw(
+            AssertionError("push events should not diff against a PR base")
+        ),
+    )
+
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        event_name="push",
+    )
+
+    assert outputs["full"] == "true"
+    assert outputs["packages"] == "||"
+    assert outputs["degraded"] == "false"
+    assert outputs["reason"] == "non-pull-request event"
+
+
+def test_merge_group_event_runs_full_suite(monkeypatch, tmp_path):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        event_name="merge_group",
+    )
+
+    assert outputs["full"] == "true"
+    assert outputs["packages"] == "||"
+    assert outputs["degraded"] == "false"
+    assert outputs["reason"] == "non-pull-request event"
 
 
 def test_release_label_runs_full_suite(monkeypatch, tmp_path):
@@ -175,6 +210,66 @@ def test_generated_workflow_only_change_skips_jobs(monkeypatch, tmp_path):
     assert outputs["packages"] == "||"
 
 
+def test_bootstrap_registry_fragment_scopes_package_change(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [
+            "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+            "loongsuite_instrumentation_crewai.py"
+        ],
+        known_packages={"loongsuite-instrumentation-crewai"},
+    )
+
+    assert outputs["full"] == "false"
+    assert outputs["packages"] == "|loongsuite-instrumentation-crewai|"
+
+
+def test_bootstrap_registry_loader_change_runs_full_suite(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [
+            "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+            "__init__.py"
+        ],
+    )
+
+    assert outputs["full"] == "true"
+    assert outputs["reason"] == (
+        "shared LoongSuite file changed: "
+        "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+        "__init__.py"
+    )
+
+
+def test_upstream_bootstrap_registry_fragment_runs_full_suite(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [
+            "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+            "opentelemetry_instrumentation_aiohttp_client.py"
+        ],
+    )
+
+    assert outputs["full"] == "true"
+    assert outputs["reason"] == (
+        "shared LoongSuite file changed: "
+        "loongsuite-distro/src/loongsuite/distro/bootstrap_registry/"
+        "opentelemetry_instrumentation_aiohttp_client.py"
+    )
+
+
 def test_release_workflow_change_runs_full_suite(monkeypatch, tmp_path):
     outputs = _run_detector(
         monkeypatch,
@@ -187,6 +282,66 @@ def test_release_workflow_change_runs_full_suite(monkeypatch, tmp_path):
         outputs["reason"] == "shared LoongSuite file changed: "
         ".github/workflows/loongsuite-release.yml"
     )
+
+
+def test_matrix_selector_change_runs_full_suite(monkeypatch, tmp_path):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [".github/scripts/select_loongsuite_matrix.py"],
+    )
+
+    assert outputs["full"] == "true"
+    assert (
+        outputs["reason"] == "shared LoongSuite file changed: "
+        ".github/scripts/select_loongsuite_matrix.py"
+    )
+
+
+def test_generate_workflows_lib_metadata_change_runs_full_suite(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [".github/workflows/generate_workflows_lib/pyproject.toml"],
+    )
+
+    assert outputs["full"] == "true"
+    assert outputs["reason"] == (
+        "shared LoongSuite file changed: "
+        ".github/workflows/generate_workflows_lib/pyproject.toml"
+    )
+
+
+def test_generate_workflows_lib_template_change_runs_full_suite(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [
+            ".github/workflows/generate_workflows_lib/src/"
+            "generate_workflows_lib/loongsuite_lint.yml.j2"
+        ],
+    )
+
+    assert outputs["full"] == "true"
+
+
+def test_generate_workflows_lib_test_change_runs_full_suite(
+    monkeypatch,
+    tmp_path,
+):
+    outputs = _run_detector(
+        monkeypatch,
+        tmp_path,
+        [".github/workflows/generate_workflows_lib/tests/test_rendering.py"],
+    )
+
+    assert outputs["full"] == "true"
 
 
 def test_unknown_loongsuite_workflow_change_runs_full_suite(

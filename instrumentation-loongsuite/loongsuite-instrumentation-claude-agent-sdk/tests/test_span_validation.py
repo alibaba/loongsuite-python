@@ -21,6 +21,7 @@ These tests provide detailed validation for specific aspects of the instrumentat
 - Span hierarchy and timeline
 """
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List
@@ -95,6 +96,7 @@ def create_mock_message_from_data(message_data: Dict[str, Any]) -> Any:
 
         mock_msg.uuid = message_data.get("uuid")
         mock_msg.parent_tool_use_id = message_data.get("parent_tool_use_id")
+        mock_msg.tool_use_result = message_data.get("tool_use_result")
 
     elif msg_type == "ResultMessage":
         mock_msg.subtype = message_data["subtype"]
@@ -522,3 +524,329 @@ async def test_span_hierarchy_correctness(
             assert tool_span.parent.span_id != llm_span.context.span_id, (
                 "Tool span should not be a child of LLM span"
             )
+
+
+# ============================================================================
+# Tests - Skill Tool Span (gen_ai.skill.* attributes)
+# ============================================================================
+
+
+def _write_probe_skill_md(
+    project_dir: Path,
+    skill_name: str = "probe-skill",
+    version: str = "1.2.3",
+) -> str:
+    """Create a project-level probe SKILL.md and return its project dir."""
+    skill_dir = project_dir / ".claude" / "skills" / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(
+        "---\n"
+        f"name: {skill_name}\n"
+        f"description: Skill telemetry probe for {skill_name}.\n"
+        f"version: {version}\n"
+        "---\n\n"
+        "When this skill is loaded, answer exactly: PROBE_SKILL_MARKER\n",
+        encoding="utf-8",
+    )
+    return str(project_dir)
+
+
+def _skill_load_messages(
+    cwd: str,
+    skill_name: str = "probe-skill",
+    session_id: str = "skill-session-0001",
+    tool_use_id: str = "call_skill_load_probe",
+    marker: str = "PROBE_SKILL_MARKER",
+) -> List[Dict[str, Any]]:
+    """Message sequence for a Skill load, modelled on the SDK message stream."""
+    return [
+        {
+            "type": "SystemMessage",
+            "subtype": "init",
+            "data": {
+                "type": "system",
+                "subtype": "init",
+                "cwd": cwd,
+                "session_id": session_id,
+                "tools": ["Skill", "Bash", "Read"],
+                "skills": [skill_name],
+                "model": "qwen-plus",
+                "permissionMode": "bypassPermissions",
+                "apiKeySource": "ANTHROPIC_API_KEY",
+                "claude_code_version": "2.1.1",
+                "output_style": "default",
+                "agents": [],
+                "slash_commands": [],
+                "plugins": [],
+                "mcp_servers": [],
+                "uuid": "skill-init-uuid",
+            },
+        },
+        {
+            "type": "AssistantMessage",
+            "model": "qwen-plus",
+            "content": [
+                {
+                    "type": "ToolUseBlock",
+                    "id": tool_use_id,
+                    "name": "Skill",
+                    "input": {"skill": skill_name},
+                }
+            ],
+            "parent_tool_use_id": None,
+            "error": None,
+        },
+        {
+            "type": "UserMessage",
+            "content": [
+                {
+                    "type": "ToolResultBlock",
+                    "tool_use_id": tool_use_id,
+                    "content": f"Launching skill: {skill_name}",
+                    "is_error": False,
+                }
+            ],
+            "uuid": "skill-result-uuid",
+            "parent_tool_use_id": None,
+            "tool_use_result": {
+                "success": True,
+                "commandName": skill_name,
+            },
+        },
+        {
+            "type": "AssistantMessage",
+            "model": "qwen-plus",
+            "content": [{"type": "TextBlock", "text": marker}],
+            "parent_tool_use_id": None,
+            "error": None,
+        },
+        {
+            "type": "ResultMessage",
+            "subtype": "success",
+            "duration_ms": 3210,
+            "duration_api_ms": 9000,
+            "is_error": False,
+            "num_turns": 2,
+            "session_id": session_id,
+            "total_cost_usd": 0.012,
+            "usage": {
+                "input_tokens": 1024,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 32,
+                "server_tool_use": {
+                    "web_search_requests": 0,
+                    "web_fetch_requests": 0,
+                },
+                "service_tier": "standard",
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": 0,
+                    "ephemeral_5m_input_tokens": 0,
+                },
+            },
+            "result": marker,
+            "structured_output": None,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_skill_tool_span_attributes(
+    instrument, span_exporter, tracer_provider, tmp_path
+):
+    """Verify gen_ai.skill.* attributes on a Skill load execute_tool span.
+
+    Validates per the Skill telemetry spec:
+    1. Exactly one gen_ai.tool.name=Skill execute_tool span exists.
+    2. That span carries gen_ai.skill.name/id/description/version.
+    3. skill id is ``claude:project:<skill-name>``.
+    4. Metadata is read best-effort from the project SKILL.md frontmatter.
+    """
+    from opentelemetry.instrumentation.claude_agent_sdk.patch import (  # noqa: PLC0415
+        _process_agent_invocation_stream,
+    )
+    from opentelemetry.semconv._incubating.attributes import (  # noqa: PLC0415
+        gen_ai_attributes as GenAIAttributes,
+    )
+    from opentelemetry.util.genai.extended_handler import (  # noqa: PLC0415
+        ExtendedTelemetryHandler,
+    )
+
+    cwd = _write_probe_skill_md(tmp_path)
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    mock_stream = create_mock_stream_from_messages(_skill_load_messages(cwd))
+
+    async for _ in _process_agent_invocation_stream(
+        wrapped_stream=mock_stream,
+        handler=handler,
+        model="qwen-plus",
+        prompt=(
+            "Use the probe-skill Skill tool first. Then answer exactly "
+            "PROBE_SKILL_MARKER and nothing else."
+        ),
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+
+    skill_tool_spans = [
+        s
+        for s in spans
+        if dict(s.attributes or {}).get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == "execute_tool"
+        and dict(s.attributes or {}).get(GenAIAttributes.GEN_AI_TOOL_NAME)
+        == "Skill"
+    ]
+
+    # Pass criterion 2: exactly one gen_ai.tool.name=Skill execute_tool span.
+    assert len(skill_tool_spans) == 1, (
+        f"Should capture exactly one Skill execute_tool span, got "
+        f"{len(skill_tool_spans)}"
+    )
+
+    tool_span = skill_tool_spans[0]
+    attrs = dict(tool_span.attributes or {})
+
+    # Pass criterion 3: span carries all four gen_ai.skill.* attributes.
+    assert attrs.get("gen_ai.skill.name") == "probe-skill"
+    assert attrs.get("gen_ai.skill.id") == "claude:project:probe-skill"
+    assert attrs.get("gen_ai.skill.description") == (
+        "Skill telemetry probe for probe-skill."
+    )
+    assert attrs.get("gen_ai.skill.version") == "1.2.3"
+
+    # Tool span still carries the standard tool attributes.
+    assert attrs.get(GenAIAttributes.GEN_AI_TOOL_CALL_ID) == (
+        "call_skill_load_probe"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skill_metadata_read_failure_does_not_break_sdk(
+    instrument, span_exporter, tracer_provider, tmp_path
+):
+    """Skill metadata read failures must not affect the SDK call (best-effort).
+
+    When cwd points nowhere useful (no SKILL.md), the Skill tool span is still
+    created with skill.name/id derived from the tool input; no exception escapes.
+    """
+    from opentelemetry.instrumentation.claude_agent_sdk.patch import (  # noqa: PLC0415
+        _process_agent_invocation_stream,
+    )
+    from opentelemetry.semconv._incubating.attributes import (  # noqa: PLC0415
+        gen_ai_attributes as GenAIAttributes,
+    )
+    from opentelemetry.util.genai.extended_handler import (  # noqa: PLC0415
+        ExtendedTelemetryHandler,
+    )
+
+    # cwd with no .claude/skills tree -> SKILL.md read returns empty best-effort
+    cwd = str(tmp_path)
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    mock_stream = create_mock_stream_from_messages(_skill_load_messages(cwd))
+
+    async for _ in _process_agent_invocation_stream(
+        wrapped_stream=mock_stream,
+        handler=handler,
+        model="qwen-plus",
+        prompt="Use the probe-skill Skill tool.",
+    ):
+        pass
+
+    spans = span_exporter.get_finished_spans()
+    skill_tool_spans = [
+        s
+        for s in spans
+        if dict(s.attributes or {}).get(GenAIAttributes.GEN_AI_OPERATION_NAME)
+        == "execute_tool"
+        and dict(s.attributes or {}).get(GenAIAttributes.GEN_AI_TOOL_NAME)
+        == "Skill"
+    ]
+    assert len(skill_tool_spans) == 1
+    attrs = dict(skill_tool_spans[0].attributes or {})
+    # name/id fall back to the requested skill; description/version absent.
+    assert attrs.get("gen_ai.skill.name") == "probe-skill"
+    assert attrs.get("gen_ai.skill.id") == "claude:project:probe-skill"
+    assert "gen_ai.skill.description" not in attrs
+    assert "gen_ai.skill.version" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_parallel_skill_loads_keep_metadata_isolated(
+    instrument, span_exporter, tracer_provider, tmp_path
+):
+    """Parallel streams with the same tool_use_id must not mix Skill spans."""
+    from opentelemetry.instrumentation.claude_agent_sdk.patch import (  # noqa: PLC0415
+        _process_agent_invocation_stream,
+    )
+    from opentelemetry.semconv._incubating.attributes import (  # noqa: PLC0415
+        gen_ai_attributes as GenAIAttributes,
+    )
+    from opentelemetry.util.genai.extended_handler import (  # noqa: PLC0415
+        ExtendedTelemetryHandler,
+    )
+    from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (  # noqa: PLC0415
+        GEN_AI_SESSION_ID,
+    )
+
+    async def interleaved_stream(messages):
+        for message in messages:
+            await asyncio.sleep(0)
+            yield create_mock_message_from_data(message)
+
+    async def run_case(skill_name: str, session_id: str, version: str) -> None:
+        project_dir = tmp_path / skill_name
+        cwd = _write_probe_skill_md(
+            project_dir, skill_name=skill_name, version=version
+        )
+        messages = _skill_load_messages(
+            cwd,
+            skill_name=skill_name,
+            session_id=session_id,
+            tool_use_id="shared_skill_tool",
+            marker=f"{skill_name.upper()}_MARKER",
+        )
+        handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+
+        async for _ in _process_agent_invocation_stream(
+            wrapped_stream=interleaved_stream(messages),
+            handler=handler,
+            model="qwen-plus",
+            prompt=f"Use the {skill_name} Skill tool.",
+        ):
+            pass
+
+    await asyncio.gather(
+        run_case("alpha-skill", "session-alpha", "1.0.0"),
+        run_case("beta-skill", "session-beta", "2.0.0"),
+    )
+
+    skill_tool_attrs = []
+    for span in span_exporter.get_finished_spans():
+        attrs = dict(span.attributes or {})
+        if (
+            attrs.get(GenAIAttributes.GEN_AI_OPERATION_NAME) == "execute_tool"
+            and attrs.get(GenAIAttributes.GEN_AI_TOOL_NAME) == "Skill"
+        ):
+            skill_tool_attrs.append(attrs)
+
+    assert len(skill_tool_attrs) == 2
+    attrs_by_skill = {
+        attrs["gen_ai.skill.name"]: attrs for attrs in skill_tool_attrs
+    }
+    assert set(attrs_by_skill) == {"alpha-skill", "beta-skill"}
+
+    assert attrs_by_skill["alpha-skill"]["gen_ai.skill.id"] == (
+        "claude:project:alpha-skill"
+    )
+    assert attrs_by_skill["alpha-skill"]["gen_ai.skill.version"] == "1.0.0"
+    assert attrs_by_skill["alpha-skill"][GEN_AI_SESSION_ID] == (
+        "session-alpha"
+    )
+
+    assert attrs_by_skill["beta-skill"]["gen_ai.skill.id"] == (
+        "claude:project:beta-skill"
+    )
+    assert attrs_by_skill["beta-skill"]["gen_ai.skill.version"] == "2.0.0"
+    assert attrs_by_skill["beta-skill"][GEN_AI_SESSION_ID] == "session-beta"

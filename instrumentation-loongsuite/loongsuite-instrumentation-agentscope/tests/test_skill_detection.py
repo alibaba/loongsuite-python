@@ -283,6 +283,7 @@ class TestSkillSpanAttributes:
 
         invocation = ExecuteToolInvocation(
             tool_name="read_file",
+            tool_type="function",
             skill_name="news",
             skill_id="workspace:default:news",
             skill_description="Latest news",

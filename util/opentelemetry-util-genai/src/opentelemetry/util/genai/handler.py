@@ -64,8 +64,9 @@ from __future__ import annotations
 import logging
 import timeit
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Any, Iterator, Protocol
 
+from opentelemetry import baggage
 from opentelemetry import context as otel_context
 from opentelemetry._logs import (
     LoggerProvider,
@@ -76,6 +77,9 @@ from opentelemetry.context import (  # LoongSuite Extension
     Context,
 )
 from opentelemetry.metrics import MeterProvider, get_meter
+from opentelemetry.semconv._incubating.attributes import (
+    gen_ai_attributes as GenAI,
+)
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.trace import (
     Span,
@@ -90,11 +94,21 @@ from opentelemetry.util.genai.span_utils import (
     _apply_llm_finish_attributes,
     _maybe_emit_llm_event,
 )
-from opentelemetry.util.genai.types import Error, LLMInvocation
+from opentelemetry.util.genai.types import (
+    Error,
+    LLMInvocation,
+)
 from opentelemetry.util.genai.version import __version__
 
 # LoongSuite Extension
 logger = logging.getLogger(__name__)
+
+# LoongSuite Extension
+_AGENT_NAME_BAGGAGE_KEY = GenAI.GEN_AI_AGENT_NAME
+
+
+class _InvocationWithAttributes(Protocol):
+    attributes: dict[str, Any]
 
 
 # LoongSuite Extension
@@ -114,6 +128,22 @@ def _safe_detach(token: object) -> None:
         logger.debug(
             "Context detach failed (cross-thread/async scenario): %s", exc
         )
+
+
+def _current_context(context: Context | None = None) -> Context:
+    if context is not None:
+        return context
+    return otel_context.get_current()
+
+
+def _inject_agent_name_from_baggage(
+    invocation: _InvocationWithAttributes, context: Context
+) -> None:
+    if GenAI.GEN_AI_AGENT_NAME in invocation.attributes:
+        return
+    agent_name = baggage.get_baggage(_AGENT_NAME_BAGGAGE_KEY, context=context)
+    if agent_name:
+        invocation.attributes[GenAI.GEN_AI_AGENT_NAME] = agent_name
 
 
 class TelemetryHandler:
@@ -165,55 +195,101 @@ class TelemetryHandler:
         context: Context | None = None,  # LoongSuite Extension
     ) -> LLMInvocation:
         """Start an LLM invocation and create a pending span entry."""
+        invocation._lifecycle_finalized = False
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
+
         # Create a span and attach it as current; keep the token to detach later
         span = self._tracer.start_span(
             name=f"{invocation.operation_name} {invocation.request_model}",
             kind=SpanKind.CLIENT,
-            context=context,  # LoongSuite Extension
+            context=current_context,  # LoongSuite Extension
         )
-        # Record a monotonic start timestamp (seconds) for duration
-        # calculation using timeit.default_timer.
-        invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
-        invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
-        )
+        try:
+            # Record a monotonic start timestamp (seconds) for duration
+            # calculation using timeit.default_timer.
+            invocation.monotonic_start_s = timeit.default_timer()
+            invocation.context_token = otel_context.attach(
+                set_span_in_context(span, current_context)
+            )
+        except Exception:
+            self.abandon_llm(invocation)
+            raise
+        return invocation
+
+    # LoongSuite Extension
+    def detach_llm_context(  # pylint: disable=no-self-use
+        self, invocation: LLMInvocation
+    ) -> LLMInvocation:
+        """Detach an invocation from the context where it was started.
+
+        Streaming instrumentations should call this before returning the stream
+        to application code. The span remains recording and can be finalized
+        later, even when iteration happens in another task or context.
+        """
+        token = invocation.context_token
+        invocation.context_token = None
+        _safe_detach(token)
+        return invocation
+
+    # LoongSuite Extension
+    def abandon_llm(self, invocation: LLMInvocation) -> LLMInvocation:
+        """Best-effort cleanup for a partially processed LLM invocation."""
+        invocation._lifecycle_finalized = True
+        # LoongSuite Extension: cleanup must survive probe-owned failures.
+        try:
+            self.detach_llm_context(invocation)
+        finally:
+            span = invocation.span
+            if span is not None and span.is_recording():
+                span.end()
         return invocation
 
     def stop_llm(self, invocation: LLMInvocation) -> LLMInvocation:  # pylint: disable=no-self-use
         """Finalize an LLM invocation successfully and end its span."""
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             # TODO: Provide feedback that this invocation was not started
             return invocation
 
+        invocation._lifecycle_finalized = True
         span = invocation.span
-        _apply_llm_finish_attributes(span, invocation)
-        self._record_llm_metrics(invocation, span)
-        _maybe_emit_llm_event(self._logger, span, invocation)
-        # Detach context and end span
-        # LoongSuite Extension
-        _safe_detach(invocation.context_token)
-        span.end()
+        # LoongSuite Extension: cleanup must survive probe-owned failures.
+        try:
+            _apply_llm_finish_attributes(span, invocation)
+            self._record_llm_metrics(invocation, span)
+            _maybe_emit_llm_event(self._logger, span, invocation)
+        finally:
+            try:
+                self.detach_llm_context(invocation)
+            finally:
+                if span.is_recording():
+                    span.end()
         return invocation
 
     def fail_llm(  # pylint: disable=no-self-use
         self, invocation: LLMInvocation, error: Error
     ) -> LLMInvocation:
         """Fail an LLM invocation and end its span with error status."""
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             # TODO: Provide feedback that this invocation was not started
             return invocation
 
+        invocation._lifecycle_finalized = True
         span = invocation.span
-        _apply_llm_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        error_type = getattr(error.type, "__qualname__", None)
-        self._record_llm_metrics(invocation, span, error_type=error_type)
-        _maybe_emit_llm_event(self._logger, span, invocation, error)
-        # Detach context and end span
-        # LoongSuite Extension
-        _safe_detach(invocation.context_token)
-        span.end()
+        # LoongSuite Extension: cleanup must survive probe-owned failures.
+        try:
+            _apply_llm_finish_attributes(span, invocation)
+            _apply_error_attributes(span, error)
+            error_type = getattr(error.type, "__qualname__", None)
+            self._record_llm_metrics(invocation, span, error_type=error_type)
+            _maybe_emit_llm_event(self._logger, span, invocation, error)
+        finally:
+            try:
+                self.detach_llm_context(invocation)
+            finally:
+                if span.is_recording():
+                    span.end()
         return invocation
 
     @contextmanager

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
+There are no changelog entries for this release.
+
+## Version 0.8.0 (2026-07-31)
+
+### Added
+
+- Capture `gen_ai.skill.*` attributes on Google ADK SkillToolset
+  `load_skill` and `load_skill_resource` execute-tool spans.
+
+### Changed
+
+- Align the supported Python and CI matrix with Google ADK's Python 3.10
+  runtime floor.
+
+## Version 0.7.0 (2026-07-03)
+
+There are no changelog entries for this release.
+
+## Version 0.6.0 (2026-06-03)
+
+### Changed
+
+- Route Google ADK `AGENT`, `LLM`, and `TOOL` spans through
+  `opentelemetry-util-genai`, emitting current GenAI attributes such as
+  `gen_ai.input.messages`, `gen_ai.output.messages`,
+  `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`,
+  `gen_ai.span.kind`, and `gen_ai.provider.name=google_adk`.
+  ([#199](https://github.com/alibaba/loongsuite-python/pull/199))
+
+### Fixed
+
+- Keep Google ADK streaming model spans open until the final response and
+  protect same-session concurrent invocations from cross-finishing spans.
+- Ensure Google ADK spans include LoongSuite `gen_ai.span.kind` values such as
+  `AGENT`.
+
 ## Version 0.5.0 (2026-05-11)
 
 There are no changelog entries for this release.
@@ -20,7 +58,7 @@ There are no changelog entries for this release.
 ### Changed
 
 - Update README integration flow to align with the root recommended LoongSuite pattern using Option C (`pip install loongsuite-instrumentation-google-adk`) and `loongsuite-instrument`.
-  ([#159](https://github.com/alibaba/loongsuite-python-agent/pull/159))
+  ([#159](https://github.com/alibaba/loongsuite-python/pull/159))
 
 ## Version 0.2.0 (2026-03-12)
 
@@ -31,4 +69,4 @@ There are no changelog entries for this release.
 ### Added
 
 - Initialize the instrumentation for Google Agent Development Kit (ADK)
-  ([#71](https://github.com/alibaba/loongsuite-python-agent/pull/71))
+  ([#71](https://github.com/alibaba/loongsuite-python/pull/71))

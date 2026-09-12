@@ -5,7 +5,30 @@ LoongSuite instrumentation for
 on AgentScope.
 
 Compatibility note: CoPaw was renamed to QwenPaw. Installations pinned to
-`copaw<=1.0.2` are still supported during the transition.
+`copaw<=1.0.2` are still supported during the transition. QwenPaw 1 uses
+`AgentRunner.query_handler` as its request entry point; QwenPaw 2 uses
+`Runtime.run`.
+
+## Dream owner attribution
+
+For QwenPaw 2's ReMe memory backend, this plugin scopes
+`gen_ai.agent.name` to the owning agent while `dream()` executes, including
+scheduled and manually triggered Dream calls. It uses the same configured
+name (or `QwenPaw` fallback) as normal conversations and restores the caller's
+context on completion, error, or cancellation. No agent ID or synthetic
+Agent invocation is added.
+
+This is attribution for **already-instrumented LLM calls**, not a new model
+instrumentation layer. Direct model calls outside AgentScope Agent middleware
+need a matching model SDK instrumentor using LoongSuite's GenAI handler; for
+OpenAI-compatible clients, this can be `opentelemetry-instrumentation-openai-v2`.
+The Dream adapter does not install or enable that extra instrumentor, change
+token metric dimensions, or modify memory content.
+
+ReMe versions using internal AgentScope Agents also require the matching
+AgentScope plugin update to preserve Dream ownership across helper Agents.
+Those calls are already collected by AgentScope: enabling an additional SDK
+instrumentor can produce nested, duplicate LLM spans and is not required.
 
 ## Getting Started
 
@@ -56,6 +79,18 @@ put `"LOONGSUITE_PYTHON_SITE_BOOTSTRAP": "true"` in `bootstrap-config.json`
 (see below); environment variables take **precedence** over the file for any key
 that is already set in the process.
 
+QwenPaw is an interactive app, so stdout is user-visible. If you do not want the
+generic Site-bootstrap success line in QwenPaw stdout, also set:
+
+```bash
+export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=False
+export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE=/tmp/qwenpaw-loongsuite-bootstrap.json
+```
+
+The status file is an optional local confirmation that the bootstrap hook ran;
+the real access check is still whether the configured backend receives QwenPaw
+entry / AgentScope child spans after a user turn.
+
 **2.4 — Configure export via `~/.loongsuite/bootstrap-config.json`**
 
 Create the directory and file if needed. The JSON root must be an object; string
@@ -84,8 +119,9 @@ Example for quick local debugging with **console** exporters:
 }
 ```
 
-After a successful run you should see a line on stdout such as:
-`loongsuite-site-bootstrap: started successfully (OpenTelemetry auto-instrumentation initialized).`
+By default, a successful run prints a Site-bootstrap success line to stdout.
+When `LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=False`, use the optional
+status file above or verify the generated trace in your backend instead.
 Do not start Python with `python -S` (that disables `site` and `.pth` processing).
 
 > **Beta / scope:** With the hook enabled, **every** Python process in that
@@ -100,15 +136,17 @@ With Site-bootstrap enabled in the same shell/session, start the app as usual:
 qwenpaw app
 ```
 
-Telemetry for `AgentRunner.query_handler` (Entry span) is then active without
-modifying QwenPaw source code.
+Telemetry for the installed runtime's request entry point
+(`AgentRunner.query_handler` on QwenPaw 1, or `Runtime.run` on QwenPaw 2) is
+then active without modifying QwenPaw source code.
 
 ### Optional: programmatic hook
 
 If you control an embedding process and prefer not to use site-bootstrap, you
 can call `QwenPawInstrumentor().instrument()` (and `uninstrument()` when done)
 before QwenPaw runs in that process—the hook point is still
-`AgentRunner.query_handler`. You must still configure the global
+`AgentRunner.query_handler` on QwenPaw 1 / CoPaw or `Runtime.run` on QwenPaw 2.
+You must still configure the global
 `TracerProvider` / export (for example via OpenTelemetry env vars) consistently
 with the rest of your app.
 
@@ -137,3 +175,7 @@ call inside the agent.
 Calls to models, tools, and other AgentScope primitives are **not** duplicated
 here: use AgentScope (and your existing model client) instrumentations alongside
 this package so they appear as child spans under this entry when configured.
+When AgentScope spans run under a QwenPaw Entry span, the QwenPaw
+`gen_ai.session.id` / `gen_ai.user.id` values are propagated through
+OpenTelemetry baggage so downstream AgentScope LLM, agent, embedding, and tool
+spans carry the same request identity.

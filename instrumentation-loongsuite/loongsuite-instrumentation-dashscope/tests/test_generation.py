@@ -19,6 +19,13 @@ import json as json_utils
 import pytest
 from dashscope import AioGeneration, Generation
 
+from opentelemetry.instrumentation.dashscope.utils import (
+    _create_invocation_from_generation,
+)
+from opentelemetry.instrumentation.dashscope.utils.common import (
+    DASHSCOPE_SERVER_ADDRESS,
+    DASHSCOPE_SERVER_PORT,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -30,6 +37,13 @@ def _safe_getattr(obj, attr, default=None):
         return getattr(obj, attr, default)
     except KeyError:
         return default
+
+
+def test_create_invocation_from_generation_uses_dashscope_server_constants():
+    invocation = _create_invocation_from_generation({"model": "qwen-turbo"})
+
+    assert invocation.server_address == DASHSCOPE_SERVER_ADDRESS
+    assert invocation.server_port == DASHSCOPE_SERVER_PORT
 
 
 def _assert_generation_span_attributes(

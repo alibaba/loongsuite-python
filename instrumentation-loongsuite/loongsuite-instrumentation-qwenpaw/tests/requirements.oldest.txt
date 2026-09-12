@@ -16,6 +16,7 @@
 # the last supported legacy runtime.
 
 copaw==1.0.2
+mcp<2
 pytest
 pytest-asyncio
 wrapt

@@ -69,3 +69,11 @@ def _import_runner_module():
 @pytest.fixture(name="runner_module")
 def fixture_runner_module():
     return _import_runner_module()
+
+
+@pytest.fixture(name="runtime_module")
+def fixture_runtime_module():
+    try:
+        return importlib.import_module("qwenpaw.runtime.runtime")
+    except ImportError:
+        pytest.skip("QwenPaw 2 runtime is not installed")

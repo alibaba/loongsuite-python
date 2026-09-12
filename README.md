@@ -1,4 +1,4 @@
-# loongsuite-python-agent
+# loongsuite-python
 <img src="docs/_assets/img/loongsuite-logo.png" width="600" height="100">
 
 <div align="center">
@@ -12,9 +12,9 @@ Loongsuite Python Agent is a key component of LoongSuite, Alibaba's unified obse
 
 LoongSuite includes the following key components:
 * [LoongCollector](https://github.com/alibaba/loongcollector): universal node agent, which prodivdes log collection, prometheus metric collection, and network and security collection capabilities based on eBPF.
-* [LoongSuite Python Agent](https://github.com/alibaba/loongsuite-python-agent): a process agent providing instrumentation for python applications.
-* [LoongSuite Go Agent](https://github.com/alibaba/loongsuite-go-agent): a process agent for golang with compile time instrumentation.
-* [LoongSuite Java Agent](https://github.com/alibaba/loongsuite-java-agent): a process agent for Java applications.
+* [LoongSuite Python Agent](https://github.com/alibaba/loongsuite-python): a process agent providing instrumentation for python applications.
+* [LoongSuite Go Agent](https://github.com/alibaba/loongsuite-go): a process agent for golang with compile time instrumentation.
+* [LoongSuite Java](https://github.com/alibaba/loongsuite-java): a shared telemetry utility library for Java GenAI instrumentation.
 * Other upcoming language agent.
 
 Loongsuite Python Agent is also a customized distribution of upstream [OTel Python Agent](https://github.com/open-telemetry/opentelemetry-python-contrib), with enhanced support for popular AI agent framework. 
@@ -47,8 +47,17 @@ Source tree: [`instrumentation-loongsuite/`](instrumentation-loongsuite).
 **Distro and helpers:**
 
 - **loongsuite-distro** — [https://pypi.org/project/loongsuite-distro/](https://pypi.org/project/loongsuite-distro/) (`loongsuite-instrument`, `loongsuite-bootstrap`)
-- **loongsuite-util-genai** — [https://pypi.org/project/loongsuite-util-genai/](https://pypi.org/project/loongsuite-util-genai/)
+- **loongsuite-otel-util-genai** — [https://pypi.org/project/loongsuite-otel-util-genai/](https://pypi.org/project/loongsuite-otel-util-genai/)
 - **loongsuite-site-bootstrap** — [https://pypi.org/project/loongsuite-site-bootstrap/](https://pypi.org/project/loongsuite-site-bootstrap/).
+
+Runnable end-to-end samples are available in [Examples](examples/README.md).
+
+> **Package rename:** LoongSuite GenAI utilities are published as
+> **`loongsuite-otel-util-genai`** in new releases. The previous
+> **`loongsuite-util-genai`** distribution remains available for existing
+> installations, but new LoongSuite GenAI utility updates are published under
+> the new package name. The Python import namespace remains
+> `opentelemetry.util.genai`.
 
 ### OpenTelemetry instrumentation — generative workloads
 
@@ -65,7 +74,7 @@ Source tree: [`instrumentation-genai/`](instrumentation-genai). These distributi
 | [Vertex AI](https://github.com/googleapis/python-aiplatform) | [GUIDE](instrumentation-genai/opentelemetry-instrumentation-vertexai/README.rst) | [PyPI](https://pypi.org/project/opentelemetry-instrumentation-vertexai/) |
 | [Weaviate](https://github.com/weaviate/weaviate) | [GUIDE](instrumentation-genai/opentelemetry-instrumentation-weaviate/README.rst) | [PyPI](https://pypi.org/project/opentelemetry-instrumentation-weaviate/) |
 
-> **Note:** With LoongSuite’s distro, install these together with [**loongsuite-distro**](https://pypi.org/project/loongsuite-distro/) and **`loongsuite-bootstrap`** / [**loongsuite-util-genai**](https://pypi.org/project/loongsuite-util-genai/). Avoid mixing [**loongsuite-util-genai**](https://pypi.org/project/loongsuite-util-genai/) with the community **opentelemetry-util-genai** (see [manual `pip` installs](#install-step-2-options)).
+> **Note:** With LoongSuite’s distro, install these together with [**loongsuite-distro**](https://pypi.org/project/loongsuite-distro/) and **`loongsuite-bootstrap`** / [**loongsuite-otel-util-genai**](https://pypi.org/project/loongsuite-otel-util-genai/). Avoid mixing [**loongsuite-otel-util-genai**](https://pypi.org/project/loongsuite-otel-util-genai/) with the community **opentelemetry-util-genai** (see [manual `pip` installs](#install-step-2-options)).
 
 ### OpenTelemetry instrumentation
 
@@ -223,7 +232,7 @@ Recommended integration approach: **automatic instrumentation** with **`loongsui
 
 **Step 2 — Install instrumentations**
 
-  Use **`loongsuite-bootstrap`** (shipped with `loongsuite-distro`) to install LoongSuite wheels from a [GitHub Release](https://github.com/alibaba/loongsuite-python-agent/releases) tarball and compatible `opentelemetry-instrumentation-*` versions from PyPI. Bootstrap performs a **two-phase** install: LoongSuite artifacts from the release, then pinned OpenTelemetry instrumentation packages (see [docs/loongsuite-release.md](docs/loongsuite-release.md)).
+  Use **`loongsuite-bootstrap`** (shipped with `loongsuite-distro`) to install LoongSuite wheels from a [GitHub Release](https://github.com/alibaba/loongsuite-python/releases) tarball and compatible `opentelemetry-instrumentation-*` versions from PyPI. Bootstrap performs a **two-phase** install: LoongSuite artifacts from the release, then pinned OpenTelemetry instrumentation packages (see [docs/loongsuite-release.md](docs/loongsuite-release.md)).
 
   Pick **one** of the following:
 
@@ -248,7 +257,7 @@ Recommended integration approach: **automatic instrumentation** with **`loongsui
   pip install loongsuite-instrumentation-agentscope
   ```
 
-  > **Note:** If you need packages under [`instrumentation-genai/`](instrumentation-genai), use **Option A or B** together with **`loongsuite-distro`** / **`loongsuite-bootstrap`**. Relying only on manual `pip` can cause **dependency resolution conflicts** when [**loongsuite-util-genai**](https://pypi.org/project/loongsuite-util-genai/) and the community **opentelemetry-util-genai** are both pulled in or pinned differently.
+  > **Note:** If you need packages under [`instrumentation-genai/`](instrumentation-genai), use **Option A or B** together with **`loongsuite-distro`** / **`loongsuite-bootstrap`**. Relying only on manual `pip` can cause **dependency resolution conflicts** when [**loongsuite-otel-util-genai**](https://pypi.org/project/loongsuite-otel-util-genai/) and the community **opentelemetry-util-genai** are both pulled in or pinned differently.
 
 **Step 3 — Run under `loongsuite-instrument`**
 
@@ -319,7 +328,7 @@ For applications where you can edit code and want explicit control over OpenTele
   pip install loongsuite-instrumentation-agentscope
   ```
   
-  > **Note:** If you need packages under [`instrumentation-genai/`](instrumentation-genai), use **Option A or B** together with **`loongsuite-distro`** / **`loongsuite-bootstrap`**. Relying only on manual `pip` can cause **dependency resolution conflicts** when [**loongsuite-util-genai**](https://pypi.org/project/loongsuite-util-genai/) and the community **opentelemetry-util-genai** are both pulled in or pinned differently.
+  > **Note:** If you need packages under [`instrumentation-genai/`](instrumentation-genai), use **Option A or B** together with **`loongsuite-distro`** / **`loongsuite-bootstrap`**. Relying only on manual `pip` can cause **dependency resolution conflicts** when [**loongsuite-otel-util-genai**](https://pypi.org/project/loongsuite-otel-util-genai/) and the community **opentelemetry-util-genai** are both pulled in or pinned differently.
 
 **Step 2 — Initialize the OpenTelemetry SDK** before anything emits telemetry. You are wiring the same exporters as in [Configure telemetry export](#configure-telemetry-export).
 
@@ -356,13 +365,13 @@ For applications where you can edit code and want explicit control over OpenTele
 **Step 1 — Clone this repository** and checkout your branch.
 
   ```bash
-  git clone https://github.com/alibaba/loongsuite-python-agent.git
+  git clone https://github.com/alibaba/loongsuite-python.git
   ```
 
 **Step 2 — Install upstream OpenTelemetry Python core and local LoongSuite components** from a Git checkout of [opentelemetry-python](https://github.com/open-telemetry/opentelemetry-python):
 
   ```bash
-  cd loongsuite-python-agent
+  cd loongsuite-python
   GIT_ROOT="git+https://github.com/open-telemetry/opentelemetry-python.git"
   # Use ONE pip install command so resolver sees all constraints together;
   # split installs can downgrade/replace api+semconv when local editable deps are installed later.
@@ -416,6 +425,9 @@ Run **without** changing codes or bootstrap commands: a **`.pth` hook** loads Lo
 
   ```bash
   export LOONGSUITE_PYTHON_SITE_BOOTSTRAP=True
+  # Optional for interactive CLIs/apps: suppress the generic success line on stdout.
+  export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_LOG_SUCCESS=False
+  export LOONGSUITE_PYTHON_SITE_BOOTSTRAP_STATUS_FILE=/tmp/loongsuite-site-bootstrap-status.json
   ```
 
 **Step 4 — Create `~/.loongsuite/bootstrap-config.json`** with the OpenTelemetry environments keys you need.
@@ -430,7 +442,7 @@ Run **without** changing codes or bootstrap commands: a **`.pth` hook** loads Lo
   }
   ```
 
-  Then run `python demo.py`. For **console** exporters, other backends, using **`loongsuite-instrument`** instead of plain `python`, or full precedence / edge cases, see [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md).
+  Then run `python demo.py`. For **console** exporters, other backends, using **`loongsuite-instrument`** instead of plain `python`, success logging controls, or full precedence / edge cases, see [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md).
 
 > **Beta:** Site-bootstrap affects every Python process in the environment where it is enabled; read the package README before using it in production.
 
@@ -530,7 +542,7 @@ our [DingTalk group](https://qr.dingtalk.com/action/joingroup?code=v1,k1,mexukXI
 
 | LoongCollector SIG | LoongSuite Python SIG |
 |----|----|
-| <img src="docs/_assets/img/loongcollector-sig-dingtalk.jpg" height="150"> | <img src="docs/_assets/img/loongsuite-python-sig-dingtalk.jpg" height="150"> |
+| <img src="docs/_assets/img/loongcollector-sig-dingtalk.png" height="150"> | <img src="docs/_assets/img/loongsuite-python-sig-dingtalk.jpg" height="150"> |
 
 | LoongCollector Go SIG | LoongSuite Java SIG |
 |----|----|

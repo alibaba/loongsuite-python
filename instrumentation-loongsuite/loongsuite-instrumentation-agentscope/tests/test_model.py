@@ -180,7 +180,7 @@ def _assert_chat_span_attributes(
         )
 
 
-@pytest.mark.vcr()
+@pytest.mark.vcr(record_mode="none")
 def test_model_call_basic(instrument_no_content, span_exporter, request):
     """Test basic model call"""
     # Initialize agentscope
@@ -220,6 +220,16 @@ def test_model_call_basic(instrument_no_content, span_exporter, request):
 
     # Verify span attributes
     chat_span = chat_spans[0]
+    # Older ChatUsage versions may omit counters; do not fabricate a miss.
+    if "cache_input_tokens" in response.usage:
+        assert (
+            chat_span.attributes["gen_ai.usage.cache_read.input_tokens"]
+            == response.usage["cache_input_tokens"]
+        )
+    else:
+        assert (
+            "gen_ai.usage.cache_read.input_tokens" not in chat_span.attributes
+        )
     _assert_chat_span_attributes(
         chat_span,
         request_model="qwen-max",

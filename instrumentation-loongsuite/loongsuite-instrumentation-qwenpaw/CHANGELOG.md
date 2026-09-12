@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
+### Fixed
+
+- Limit Dream tests to the QwenPaw 2 runtime and verify that QwenPaw 1 and
+  legacy CoPaw retain Entry instrumentation without enabling Dream hooks.
+
+- Propagate the owning agent name during QwenPaw 2 ReMe Dream calls so
+  instrumented downstream LLM spans carry `gen_ai.agent.name`. Restore the
+  caller context on completion, failure, or cancellation; no agent ID is added.
+
+- Treat `asyncio.CancelledError` as control flow at Entry finalization while
+  preserving the original exception. Record `qwenpaw.cancelled` and a bounded
+  `qwenpaw.cancellation.reason` from explicit cancellation codes; missing or
+  unrecognized reasons are `unknown`, not inferred from partial responses.
+
+## Version 0.8.0 (2026-07-31)
+
+### Added
+
+- Added QwenPaw 2 Entry telemetry around each `Runtime.run` request while
+  preserving the QwenPaw 1 and legacy CoPaw entry points.
+- Added task-safe stream context handoff so QwenPaw heartbeat tasks inherit the
+  Entry span without keeping an attached context token across yields.
+- Records QwenPaw 2 Entry TTFT only after user-visible output and preserves
+  business stream cleanup when Entry telemetry setup fails.
+
+### Fixed
+
+- Restore the Entry context while closing downstream streams and preserve
+  downstream `aclose()` errors instead of finalizing the Entry as successful.
+
+## Version 0.7.0 (2026-07-03)
+
+There are no changelog entries for this release.
+
+## Version 0.6.0 (2026-06-03)
+
+There are no changelog entries for this release.
+
 ## Version 0.5.0 (2026-05-11)
 
 ### Added
@@ -27,11 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CoPaw instrumentation initialization**: ``CoPawInstrumentor`` registers
   automatic instrumentation for CoPaw when ``instrument()`` is called (included
   in LoongSuite distro automatic injection).
-  ([#162](https://github.com/alibaba/loongsuite-python-agent/pull/162))
+  ([#162](https://github.com/alibaba/loongsuite-python/pull/162))
 
 ### Changed
 
 - Instrumentor depends on ``opentelemetry-util-genai`` and passes
   ``tracer_provider``, ``meter_provider``, and ``logger_provider`` from
   ``instrument()`` into the shared GenAI telemetry handler.
-  ([#162](https://github.com/alibaba/loongsuite-python-agent/pull/162))
+  ([#162](https://github.com/alibaba/loongsuite-python/pull/162))

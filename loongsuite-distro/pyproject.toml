@@ -49,8 +49,8 @@ loongsuite-bootstrap = "loongsuite.distro.bootstrap:main"
 loongsuite-instrument = "opentelemetry.instrumentation.auto_instrumentation:run"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/loongsuite-distro"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/loongsuite-distro"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/loongsuite/distro/version.py"

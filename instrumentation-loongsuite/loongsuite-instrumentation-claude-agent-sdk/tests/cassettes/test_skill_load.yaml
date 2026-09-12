@@ -1,0 +1,76 @@
+description: 'Skill load: project-level probe-skill loaded via Skill tool'
+prompt: Use the probe-skill Skill tool first. Then answer exactly PROBE_SKILL_MARKER and nothing else.
+messages:
+- type: SystemMessage
+  subtype: init
+  data:
+    type: system
+    subtype: init
+    cwd: __SKILL_CWD__
+    session_id: skill-session-0001
+    tools:
+    - Skill
+    - Bash
+    - Read
+    skills:
+    - probe-skill
+    mcp_servers: []
+    model: qwen-plus
+    permissionMode: bypassPermissions
+    apiKeySource: ANTHROPIC_API_KEY
+    claude_code_version: 2.1.1
+    output_style: default
+    agents: []
+    slash_commands: []
+    plugins: []
+    uuid: skill-init-uuid
+- type: AssistantMessage
+  model: qwen-plus
+  content:
+  - type: ToolUseBlock
+    id: call_skill_load_probe
+    name: Skill
+    input:
+      skill: probe-skill
+  parent_tool_use_id: null
+  error: null
+- type: UserMessage
+  content:
+  - type: ToolResultBlock
+    tool_use_id: call_skill_load_probe
+    content: 'Launching skill: probe-skill'
+    is_error: false
+  uuid: skill-result-uuid
+  parent_tool_use_id: null
+  tool_use_result:
+    success: true
+    commandName: probe-skill
+- type: AssistantMessage
+  model: qwen-plus
+  content:
+  - type: TextBlock
+    text: PROBE_SKILL_MARKER
+  parent_tool_use_id: null
+  error: null
+- type: ResultMessage
+  subtype: success
+  duration_ms: 3210
+  duration_api_ms: 9000
+  is_error: false
+  num_turns: 2
+  session_id: skill-session-0001
+  total_cost_usd: 0.012
+  usage:
+    input_tokens: 1024
+    cache_creation_input_tokens: 0
+    cache_read_input_tokens: 0
+    output_tokens: 32
+    server_tool_use:
+      web_search_requests: 0
+      web_fetch_requests: 0
+    service_tier: standard
+    cache_creation:
+      ephemeral_1h_input_tokens: 0
+      ephemeral_5m_input_tokens: 0
+  result: PROBE_SKILL_MARKER
+  structured_output: null

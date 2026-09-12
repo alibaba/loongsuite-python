@@ -119,7 +119,12 @@ from opentelemetry.util.genai.extended_types import (
     RerankInvocation,
     RetrievalInvocation,
 )
-from opentelemetry.util.genai.handler import TelemetryHandler, _safe_detach
+from opentelemetry.util.genai.handler import (
+    TelemetryHandler,
+    _current_context,
+    _inject_agent_name_from_baggage,
+    _safe_detach,
+)
 from opentelemetry.util.genai.span_utils import _apply_error_attributes
 from opentelemetry.util.genai.types import Error, LLMInvocation
 
@@ -201,7 +206,7 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
 
         Principle: Never block the user application.
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             return invocation
 
         # Record actual end time
@@ -222,7 +227,7 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         Similar to stop_llm but includes error handling.
         Principle: Never block the user application.
         """
-        if invocation.context_token is None or invocation.span is None:
+        if invocation.span is None or invocation._lifecycle_finalized:
             return invocation
 
         invocation.monotonic_end_s = timeit.default_timer()
@@ -257,8 +262,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         # calculation using timeit.default_timer.
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
+        current_context = _current_context(context)
         invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
+            set_span_in_context(span, current_context)
         )
         return invocation
 
@@ -327,8 +333,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         # calculation using timeit.default_timer.
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
         invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
+            set_span_in_context(span, current_context)
         )
         return invocation
 
@@ -397,8 +405,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         # calculation using timeit.default_timer.
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
         invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
+            set_span_in_context(span, current_context)
         )
         return invocation
 
@@ -474,9 +484,15 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         # calculation using timeit.default_timer.
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
-        invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
-        )
+        current_context = _current_context(context)
+        ctx = set_span_in_context(span, current_context)
+        if invocation.agent_name:
+            ctx = baggage.set_baggage(
+                GenAI.GEN_AI_AGENT_NAME,
+                invocation.agent_name,
+                ctx,
+            )
+        invocation.context_token = otel_context.attach(ctx)
         return invocation
 
     def stop_invoke_agent(
@@ -567,8 +583,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         # calculation using timeit.default_timer.
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
         invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
+            set_span_in_context(span, current_context)
         )
         return invocation
 
@@ -637,8 +655,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         # calculation using timeit.default_timer.
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
         invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
+            set_span_in_context(span, current_context)
         )
         return invocation
 
@@ -708,8 +728,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         # calculation using timeit.default_timer.
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
         invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
+            set_span_in_context(span, current_context)
         )
         return invocation
 
@@ -790,7 +812,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
 
-        ctx = set_span_in_context(span)
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
+        ctx = set_span_in_context(span, current_context)
         if invocation.session_id is not None:
             ctx = baggage.set_baggage(
                 _GEN_AI_SESSION_ID, invocation.session_id, ctx
@@ -865,8 +889,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         )
         invocation.monotonic_start_s = timeit.default_timer()
         invocation.span = span
+        current_context = _current_context(context)
+        _inject_agent_name_from_baggage(invocation, current_context)
         invocation.context_token = otel_context.attach(
-            set_span_in_context(span)
+            set_span_in_context(span, current_context)
         )
         return invocation
 

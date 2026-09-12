@@ -5,7 +5,7 @@
 Mem0 Python Agent provides observability for applications that use [Mem0](https://github.com/mem0ai/mem0) as a long‑term memory backend.  
 This document shows how to install the Mem0 instrumentation, how to run a simple example, and what telemetry data you can expect.  
 For details on usage and installation of LoongSuite and Jaeger, please refer to  
-[LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+[LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installing Mem0 Instrumentation
 
@@ -125,7 +125,7 @@ Apache License 2.0
 ## Issues & Support
 
 If you encounter problems or have feature requests, please open an issue in the  
-[loongsuite-python-agent GitHub repository](https://github.com/alibaba/loongsuite-python-agent/issues).
+[loongsuite-python GitHub repository](https://github.com/alibaba/loongsuite-python/issues).
 
 ## Related Resources
 

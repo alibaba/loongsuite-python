@@ -43,8 +43,8 @@ instruments = [
 claude_agent_sdk = "opentelemetry.instrumentation.claude_agent_sdk:ClaudeAgentSDKInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/claude_agent_sdk/version.py"

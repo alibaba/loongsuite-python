@@ -28,8 +28,8 @@
 # - Test PyPI: Set TEST_PYPI_TOKEN secret (pypi-xxx from https://test.pypi.org/manage/account/token/)
 # - Use publish_target: testpypi to publish to Test PyPI instead of production
 #
-# PyPI wheels: loongsuite_util_genai-*, loongsuite_distro-*, loongsuite_site_bootstrap-*, loongsuite_instrumentation_* (from instrumentation-loongsuite).
-# loongsuite-python-agent-*.tar.gz is for GitHub Release only and must NOT be uploaded to PyPI.
+# PyPI wheels: loongsuite_otel_util_genai-*, loongsuite_distro-*, loongsuite_site_bootstrap-*, loongsuite_instrumentation_* (from instrumentation-loongsuite).
+# loongsuite-python-*.tar.gz is for GitHub Release only and must NOT be uploaded to PyPI.
 #
 name: LoongSuite Release
 
@@ -151,7 +151,7 @@ jobs:
         with:
           name: pypi-packages
           path: |
-            dist-pypi/loongsuite_util_genai-*.whl
+            dist-pypi/loongsuite_otel_util_genai-*.whl
             dist-pypi/loongsuite_distro-*.whl
             dist-pypi/loongsuite_site_bootstrap-*.whl
             dist-pypi/loongsuite_instrumentation_*.whl
@@ -161,7 +161,7 @@ jobs:
         with:
           name: github-release
           path: |
-            dist/loongsuite-python-agent-*.tar.gz
+            dist/loongsuite-python-*.tar.gz
             dist/release-notes.md
 
   # Build dev wheels only for LoongSuite distributions whose PyPI projects do not exist yet.
@@ -328,9 +328,9 @@ jobs:
           VERSION: ${{ needs.build.outputs.loongsuite_version }}
         run: |
           gh release create "v${VERSION}" \
-            --title "loongsuite-python-agent ${VERSION}" \
+            --title "loongsuite-python ${VERSION}" \
             --notes-file dist/release-notes.md \
-            dist/loongsuite-python-agent-${VERSION}.tar.gz
+            dist/loongsuite-python-${VERSION}.tar.gz
 
   # Create post-release PR to main (archive changelogs + bump dev versions)
   post-release-pr:
@@ -389,7 +389,7 @@ jobs:
             --base main \
             --head "$BRANCH" \
             --title "chore: post-release ${VERSION} — archive changelogs & bump dev versions" \
-            --body "## Post-release updates for loongsuite-python-agent ${VERSION}
+            --body "## Post-release updates for loongsuite-python ${VERSION}
 
           Automated housekeeping after the \`${VERSION}\` release:
 

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
+There are no changelog entries for this release.
+
+## Version 0.8.0 (2026-07-31)
+
+There are no changelog entries for this release.
+
+## Version 0.7.0 (2026-07-03)
+
+There are no changelog entries for this release.
+
+## Version 0.6.0 (2026-06-03)
+
+There are no changelog entries for this release.
+
 ## Version 0.5.0 (2026-05-11)
 
 ### Fixed
@@ -24,9 +40,9 @@ There are no changelog entries for this release.
 ### Changed
 
 - Adapt imports to `opentelemetry-util-genai` module layout change
-  ([#158](https://github.com/alibaba/loongsuite-python-agent/pull/158))
+  ([#158](https://github.com/alibaba/loongsuite-python/pull/158))
 - Update README integration flow to align with the root recommended LoongSuite pattern using Option C (`pip install loongsuite-instrumentation-mem0`) and `loongsuite-instrument`.
-  ([#159](https://github.com/alibaba/loongsuite-python-agent/pull/159))
+  ([#159](https://github.com/alibaba/loongsuite-python/pull/159))
 
 ## Version 0.2.0 (2026-03-12)
 
@@ -37,13 +53,13 @@ There are no changelog entries for this release.
 ### Fixed
 
 - Fix unit tests
-  ([#98](https://github.com/alibaba/loongsuite-python-agent/pull/98))
+  ([#98](https://github.com/alibaba/loongsuite-python/pull/98))
 
 ### Added
 
 - Refactor capture logic with memory handler
-  ([#89](https://github.com/alibaba/loongsuite-python-agent/pull/89))
+  ([#89](https://github.com/alibaba/loongsuite-python/pull/89))
 - Add hook extensions
-  ([#95](https://github.com/alibaba/loongsuite-python-agent/pull/95))
+  ([#95](https://github.com/alibaba/loongsuite-python/pull/95))
 - Initialize the instrumentation for mem0
-  ([#67](https://github.com/alibaba/loongsuite-python-agent/pull/67))
+  ([#67](https://github.com/alibaba/loongsuite-python/pull/67))

@@ -23,7 +23,6 @@ in a standardized format.
 """
 
 import ast
-import json
 import operator
 import os
 import sys
@@ -125,9 +124,11 @@ class TestToolCalls(TestBase):
 
         os.environ["CREWAI_TRACING_ENABLED"] = "false"
         # Enable experimental mode and content capture for testing
-        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai"
+        os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = (
+            "gen_ai_latest_experimental"
+        )
         os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
-            "span_only"
+            "SPAN_ONLY"
         )
 
         if _OpenTelemetrySemanticConventionStability:
@@ -200,12 +201,12 @@ class TestToolCalls(TestBase):
         tool_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.operation.name") == "tool.execute"
+            if s.attributes.get("gen_ai.crewai.operation") == "tool.execute"
         ]
-        agent_spans = [
+        task_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.operation.name") == "agent.execute"
+            if s.attributes.get("gen_ai.crewai.operation") == "task.execute"
         ]
 
         # Verify TOOL span (if tool wrapper was successful)
@@ -213,23 +214,24 @@ class TestToolCalls(TestBase):
             tool_span = tool_spans[0]
             self.assertEqual(
                 tool_span.attributes.get("gen_ai.operation.name"),
+                "execute_tool",
+            )
+            self.assertEqual(
+                tool_span.attributes.get("gen_ai.crewai.operation"),
                 "tool.execute",
             )
             self.assertEqual(
                 tool_span.attributes.get("gen_ai.tool.name"), "get_weather"
             )
 
-            output_messages_json = tool_span.attributes.get(
-                "gen_ai.output.messages"
-            )
-            self.assertIsNotNone(output_messages_json)
-            output_messages = json.loads(output_messages_json)
+            tool_result = tool_span.attributes.get("gen_ai.tool.call.result")
+            self.assertIsNotNone(tool_result)
             # Weather logic in WeatherTool returns weather string
-            self.assertIn("Sunny", output_messages[0]["parts"][0]["content"])
+            self.assertIn("Sunny", tool_result)
 
-        # Verify AGENT span exists
+        # Verify one task invoke span exists; nested Agent.execute_task is skipped
         self.assertGreaterEqual(
-            len(agent_spans), 1, "Expected at least 1 AGENT span"
+            len(task_spans), 1, "Expected at least 1 TASK span"
         )
 
     def test_agent_with_multiple_tools(self):
@@ -289,7 +291,7 @@ class TestToolCalls(TestBase):
         for tool_span in tool_spans:
             self.assertEqual(
                 tool_span.attributes.get("gen_ai.operation.name"),
-                "tool.execute",
+                "execute_tool",
             )
             self.assertIsNotNone(tool_span.attributes.get("gen_ai.tool.name"))
 
@@ -350,11 +352,14 @@ class TestToolCalls(TestBase):
         tool_spans = [
             s
             for s in spans
-            if s.attributes.get("gen_ai.operation.name") == "tool.execute"
+            if s.attributes.get("gen_ai.crewai.operation") == "tool.execute"
         ]
 
-        # If tool span exists, verify error status
+        self.assertGreaterEqual(
+            len(tool_spans), 1, "Expected at least one TOOL span"
+        )
+
         for tool_span in tool_spans:
-            if tool_span.name.startswith("Tool.failing_tool"):
+            if tool_span.name.startswith("execute_tool failing_tool"):
                 # Should have error status
                 self.assertEqual(tool_span.status.status_code.name, "ERROR")

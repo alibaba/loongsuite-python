@@ -5,9 +5,9 @@ name: LoongSuite Lint 0
 
 on:
   push:
-    branches-ignore:
-    - 'release/*'
-    - 'otelbot/*'
+    # LoongSuite feature-branch pushes are covered by pull_request.
+    branches:
+    - main
   pull_request:
   merge_group:
 
@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref || github.run_id }}
   cancel-in-progress: true
 
 env:
@@ -34,12 +34,14 @@ env:
 jobs:
   loongsuite_changes:
     name: LoongSuite changed packages
-    runs-on: ubuntu-latest
+    runs-on: loongsuite-python-arc
     outputs:
       full: ${{ steps.detect.outputs.full }}
       packages: ${{ steps.detect.outputs.packages }}
       degraded: ${{ steps.detect.outputs.degraded }}
       reason: ${{ steps.detect.outputs.reason }}
+      has_jobs: ${{ steps.matrix.outputs.has_jobs }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@v4
@@ -55,12 +57,14 @@ jobs:
         id: detect
         shell: bash
         run: |
+          set -euo pipefail
           detector=.github/scripts/detect_loongsuite_changes.py
           run_detector() {
             if ! python "$1"; then
               echo "::warning::LoongSuite change detector failed; falling back to full CI"
               {
                 echo "full=true"
+                # full=true is authoritative; packages is intentionally empty.
                 echo "packages=||"
                 echo "degraded=true"
                 echo "reason=detector command failed"
@@ -69,19 +73,43 @@ jobs:
           }
           if [[ "${{ github.event_name }}" == "pull_request" ]] && git cat-file -e "${{ github.event.pull_request.base.sha }}:$detector" 2>/dev/null; then
             git show "${{ github.event.pull_request.base.sha }}:$detector" > /tmp/detect_loongsuite_changes.py
+            [[ -s /tmp/detect_loongsuite_changes.py ]] || { echo "::error::base-SHA detector blob is empty"; exit 1; }
             run_detector /tmp/detect_loongsuite_changes.py
           else
             run_detector "$detector"
           fi
 
-  lint-loongsuite-instrumentation-agentscope:
-    name: LoongSuite loongsuite-instrumentation-agentscope
+      - name: Select LoongSuite lint matrix
+        id: matrix
+        shell: bash
+        env:
+          LOONGSUITE_ALL_JOBS: >-
+            [{"name": "lint-loongsuite-instrumentation-agentscope", "package": "loongsuite-instrumentation-agentscope", "tox_env": "lint-loongsuite-instrumentation-agentscope", "ui_name": "loongsuite-instrumentation-agentscope"}, {"name": "lint-loongsuite-instrumentation-dashscope", "package": "loongsuite-instrumentation-dashscope", "tox_env": "lint-loongsuite-instrumentation-dashscope", "ui_name": "loongsuite-instrumentation-dashscope"}, {"name": "lint-loongsuite-instrumentation-claude-agent-sdk", "package": "loongsuite-instrumentation-claude-agent-sdk", "tox_env": "lint-loongsuite-instrumentation-claude-agent-sdk", "ui_name": "loongsuite-instrumentation-claude-agent-sdk"}, {"name": "lint-loongsuite-instrumentation-google-adk", "package": "loongsuite-instrumentation-google-adk", "tox_env": "lint-loongsuite-instrumentation-google-adk", "ui_name": "loongsuite-instrumentation-google-adk"}, {"name": "lint-loongsuite-instrumentation-google-genai", "package": "loongsuite-instrumentation-google-genai", "tox_env": "lint-loongsuite-instrumentation-google-genai", "ui_name": "loongsuite-instrumentation-google-genai"}, {"name": "lint-loongsuite-instrumentation-agno", "package": "loongsuite-instrumentation-agno", "tox_env": "lint-loongsuite-instrumentation-agno", "ui_name": "loongsuite-instrumentation-agno"}, {"name": "lint-loongsuite-instrumentation-langchain", "package": "loongsuite-instrumentation-langchain", "tox_env": "lint-loongsuite-instrumentation-langchain", "ui_name": "loongsuite-instrumentation-langchain"}, {"name": "lint-loongsuite-instrumentation-langgraph", "package": "loongsuite-instrumentation-langgraph", "tox_env": "lint-loongsuite-instrumentation-langgraph", "ui_name": "loongsuite-instrumentation-langgraph"}, {"name": "lint-loongsuite-instrumentation-autogen", "package": "loongsuite-instrumentation-autogen", "tox_env": "lint-loongsuite-instrumentation-autogen", "ui_name": "loongsuite-instrumentation-autogen"}, {"name": "lint-loongsuite-instrumentation-deepagents", "package": "loongsuite-instrumentation-deepagents", "tox_env": "lint-loongsuite-instrumentation-deepagents", "ui_name": "loongsuite-instrumentation-deepagents"}, {"name": "lint-loongsuite-instrumentation-microsoft-agent-framework", "package": "loongsuite-instrumentation-microsoft-agent-framework", "tox_env": "lint-loongsuite-instrumentation-microsoft-agent-framework", "ui_name": "loongsuite-instrumentation-microsoft-agent-framework"}, {"name": "lint-loongsuite-instrumentation-strands", "package": "loongsuite-instrumentation-strands", "tox_env": "lint-loongsuite-instrumentation-strands", "ui_name": "loongsuite-instrumentation-strands"}, {"name": "lint-loongsuite-instrumentation-qwen-agent", "package": "loongsuite-instrumentation-qwen-agent", "tox_env": "lint-loongsuite-instrumentation-qwen-agent", "ui_name": "loongsuite-instrumentation-qwen-agent"}, {"name": "lint-loongsuite-instrumentation-hermes-agent", "package": "loongsuite-instrumentation-hermes-agent", "tox_env": "lint-loongsuite-instrumentation-hermes-agent", "ui_name": "loongsuite-instrumentation-hermes-agent"}, {"name": "lint-loongsuite-instrumentation-mem0", "package": "loongsuite-instrumentation-mem0", "tox_env": "lint-loongsuite-instrumentation-mem0", "ui_name": "loongsuite-instrumentation-mem0"}, {"name": "lint-util-genai", "package": "util-genai", "tox_env": "lint-util-genai", "ui_name": "util-genai"}, {"name": "lint-loongsuite-instrumentation-litellm", "package": "loongsuite-instrumentation-litellm", "tox_env": "lint-loongsuite-instrumentation-litellm", "ui_name": "loongsuite-instrumentation-litellm"}, {"name": "lint-loongsuite-instrumentation-crewai", "package": "loongsuite-instrumentation-crewai", "tox_env": "lint-loongsuite-instrumentation-crewai", "ui_name": "loongsuite-instrumentation-crewai"}, {"name": "lint-loongsuite-instrumentation-qwenpaw", "package": "loongsuite-instrumentation-qwenpaw", "tox_env": "lint-loongsuite-instrumentation-qwenpaw", "ui_name": "loongsuite-instrumentation-qwenpaw"}, {"name": "lint-loongsuite-instrumentation-algotune", "package": "loongsuite-instrumentation-algotune", "tox_env": "lint-loongsuite-instrumentation-algotune", "ui_name": "loongsuite-instrumentation-algotune"}, {"name": "lint-loongsuite-instrumentation-bfclv4", "package": "loongsuite-instrumentation-bfclv4", "tox_env": "lint-loongsuite-instrumentation-bfclv4", "ui_name": "loongsuite-instrumentation-bfclv4"}, {"name": "lint-loongsuite-instrumentation-claw-eval", "package": "loongsuite-instrumentation-claw-eval", "tox_env": "lint-loongsuite-instrumentation-claw-eval", "ui_name": "loongsuite-instrumentation-claw-eval"}, {"name": "lint-loongsuite-instrumentation-minisweagent", "package": "loongsuite-instrumentation-minisweagent", "tox_env": "lint-loongsuite-instrumentation-minisweagent", "ui_name": "loongsuite-instrumentation-minisweagent"}, {"name": "lint-loongsuite-instrumentation-openhands", "package": "loongsuite-instrumentation-openhands", "tox_env": "lint-loongsuite-instrumentation-openhands", "ui_name": "loongsuite-instrumentation-openhands"}, {"name": "lint-loongsuite-instrumentation-slop-code", "package": "loongsuite-instrumentation-slop-code", "tox_env": "lint-loongsuite-instrumentation-slop-code", "ui_name": "loongsuite-instrumentation-slop-code"}, {"name": "lint-loongsuite-instrumentation-terminus2", "package": "loongsuite-instrumentation-terminus2", "tox_env": "lint-loongsuite-instrumentation-terminus2", "ui_name": "loongsuite-instrumentation-terminus2"}, {"name": "lint-loongsuite-instrumentation-vita", "package": "loongsuite-instrumentation-vita", "tox_env": "lint-loongsuite-instrumentation-vita", "ui_name": "loongsuite-instrumentation-vita"}, {"name": "lint-loongsuite-instrumentation-webarena", "package": "loongsuite-instrumentation-webarena", "tox_env": "lint-loongsuite-instrumentation-webarena", "ui_name": "loongsuite-instrumentation-webarena"}, {"name": "lint-loongsuite-instrumentation-widesearch", "package": "loongsuite-instrumentation-widesearch", "tox_env": "lint-loongsuite-instrumentation-widesearch", "ui_name": "loongsuite-instrumentation-widesearch"}, {"name": "lint-loongsuite-instrumentation-wildtool", "package": "loongsuite-instrumentation-wildtool", "tox_env": "lint-loongsuite-instrumentation-wildtool", "ui_name": "loongsuite-instrumentation-wildtool"}]
+          LOONGSUITE_FULL: ${{ steps.detect.outputs.full }}
+          LOONGSUITE_PACKAGES: ${{ steps.detect.outputs.packages }}
+        run: |
+          set -euo pipefail
+          selector=.github/scripts/select_loongsuite_matrix.py
+          run_selector() {
+            python "$1"
+          }
+          if [[ "${{ github.event_name }}" == "pull_request" ]] && git cat-file -e "${{ github.event.pull_request.base.sha }}:$selector" 2>/dev/null; then
+            git show "${{ github.event.pull_request.base.sha }}:$selector" > /tmp/select_loongsuite_matrix.py
+            [[ -s /tmp/select_loongsuite_matrix.py ]] || { echo "::error::base-SHA selector blob is empty"; exit 1; }
+            run_selector /tmp/select_loongsuite_matrix.py
+          else
+            run_selector "$selector"
+          fi
+
+  loongsuite_lint:
+    name: LoongSuite ${{ matrix.ui_name }}
     needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-agentscope|')
-    runs-on: ubuntu-latest
+    if: ${{ needs.loongsuite_changes.outputs.has_jobs == 'true' }}
+    runs-on: loongsuite-python-arc
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.loongsuite_changes.outputs.matrix) }}
     steps:
       - name: Checkout repo @ SHA - ${{ github.sha }}
         uses: actions/checkout@v4
@@ -95,257 +123,35 @@ jobs:
         run: pip install tox-uv
 
       - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-agentscope
+        run: tox -c tox-loongsuite.ini -e ${{ matrix.tox_env }}
 
-  lint-loongsuite-instrumentation-dashscope:
-    name: LoongSuite loongsuite-instrumentation-dashscope
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-dashscope|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  loongsuite_lint_result:
+    name: LoongSuite Lint 0 result
+    needs:
+      - loongsuite_changes
+      - loongsuite_lint
+    if: ${{ always() }}
+    runs-on: loongsuite-python-arc
     steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-dashscope
-
-  lint-loongsuite-instrumentation-claude-agent-sdk:
-    name: LoongSuite loongsuite-instrumentation-claude-agent-sdk
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-claude-agent-sdk|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-claude-agent-sdk
-
-  lint-loongsuite-instrumentation-google-adk:
-    name: LoongSuite loongsuite-instrumentation-google-adk
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-google-adk|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-google-adk
-
-  lint-loongsuite-instrumentation-langchain:
-    name: LoongSuite loongsuite-instrumentation-langchain
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-langchain|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-langchain
-
-  lint-loongsuite-instrumentation-langgraph:
-    name: LoongSuite loongsuite-instrumentation-langgraph
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-langgraph|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-langgraph
-
-  lint-loongsuite-instrumentation-qwen-agent:
-    name: LoongSuite loongsuite-instrumentation-qwen-agent
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-qwen-agent|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-qwen-agent
-
-  lint-loongsuite-instrumentation-mem0:
-    name: LoongSuite loongsuite-instrumentation-mem0
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-mem0|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-mem0
-
-  lint-util-genai:
-    name: LoongSuite util-genai
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|util-genai|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-util-genai
-
-  lint-loongsuite-instrumentation-litellm:
-    name: LoongSuite loongsuite-instrumentation-litellm
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-litellm|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-litellm
-
-  lint-loongsuite-instrumentation-crewai:
-    name: LoongSuite loongsuite-instrumentation-crewai
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-crewai|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-crewai
-
-  lint-loongsuite-instrumentation-qwenpaw:
-    name: LoongSuite loongsuite-instrumentation-qwenpaw
-    needs: loongsuite_changes
-    if: |
-      needs.loongsuite_changes.outputs.full == 'true' ||
-      contains(needs.loongsuite_changes.outputs.packages, '|loongsuite-instrumentation-qwenpaw|')
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Checkout repo @ SHA - ${{ github.sha }}
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Install tox
-        run: pip install tox-uv
-
-      - name: Run tests
-        run: tox -c tox-loongsuite.ini -e lint-loongsuite-instrumentation-qwenpaw
+      - name: Check LoongSuite lint result
+        shell: bash
+        run: |
+          changes_result="${{ needs.loongsuite_changes.result }}"
+          lint_result="${{ needs.loongsuite_lint.result }}"
+          has_jobs="${{ needs.loongsuite_changes.outputs.has_jobs }}"
+          detector_degraded="${{ needs.loongsuite_changes.outputs.degraded }}"
+          detector_reason="${{ needs.loongsuite_changes.outputs.reason }}"
+          echo "::notice::LoongSuite detector degraded=$detector_degraded reason=$detector_reason"
+          if [[ "$changes_result" != "success" ]]; then
+            echo "::error::loongsuite_changes ended with $changes_result"
+            exit 1
+          fi
+          if [[ "$lint_result" == "skipped" && "$has_jobs" != "false" ]]; then
+            echo "::error::loongsuite_lint skipped unexpectedly with has_jobs=$has_jobs"
+            exit 1
+          fi
+          if [[ "$lint_result" != "success" && "$lint_result" != "skipped" ]]; then
+            echo "::error::loongsuite_lint ended with $lint_result"
+            exit 1
+          fi
+          echo "LoongSuite lint matrix completed with $lint_result"

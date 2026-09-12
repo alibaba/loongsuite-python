@@ -1,0 +1,61 @@
+interactions:
+- request:
+    body: '{"contents": [{"parts": [{"text": "Reply with exactly: sync ok"}], "role":
+      "user"}]}'
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '84'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - google-genai-sdk/2.14.0 gl-python/3.12.10
+      x-goog-api-client:
+      - google-genai-sdk/2.14.0 gl-python/3.12.10
+      x-goog-api-key:
+      - test-google-key
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent
+  response:
+    body:
+      string: "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\":
+        [\n          {\n            \"text\": \"sync ok\",\n            \"thoughtSignature\":
+        \"dGVzdC10aG91Z2h0LXNpZ25hdHVyZQ==\"\n          }\n        ],\n        \"role\": \"model\"\n
+        \     },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n
+        \ \"usageMetadata\": {\n    \"promptTokenCount\": 7,\n    \"candidatesTokenCount\":
+        2,\n    \"totalTokenCount\": 9,\n    \"promptTokensDetails\": [\n      {\n
+        \       \"modality\": \"TEXT\",\n        \"tokenCount\": 7\n      }\n    ],\n
+        \   \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.5-flash-lite\",\n
+        \ \"responseId\": \"W5JharzyDt6gz7IPx7qD2QI\"\n}\n"
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '659'
+      content-type:
+      - application/json; charset=UTF-8
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-gemini-service-tier:
+      - standard
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -14,14 +14,56 @@
 
 """Tests for MultiModalConversation instrumentation."""
 
+import json
+from types import SimpleNamespace
 from typing import Optional
 
 import pytest
 from dashscope import MultiModalConversation
 
+from opentelemetry.instrumentation._semconv import (
+    OTEL_SEMCONV_STABILITY_OPT_IN,
+    _OpenTelemetrySemanticConventionStability,
+)
+from opentelemetry.instrumentation.dashscope.utils.multimodal import (
+    _extract_multimodal_output_messages,
+    _update_invocation_from_multimodal_response,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+)
+from opentelemetry.util.genai.handler import TelemetryHandler
+from opentelemetry.util.genai.types import LLMInvocation, Text, Uri
+
+
+def _make_multimodal_response(content, finish_reason="stop"):
+    return SimpleNamespace(
+        output=SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=content),
+                    finish_reason=finish_reason,
+                )
+            ]
+        )
+    )
+
+
+@pytest.fixture(scope="function")
+def content_capture_env(monkeypatch):
+    _OpenTelemetrySemanticConventionStability._initialized = False
+    monkeypatch.setenv(
+        OTEL_SEMCONV_STABILITY_OPT_IN, "gen_ai_latest_experimental"
+    )
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
+    )
+    _OpenTelemetrySemanticConventionStability._initialize()
+    yield
+    _OpenTelemetrySemanticConventionStability._initialized = False
 
 
 def _safe_getattr(obj, attr, default=None):
@@ -118,6 +160,96 @@ def _assert_multimodal_span_attributes(
         assert ttft_ns > 0, (
             f"time_to_first_token should be positive, got {ttft_ns}"
         )
+
+
+@pytest.mark.parametrize(
+    ("content_key", "url", "modality"),
+    [
+        ("image", "https://example.com/a.png", "image"),
+        ("audio", "https://example.com/a.wav", "audio"),
+        ("video", "https://example.com/a.mp4", "video"),
+    ],
+)
+def test_extract_multimodal_output_messages_with_uri_content(
+    content_key, url, modality
+):
+    """Test output message extraction for media URI content."""
+    messages = _extract_multimodal_output_messages(
+        _make_multimodal_response([{content_key: url}])
+    )
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert messages[0].finish_reason == "stop"
+    assert len(messages[0].parts) == 1
+
+    part = messages[0].parts[0]
+    assert isinstance(part, Uri)
+    assert part.uri == url
+    assert part.modality == modality
+    assert part.mime_type is None
+    assert part.type == "uri"
+
+
+def test_extract_multimodal_output_messages_with_text_and_image_content():
+    """Test output message extraction preserves mixed text and image parts."""
+    image_url = "https://example.com/generated.png"
+    messages = _extract_multimodal_output_messages(
+        _make_multimodal_response([{"text": "ok"}, {"image": image_url}])
+    )
+
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    assert messages[0].finish_reason == "stop"
+    assert len(messages[0].parts) == 2
+
+    text_part = messages[0].parts[0]
+    assert isinstance(text_part, Text)
+    assert text_part.content == "ok"
+    assert text_part.type == "text"
+
+    image_part = messages[0].parts[1]
+    assert isinstance(image_part, Uri)
+    assert image_part.uri == image_url
+    assert image_part.modality == "image"
+    assert image_part.mime_type is None
+    assert image_part.type == "uri"
+
+
+def test_multimodal_image_output_messages_written_to_span(
+    content_capture_env, tracer_provider, span_exporter
+):
+    """Test image output URI is written to gen_ai.output.messages."""
+    image_url = "https://example.com/generated.png"
+    response = _make_multimodal_response([{"image": image_url}])
+    invocation = LLMInvocation(request_model="wan2.7-image")
+    invocation.provider = "dashscope"
+
+    _update_invocation_from_multimodal_response(invocation, response)
+
+    handler = TelemetryHandler(tracer_provider=tracer_provider)
+    handler.start_llm(invocation)
+    handler.stop_llm(invocation)
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    output_messages = json.loads(
+        spans[0].attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    )
+    assert output_messages == [
+        {
+            "role": "assistant",
+            "parts": [
+                {
+                    "mime_type": None,
+                    "modality": "image",
+                    "uri": image_url,
+                    "type": "uri",
+                }
+            ],
+            "finish_reason": "stop",
+        }
+    ]
 
 
 @pytest.mark.vcr()

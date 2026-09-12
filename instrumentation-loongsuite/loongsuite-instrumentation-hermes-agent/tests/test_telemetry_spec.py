@@ -726,12 +726,125 @@ def test_cli_platform_agent_creates_entry_parent_span(
     _assert_parent(agent_span, entry_span)
 
 
-def test_agent_without_platform_does_not_create_entry_span(
+def test_tui_platform_agent_creates_entry_parent_span(
     instrumentation_module,
     tracer_provider,
     meter_provider,
     span_exporter,
 ):
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="tui-session", platform="tui")
+
+    runtime.run_wrapper(
+        lambda user_message: {"final_response": "完成"},
+        agent,
+        ("请回复：完成",),
+        {},
+    )
+
+    entry_span = _spans_by_kind(span_exporter, "ENTRY")[0]
+    agent_span = _spans_by_kind(span_exporter, "AGENT")[0]
+    _assert_standard_entry_span(
+        entry_span,
+        session_id="tui-session",
+        input_text="请回复：完成",
+        output_text="完成",
+    )
+    _assert_parent(agent_span, entry_span)
+
+
+def test_entry_platform_uses_env_session_source_when_agent_platform_missing(
+    monkeypatch,
+):
+    helpers = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.helpers"
+    )
+    monkeypatch.setenv("HERMES_SESSION_SOURCE", " Web ")
+    agent = _FakeAgent(session_id="env-session")
+
+    assert helpers.resolve_entry_platform(agent) == "web"
+
+
+def test_entry_platform_prefers_agent_platform_over_env_session_source(
+    monkeypatch,
+):
+    helpers = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.helpers"
+    )
+    monkeypatch.setenv("HERMES_SESSION_SOURCE", "web")
+    agent = _FakeAgent(session_id="dingtalk-session", platform="dingtalk")
+
+    assert helpers.resolve_entry_platform(agent) == "dingtalk"
+
+
+def test_entry_platform_empty_env_uses_cli_default(monkeypatch):
+    helpers = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.helpers"
+    )
+    monkeypatch.setenv("HERMES_SESSION_SOURCE", "   ")
+    agent = _FakeAgent(session_id="default-session")
+
+    assert helpers.resolve_entry_platform(agent) == "cli"
+
+
+def test_extract_server_info_does_not_default_port_for_schemeless_url():
+    helpers = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.helpers"
+    )
+    agent = _FakeAgent(session_id="server-info", base_url="api.example.com")
+
+    assert helpers._extract_server_info(agent) == ("api.example.com", None)
+
+
+def test_extract_server_info_defaults_port_for_explicit_scheme():
+    helpers = importlib.import_module(
+        "opentelemetry.instrumentation.hermes_agent.helpers"
+    )
+    agent = _FakeAgent(
+        session_id="server-info",
+        base_url="https://api.example.com/compatible-mode/v1",
+    )
+
+    assert helpers._extract_server_info(agent) == ("api.example.com", 443)
+
+
+def test_agent_without_platform_uses_env_session_source_for_entry(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+    monkeypatch,
+):
+    monkeypatch.setenv("HERMES_SESSION_SOURCE", "web")
+    runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
+    agent = _FakeAgent(session_id="env-entry-session")
+
+    runtime.run_wrapper(
+        lambda user_message: {"final_response": "完成"},
+        agent,
+        ("请回复：完成",),
+        {},
+    )
+
+    entry_span = _spans_by_kind(span_exporter, "ENTRY")[0]
+    agent_span = _spans_by_kind(span_exporter, "AGENT")[0]
+    _assert_standard_entry_span(
+        entry_span,
+        session_id="env-entry-session",
+        input_text="请回复：完成",
+        output_text="完成",
+    )
+    _assert_parent(agent_span, entry_span)
+
+
+def test_agent_without_platform_or_env_uses_cli_default_entry_source(
+    instrumentation_module,
+    tracer_provider,
+    meter_provider,
+    span_exporter,
+    monkeypatch,
+):
+    monkeypatch.delenv("HERMES_SESSION_SOURCE", raising=False)
     runtime = _runtime(instrumentation_module, tracer_provider, meter_provider)
     agent = _FakeAgent(session_id="library-session")
 
@@ -742,8 +855,15 @@ def test_agent_without_platform_does_not_create_entry_span(
         {},
     )
 
-    assert _spans_by_kind(span_exporter, "ENTRY") == []
-    assert len(_spans_by_kind(span_exporter, "AGENT")) == 1
+    entry_span = _spans_by_kind(span_exporter, "ENTRY")[0]
+    agent_span = _spans_by_kind(span_exporter, "AGENT")[0]
+    _assert_standard_entry_span(
+        entry_span,
+        session_id="library-session",
+        input_text="请回复：完成",
+        output_text="完成",
+    )
+    _assert_parent(agent_span, entry_span)
 
 
 def test_agent_span_does_not_backfill_agent_id_from_session_id(

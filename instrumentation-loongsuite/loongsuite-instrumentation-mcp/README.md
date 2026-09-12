@@ -2,7 +2,7 @@
 
 MCP Python Agent provides observability for MCP client and MCP server.  
 This document provides examples of usage and results in the MCP instrumentation.  
-For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installing MCP Instrumentation
 

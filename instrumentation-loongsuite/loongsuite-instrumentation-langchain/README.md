@@ -1,6 +1,6 @@
 # LoongSuite LangChain Instrumentation
 
-This package provides LoongSuite instrumentation for LangChain applications, allowing you to automatically trace and monitor your LangChain workflows. For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+This package provides LoongSuite instrumentation for LangChain applications, allowing you to automatically trace and monitor your LangChain workflows. For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installation
 

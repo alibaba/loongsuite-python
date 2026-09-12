@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This variant of the requirements aims to test the system using
-# the latest supported QwenPaw runtime.
+# This variant tests the latest supported QwenPaw 2 runtime.
 
-qwenpaw==1.1.4.post2
+qwenpaw==2.0.1
 pytest
 pytest-asyncio
 wrapt<2.0.0
@@ -24,5 +23,10 @@ opentelemetry-sdk
 opentelemetry-semantic-conventions
 opentelemetry-instrumentation
 
+-e instrumentation-loongsuite/loongsuite-instrumentation-agentscope
 -e instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw
 -e util/opentelemetry-util-genai
+
+# Dream calls the model outside AgentScope Agent middleware.
+-e instrumentation-genai/opentelemetry-instrumentation-openai-v2
+vcrpy

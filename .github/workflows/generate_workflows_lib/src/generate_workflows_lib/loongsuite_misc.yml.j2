@@ -5,9 +5,9 @@ name: LoongSuite Misc {{ file_number }}
 
 on:
   push:
-    branches-ignore:
-    - 'release/*'
-    - 'otelbot/*'
+    # LoongSuite feature-branch pushes are covered by pull_request.
+    branches:
+    - main
   pull_request:
   merge_group:
 
@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${% raw %}{{ github.workflow }}-${{ github.head_ref || github.run_id }}{% endraw %}
+  group: ${% raw %}{{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref || github.run_id }}{% endraw %}
   cancel-in-progress: true
 
 env:
@@ -36,7 +36,7 @@ jobs:
 
   {{ job_data }}:
     name: LoongSuite {{ job_data }}
-    runs-on: ubuntu-latest
+    runs-on: {{ runner }}
     timeout-minutes: 30
     {%- if job_data == "generate-workflows" %}
     if: |

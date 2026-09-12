@@ -1,0 +1,106 @@
+interactions:
+- request:
+    body: '{"model": "gemini-3.5-flash-lite", "input": "Reply with exactly: interaction
+      stream ok", "stream": true}'
+    headers:
+      accept:
+      - text/event-stream
+      accept-encoding:
+      - gzip, deflate
+      connection:
+      - keep-alive
+      content-length:
+      - '99'
+      content-type:
+      - application/json
+      host:
+      - generativelanguage.googleapis.com
+      user-agent:
+      - speakeasy-sdk/python 2.4.1-preview.5 2.918.3 v1beta google-genai
+      x-goog-api-client:
+      - google-genai-sdk/2.14.0 gl-python/3.12.10
+      x-goog-api-key:
+      - test-google-key
+    method: POST
+    uri: https://generativelanguage.googleapis.com/v1beta/interactions
+  response:
+    body:
+      string: 'event: interaction.created
+
+        data: {"interaction":{"id":"v1_ChdvdHhpYXFmU0w4V0d6N0lQOTQzanVRaxIXb3R4aWFxZlNMOFdHejdJUDk0M2p1UWs","status":"in_progress","object":"interaction","model":"gemini-3.5-flash-lite"},"event_type":"interaction.created"}
+
+
+        event: interaction.status_update
+
+        data: {"interaction_id":"v1_ChdvdHhpYXFmU0w4V0d6N0lQOTQzanVRaxIXb3R4aWFxZlNMOFdHejdJUDk0M2p1UWs","status":"in_progress","event_type":"interaction.status_update"}
+
+
+        event: step.start
+
+        data: {"index":0,"step":{"type":"thought"},"event_type":"step.start"}
+
+
+        event: step.delta
+
+        data: {"index":0,"delta":{"signature":"dGVzdC10aG91Z2h0LXNpZ25hdHVyZQ==","type":"thought_signature"},"event_type":"step.delta"}
+
+
+        event: step.stop
+
+        data: {"index":0,"event_type":"step.stop"}
+
+
+        event: step.start
+
+        data: {"index":1,"step":{"type":"model_output"},"event_type":"step.start"}
+
+
+        event: step.delta
+
+        data: {"index":1,"delta":{"text":"interaction stream","type":"text"},"event_type":"step.delta"}
+
+
+        event: step.delta
+
+        data: {"index":1,"delta":{"text":" ok","type":"text"},"event_type":"step.delta"}
+
+
+        event: step.stop
+
+        data: {"index":1,"event_type":"step.stop"}
+
+
+        event: interaction.completed
+
+        data: {"interaction":{"id":"v1_ChdvdHhpYXFmU0w4V0d6N0lQOTQzanVRaxIXb3R4aWFxZlNMOFdHejdJUDk0M2p1UWs","status":"completed","usage":{"total_tokens":11,"total_input_tokens":8,"input_tokens_by_modality":[{"modality":"text","tokens":8}],"total_cached_tokens":0,"total_output_tokens":3,"total_tool_use_tokens":0,"total_thought_tokens":0},"created":"2026-07-24T03:31:47Z","updated":"2026-07-24T03:31:47Z","service_tier":"standard","object":"interaction","model":"gemini-3.5-flash-lite"},"event_type":"interaction.completed"}
+
+
+        event: done
+
+        data: [DONE]
+
+
+        '
+    headers:
+      alt-svc:
+      - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+      content-length:
+      - '1719'
+      content-type:
+      - text/event-stream
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      - X-Origin
+      - Referer
+      x-content-type-options:
+      - nosniff
+      x-frame-options:
+      - SAMEORIGIN
+      x-xss-protection:
+      - '0'
+    status:
+      code: 200
+      message: OK
+version: 1

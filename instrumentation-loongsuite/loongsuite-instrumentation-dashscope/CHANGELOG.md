@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
+There are no changelog entries for this release.
+
+## Version 0.8.0 (2026-07-31)
+
+There are no changelog entries for this release.
+
+## Version 0.7.0 (2026-07-03)
+
+### Fixed
+
+- Capture image and video URI outputs from `MultiModalConversation` responses.
+
+## Version 0.6.0 (2026-06-03)
+
 ### Fixed
 
 - Fix extraction of `gen_ai.output.messages` for message-format text responses
@@ -25,7 +41,7 @@ There are no changelog entries for this release.
 ### Changed
 
 - Adapt imports to `opentelemetry-util-genai` module layout change
-  ([#158](https://github.com/alibaba/loongsuite-python-agent/pull/158))
+  ([#158](https://github.com/alibaba/loongsuite-python/pull/158))
 
 ## Version 0.2.0 (2026-03-12)
 
@@ -36,11 +52,11 @@ There are no changelog entries for this release.
 ### Added
 
 - Add support for multimodal API
-  ([#111](https://github.com/alibaba/loongsuite-python-agent/pull/111))
+  ([#111](https://github.com/alibaba/loongsuite-python/pull/111))
 - Initial implementation of DashScope instrumentation
-  ([#66](https://github.com/alibaba/loongsuite-python-agent/pull/66))
+  ([#66](https://github.com/alibaba/loongsuite-python/pull/66))
 
 ### Fixed
 
 - Fix MIME type inference logic for speech synthesis instrumentation
-  ([#115](https://github.com/alibaba/loongsuite-python-agent/pull/115))
+  ([#115](https://github.com/alibaba/loongsuite-python/pull/115))

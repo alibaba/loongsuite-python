@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## Version 0.9.0 (2026-09-07)
+
+There are no changelog entries for this release.
+
+## Version 0.8.0 (2026-07-31)
+
+There are no changelog entries for this release.
+
+## Version 0.7.0 (2026-07-03)
+
+There are no changelog entries for this release.
+
+## Version 0.6.0 (2026-06-03)
+
+There are no changelog entries for this release.
+
 ## Version 0.5.0 (2026-05-11)
 
 There are no changelog entries for this release.
@@ -20,7 +36,7 @@ There are no changelog entries for this release.
 ### Changed
 
 - Update README integration flow to align with the root recommended LoongSuite pattern using Option A (`loongsuite-bootstrap -a install --latest`) for this package not yet on PyPI.
-  ([#159](https://github.com/alibaba/loongsuite-python-agent/pull/159))
+  ([#159](https://github.com/alibaba/loongsuite-python/pull/159))
 
 ## Version 0.2.0 (2026-03-12)
 
@@ -31,9 +47,9 @@ There are no changelog entries for this release.
 ### Fixed
 
 - Correct timestamp calculation in dify instrumentation
-  ([#74](https://github.com/alibaba/loongsuite-python-agent/pull/74))
+  ([#74](https://github.com/alibaba/loongsuite-python/pull/74))
 
 ### Added
 
 - Initialize the instrumentation for dify
-  ([#29](https://github.com/alibaba/loongsuite-python-agent/pull/29))
+  ([#29](https://github.com/alibaba/loongsuite-python/pull/29))
