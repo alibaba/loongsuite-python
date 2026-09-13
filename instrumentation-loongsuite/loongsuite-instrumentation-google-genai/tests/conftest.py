@@ -43,23 +43,16 @@ def _scrub_body(value):
     return value
 
 
-def _normalize_generated_schema(value):
-    """Normalize SDK-generated function schemas across google-genai 2.x."""
+def _normalize_json_schema(value):
+    """Normalize type spellings inside an SDK-generated JSON Schema."""
     if isinstance(value, dict):
         normalized = {}
         for key, nested in value.items():
-            if key in _GENERATED_RESULT_SCHEMA_KEYS:
-                continue
-            normalized_key = (
-                "parameters"
-                if key in _GENERATED_PARAMETER_SCHEMA_KEYS
-                else key
-            )
-            normalized_value = _normalize_generated_schema(nested)
+            normalized_value = _normalize_json_schema(nested)
             # google-genai 2.23 switched generated JSON Schema type values
             # from the API's uppercase spelling to standard lowercase.
             if (
-                normalized_key == "type"
+                key == "type"
                 and isinstance(nested, str)
                 and nested.upper()
                 in {
@@ -72,11 +65,54 @@ def _normalize_generated_schema(value):
                 }
             ):
                 normalized_value = nested.lower()
-            normalized[normalized_key] = normalized_value
+            normalized[key] = normalized_value
         return normalized
     if isinstance(value, list):
-        return [_normalize_generated_schema(item) for item in value]
+        return [_normalize_json_schema(item) for item in value]
     return value
+
+
+def _normalize_function_declaration(declaration):
+    """Normalize only fields generated from a Python tool callable."""
+    if not isinstance(declaration, dict):
+        return declaration
+    normalized = dict(declaration)
+    for key in _GENERATED_RESULT_SCHEMA_KEYS:
+        normalized.pop(key, None)
+
+    parameters = normalized.get("parameters")
+    for key in _GENERATED_PARAMETER_SCHEMA_KEYS:
+        if key in normalized:
+            parameters = normalized.pop(key)
+    if parameters is not None:
+        normalized["parameters"] = _normalize_json_schema(parameters)
+    return normalized
+
+
+def _normalize_generated_function_schemas(payload):
+    """Normalize generated declarations without touching user configuration."""
+    if not isinstance(payload, dict):
+        return payload
+    normalized = dict(payload)
+    tools = normalized.get("tools")
+    if not isinstance(tools, list):
+        return normalized
+
+    normalized_tools = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            normalized_tools.append(tool)
+            continue
+        normalized_tool = dict(tool)
+        declarations = normalized_tool.get("functionDeclarations")
+        if isinstance(declarations, list):
+            normalized_tool["functionDeclarations"] = [
+                _normalize_function_declaration(declaration)
+                for declaration in declarations
+            ]
+        normalized_tools.append(normalized_tool)
+    normalized["tools"] = normalized_tools
+    return normalized
 
 
 def _normalize_request_body(value):
@@ -88,7 +124,7 @@ def _normalize_request_body(value):
     except (TypeError, ValueError):
         return scrubbed
     canonical = json.dumps(
-        _normalize_generated_schema(payload),
+        _normalize_generated_function_schemas(payload),
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -120,6 +156,12 @@ def _scrub_response(response):
 @pytest.fixture(scope="module")
 def vcr_cassette_dir():
     return str(_CASSETTES)
+
+
+@pytest.fixture
+def vcr_request_body_normalizer():
+    """Expose request normalization for focused regression coverage."""
+    return _normalize_request_body
 
 
 @pytest.fixture(scope="module")

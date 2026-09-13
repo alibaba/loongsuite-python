@@ -32,6 +32,9 @@ from opentelemetry.util.genai._multimodal_upload import (
     UploadItem,
     multimodal_upload_hook,
 )
+from opentelemetry.util.genai._multimodal_upload import (
+    presign_client as presign_client_module,
+)
 from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
     DEFAULT_SLS_LOGSTORE,
     PRESIGN_HOOK_NAME,
@@ -96,6 +99,18 @@ _LOGSTORE = "logstore-multimodal"
 _BASE_PATH = f"sls://{_PROJECT}/{_LOGSTORE}"
 _UPLOADER_BASE_PATH = "sls://proj-a/logstore-a/genai"
 _ITEM_URL = "sls://proj-a/logstore-a/genai/20260902/img.jpg"
+
+
+class _FakeArmsEndpointsState:
+    sls_project = _PROJECT
+
+    @staticmethod
+    def get_one_endpoint() -> str:
+        return _ENDPOINT
+
+
+class _FakeArmsEndpointsModule:
+    global_arms_endpoints_state = _FakeArmsEndpointsState()
 
 
 class _RecordingRecorder:
@@ -227,10 +242,34 @@ def test_endpoint_prefers_configured_value_over_arms_state() -> None:
     assert resolve_presign_endpoint(snapshot) == _ENDPOINT
 
 
-def test_endpoint_falls_back_to_arms_state() -> None:
+def test_endpoint_falls_back_to_arms_state(monkeypatch) -> None:
+    monkeypatch.setattr(
+        presign_client_module,
+        "import_module",
+        lambda _name: _FakeArmsEndpointsModule,
+    )
     snapshot = replace(get_multimodal_config_snapshot(), presign_endpoint=None)
-    resolved = resolve_presign_endpoint(snapshot)
-    assert resolved is None or isinstance(resolved, str)
+    assert resolve_presign_endpoint(snapshot) == _ENDPOINT
+
+
+def test_missing_arms_state_uses_empty_fallbacks(monkeypatch) -> None:
+    def missing_module(_name):
+        raise ModuleNotFoundError("optional ARMS SDK is not installed")
+
+    monkeypatch.setattr(
+        presign_client_module,
+        "import_module",
+        missing_module,
+    )
+    snapshot = replace(
+        get_multimodal_config_snapshot(),
+        presign_endpoint=None,
+        sls_project=None,
+        sls_logstore=None,
+    )
+
+    assert resolve_presign_endpoint(snapshot) is None
+    assert _resolve_sls_target(snapshot) == ("", DEFAULT_SLS_LOGSTORE)
 
 
 @pytest.mark.parametrize(
@@ -1106,12 +1145,17 @@ def test_presign_client_payload_uses_snapshot_sls_target(monkeypatch) -> None:
         client.close()
 
 
-def test_sls_target_falls_back_to_arms_state() -> None:
+def test_sls_target_falls_back_to_arms_state(monkeypatch) -> None:
+    monkeypatch.setattr(
+        presign_client_module,
+        "import_module",
+        lambda _name: _FakeArmsEndpointsModule,
+    )
     snapshot = replace(
         get_multimodal_config_snapshot(), sls_project=None, sls_logstore=None
     )
     project, logstore = _resolve_sls_target(snapshot)
-    assert isinstance(project, str)
+    assert project == _PROJECT
     # The logstore always defaults so the recorded URI and the presign request
     # agree on where the object lands.
     assert logstore == DEFAULT_SLS_LOGSTORE
