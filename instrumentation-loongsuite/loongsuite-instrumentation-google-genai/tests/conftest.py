@@ -24,11 +24,11 @@ _CASSETTES = Path(__file__).parent / "cassettes"
 _THOUGHT_SIGNATURE = re.compile(
     rb'("(?:thoughtSignature|thought_signature|signature)"\s*:\s*")[^"]+(")'
 )
-_GENERATED_RESULT_SCHEMA_KEYS = {"response_json_schema", "responseJsonSchema"}
-_GENERATED_PARAMETER_SCHEMA_KEYS = {
+_RESULT_SCHEMA_KEYS = ("response_json_schema", "responseJsonSchema")
+_PARAMETER_SCHEMA_KEYS = (
     "parameters_json_schema",
     "parametersJsonSchema",
-}
+)
 
 
 def _scrub_body(value):
@@ -73,19 +73,28 @@ def _normalize_json_schema(value):
 
 
 def _normalize_function_declaration(declaration):
-    """Normalize only fields generated from a Python tool callable."""
+    """Normalize schema aliases while preserving declaration semantics."""
     if not isinstance(declaration, dict):
         return declaration
     normalized = dict(declaration)
-    for key in _GENERATED_RESULT_SCHEMA_KEYS:
-        normalized.pop(key, None)
 
     parameters = normalized.get("parameters")
-    for key in _GENERATED_PARAMETER_SCHEMA_KEYS:
+    for key in _PARAMETER_SCHEMA_KEYS:
         if key in normalized:
             parameters = normalized.pop(key)
     if parameters is not None:
         normalized["parameters"] = _normalize_json_schema(parameters)
+
+    response_schema = None
+    has_response_schema = False
+    for key in _RESULT_SCHEMA_KEYS:
+        if key in normalized:
+            response_schema = normalized.pop(key)
+            has_response_schema = True
+    if has_response_schema:
+        normalized["response_json_schema"] = _normalize_json_schema(
+            response_schema
+        )
     return normalized
 
 

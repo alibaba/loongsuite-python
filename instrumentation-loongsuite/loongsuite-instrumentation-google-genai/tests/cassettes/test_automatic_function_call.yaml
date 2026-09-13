@@ -4,7 +4,8 @@ interactions:
       then reply with only the returned temperature."}], "role": "user"}], "tools":
       [{"functionDeclarations": [{"description": "Return the current temperature for
       a city.", "name": "get_temperature", "parameters": {"properties": {"city": {"type":
-      "STRING"}}, "required": ["city"], "type": "OBJECT"}}]}], "generationConfig":
+      "STRING"}}, "required": ["city"], "type": "OBJECT"}, "response_json_schema":
+      {"type": "STRING"}}]}], "generationConfig":
       {}}'
     headers:
       accept:
@@ -73,7 +74,8 @@ interactions:
       {"parts": [{"functionResponse": {"name": "get_temperature", "response": {"result":
       "17 C"}}}], "role": "user"}], "tools": [{"functionDeclarations": [{"description":
       "Return the current temperature for a city.", "name": "get_temperature", "parameters":
-      {"properties": {"city": {"type": "STRING"}}, "required": ["city"], "type": "OBJECT"}}]}],
+      {"properties": {"city": {"type": "STRING"}}, "required": ["city"], "type": "OBJECT"},
+      "response_json_schema": {"type": "STRING"}}]}],
       "generationConfig": {}}'
     headers:
       accept:

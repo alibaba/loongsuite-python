@@ -17,7 +17,7 @@
 import json
 
 
-def test_normalizer_only_rewrites_generated_function_schema(
+def test_normalizer_preserves_function_response_schema(
     vcr_request_body_normalizer,
 ):
     generation_config = {
@@ -54,5 +54,33 @@ def test_normalizer_only_rewrites_generated_function_schema(
                 "properties": {"city": {"type": "string"}},
                 "type": "object",
             },
+            "response_json_schema": {"type": "string"},
         }
     ]
+
+
+def test_normalizer_keeps_distinct_response_schemas_distinct(
+    vcr_request_body_normalizer,
+):
+    def normalize(response_type):
+        request = {
+            "tools": [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": "get_temperature",
+                            "responseJsonSchema": {"type": response_type},
+                        }
+                    ]
+                }
+            ]
+        }
+        return json.loads(vcr_request_body_normalizer(json.dumps(request)))
+
+    string_response = normalize("STRING")
+    integer_response = normalize("INTEGER")
+
+    assert string_response != integer_response
+    assert string_response["tools"][0]["functionDeclarations"][0][
+        "response_json_schema"
+    ] == {"type": "string"}
