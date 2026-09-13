@@ -14,17 +14,24 @@
 
 """Tests for the pre-authorized OSS (presigned URL) multimodal uploader."""
 
+# This module intentionally keeps the end-to-end presign uploader scenarios
+# together so shared concurrency fixtures and lifecycle assertions stay visible.
+# pylint: disable=too-many-lines
+
 from __future__ import annotations
 
 import json
 import threading
 from dataclasses import replace
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx
 import pytest
 
-from opentelemetry.util.genai._multimodal_upload import UploadItem
+from opentelemetry.util.genai._multimodal_upload import (
+    UploadItem,
+    multimodal_upload_hook,
+)
 from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
     DEFAULT_SLS_LOGSTORE,
     PRESIGN_HOOK_NAME,
@@ -36,6 +43,9 @@ from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disa
     normalize_oss_path_prefix,
     update_multimodal_runtime_config,
 )
+from opentelemetry.util.genai._multimodal_upload.pre_uploader import (
+    MultimodalPreUploader,
+)
 from opentelemetry.util.genai._multimodal_upload.presign_client import (  # pylint: disable=no-name-in-module
     LICENSE_KEY_HEADER,
     PRESIGN_API_PATH,
@@ -43,6 +53,7 @@ from opentelemetry.util.genai._multimodal_upload.presign_client import (  # pyli
     MultimodalPresignClient,
     PresignAuthError,
     PresignConfigError,
+    PresignedUpload,
     PresignError,
     PresignRetryableError,
     parse_presign_response,
@@ -107,7 +118,9 @@ class _RecordingRecorder:
 class _FakePresignClient:
     """Presign client stub that records calls and replays canned results."""
 
-    def __init__(self, results: Optional[List[Any]] = None) -> None:
+    def __init__(
+        self, results: Optional[List[Union[PresignedUpload, Exception]]] = None
+    ) -> None:
         self.results = list(results or [])
         self.object_names: List[str] = []
         self.closed = False
@@ -120,31 +133,27 @@ class _FakePresignClient:
             else _presigned(url=_SIGNED_URL)
         )
         if isinstance(result, Exception):
-            raise result
+            # Pylint cannot retain this narrowing after the mutable-list pop.
+            raise result  # pylint: disable=raising-non-exception
         return result
 
     def close(self) -> None:
         self.closed = True
 
 
-def _presigned(**overrides: Any):
-    from opentelemetry.util.genai._multimodal_upload.presign_client import (  # noqa: PLC0415
-        PresignedUpload,
-    )
-
+def _presigned(**overrides: Any) -> PresignedUpload:
     fields: Dict[str, Any] = {"url": _SIGNED_URL}
     fields.update(overrides)
     return PresignedUpload(**fields)
 
 
-# Bound eagerly so helpers keep working while tests patch ``httpx.Client``.
-_HTTPX_CLIENT_CLS = httpx.Client
-
-
 def _mock_http_client(
     handler: Callable[[httpx.Request], httpx.Response],
+    client_cls: type[httpx.Client] = httpx.Client,
 ) -> httpx.Client:
-    return _HTTPX_CLIENT_CLS(transport=httpx.MockTransport(handler))
+    # The default is bound eagerly so this keeps working while tests patch
+    # ``httpx.Client``.
+    return client_cls(transport=httpx.MockTransport(handler))
 
 
 def _uploader(
@@ -706,6 +715,9 @@ def test_upload_after_shutdown_is_rejected(recorder) -> None:
 def test_shutdown_timeout_closes_clients_after_last_task(
     monkeypatch, owns_http_client, status
 ) -> None:
+    # The local synchronization state makes ownership and shutdown ordering
+    # explicit in this concurrency regression test.
+    # pylint: disable=too-many-locals
     started = [threading.Event(), threading.Event()]
     release = [threading.Event(), threading.Event()]
     closed = threading.Event()
@@ -1126,13 +1138,6 @@ def test_presign_timeout_env_parsing(
 
 def test_entry_point_loading_builds_presign_pair(monkeypatch) -> None:
     _apply_env(monkeypatch, _presign_env())
-    from opentelemetry.util.genai._multimodal_upload import (  # noqa: PLC0415
-        multimodal_upload_hook,
-    )
-    from opentelemetry.util.genai._multimodal_upload.pre_uploader import (  # noqa: PLC0415
-        MultimodalPreUploader,
-    )
-
     hooks = {
         "opentelemetry_genai_multimodal_uploader": presign_uploader_hook,
         "opentelemetry_genai_multimodal_pre_uploader": presign_pre_uploader_hook,

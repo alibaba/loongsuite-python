@@ -14,6 +14,7 @@
 
 """VCR configuration for Google GenAI SDK integration tests."""
 
+import json
 import re
 from pathlib import Path
 
@@ -23,6 +24,11 @@ _CASSETTES = Path(__file__).parent / "cassettes"
 _THOUGHT_SIGNATURE = re.compile(
     rb'("(?:thoughtSignature|thought_signature|signature)"\s*:\s*")[^"]+(")'
 )
+_GENERATED_RESULT_SCHEMA_KEYS = {"response_json_schema", "responseJsonSchema"}
+_GENERATED_PARAMETER_SCHEMA_KEYS = {
+    "parameters_json_schema",
+    "parametersJsonSchema",
+}
 
 
 def _scrub_body(value):
@@ -37,8 +43,60 @@ def _scrub_body(value):
     return value
 
 
+def _normalize_generated_schema(value):
+    """Normalize SDK-generated function schemas across google-genai 2.x."""
+    if isinstance(value, dict):
+        normalized = {}
+        for key, nested in value.items():
+            if key in _GENERATED_RESULT_SCHEMA_KEYS:
+                continue
+            normalized_key = (
+                "parameters"
+                if key in _GENERATED_PARAMETER_SCHEMA_KEYS
+                else key
+            )
+            normalized_value = _normalize_generated_schema(nested)
+            # google-genai 2.23 switched generated JSON Schema type values
+            # from the API's uppercase spelling to standard lowercase.
+            if (
+                normalized_key == "type"
+                and isinstance(nested, str)
+                and nested.upper()
+                in {
+                    "ARRAY",
+                    "BOOLEAN",
+                    "INTEGER",
+                    "NUMBER",
+                    "OBJECT",
+                    "STRING",
+                }
+            ):
+                normalized_value = nested.lower()
+            normalized[normalized_key] = normalized_value
+        return normalized
+    if isinstance(value, list):
+        return [_normalize_generated_schema(item) for item in value]
+    return value
+
+
+def _normalize_request_body(value):
+    """Canonicalize JSON requests while retaining exact semantic matching."""
+    scrubbed = _scrub_body(value)
+    is_bytes = isinstance(scrubbed, bytes)
+    try:
+        payload = json.loads(scrubbed)
+    except (TypeError, ValueError):
+        return scrubbed
+    canonical = json.dumps(
+        _normalize_generated_schema(payload),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return canonical.encode() if is_bytes else canonical
+
+
 def _scrub_request(request):
-    request.body = _scrub_body(request.body)
+    request.body = _normalize_request_body(request.body)
     return request
 
 

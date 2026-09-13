@@ -50,6 +50,7 @@ from opentelemetry.util.genai._multimodal_upload.presign_client import (
     PresignConfigError,
     PresignError,
     PresignRetryableError,
+    _load_arms_endpoints_state,
     resolve_presign_endpoint,
 )
 from opentelemetry.util.genai._multimodal_upload.usage_recorder import (
@@ -273,6 +274,9 @@ class PresignUploader(Uploader):
         *,
         skip_if_exists: bool = True,
     ) -> bool:
+        # Early returns keep every rejected queue state explicit and ensure its
+        # metric is recorded next to the condition that caused it.
+        # pylint: disable=too-many-return-statements,too-many-branches
         recorder = get_multimodal_usage_recorder()
         if item.data is None and item.source_uri is None:
             recorder.record_upload_error(
@@ -417,6 +421,8 @@ class PresignUploader(Uploader):
         self, task: _Task, content: bytes
     ) -> Optional[str]:
         """Upload one object; return ``None`` on success or a failure reason."""
+        # Each terminal response maps directly to a stable failure reason.
+        # pylint: disable=too-many-return-statements
         for attempt in range(1, self._max_upload_attempts + 1):
             last_attempt = attempt >= self._max_upload_attempts
             try:
@@ -704,18 +710,19 @@ def _resolve_sls_target(snapshot: Any) -> Tuple[str, str]:
     The logstore always falls back to the shared default so the recorded URI
     and the presign request agree on where the object lands.
     """
-    project = (getattr(snapshot, "sls_project", None) or "").strip()
+    project_value = getattr(snapshot, "sls_project", None)
+    project = project_value.strip() if isinstance(project_value, str) else ""
+    logstore_value = getattr(snapshot, "sls_logstore", None)
     logstore = (
-        getattr(snapshot, "sls_logstore", None) or ""
-    ).strip() or DEFAULT_SLS_LOGSTORE
+        logstore_value.strip() if isinstance(logstore_value, str) else ""
+    ) or DEFAULT_SLS_LOGSTORE
     if project:
         return project, logstore
     try:
-        from aliyun.sdk.extension.arms.exporters.arms_endpoints_state import (  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
-            global_arms_endpoints_state,
+        state_project = _load_arms_endpoints_state().sls_project
+        project = (
+            state_project.strip() if isinstance(state_project, str) else ""
         )
-
-        project = (global_arms_endpoints_state.sls_project or "").strip()
     except Exception:  # pylint: disable=broad-except
         _logger.debug(
             "ARMS endpoint state unavailable for multimodal presign project",

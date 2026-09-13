@@ -27,7 +27,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from importlib import import_module
+from typing import Any, Dict, Mapping, Optional, Protocol, cast
 
 import httpx
 
@@ -64,6 +65,28 @@ _SUCCESS_KEYS = ("success", "Success")
 _FAILURE_MESSAGE_KEYS = ("message", "Message", "errorMessage", "msg")
 
 
+class _ArmsEndpointsState(Protocol):
+    """Typed boundary around the optional Aliyun ARMS SDK state."""
+
+    @property
+    def sls_project(self) -> Optional[str]: ...
+
+    def get_one_endpoint(self) -> Optional[str]: ...
+
+
+def _load_arms_endpoints_state() -> _ArmsEndpointsState:
+    """Load the optional ARMS endpoint state without a static SDK import."""
+    module = import_module(
+        "aliyun.sdk.extension.arms.exporters.arms_endpoints_state"
+    )
+    state: object = getattr(module, "global_arms_endpoints_state")
+    return cast(_ArmsEndpointsState, state)
+
+
+def _empty_headers() -> Mapping[str, str]:
+    return {}
+
+
 class PresignError(Exception):
     """Base error raised while requesting a presigned upload URL."""
 
@@ -86,11 +109,11 @@ class PresignedUpload:
 
     url: str
     method: str = "PUT"
-    headers: Mapping[str, str] = field(default_factory=dict)
+    headers: Mapping[str, str] = field(default_factory=_empty_headers)
     expiration: Optional[str] = None
 
 
-def resolve_presign_endpoint(snapshot: Any) -> Optional[str]:
+def resolve_presign_endpoint(snapshot: object) -> Optional[str]:
     """Resolve the presign endpoint from config, then from ARMS state.
 
     The ARMS OneEndpoint state is imported lazily and treated as optional so
@@ -98,14 +121,10 @@ def resolve_presign_endpoint(snapshot: Any) -> Optional[str]:
     the ARMS SDK extension is absent.
     """
     configured = getattr(snapshot, "presign_endpoint", None)
-    if configured:
+    if isinstance(configured, str) and configured:
         return configured
     try:
-        from aliyun.sdk.extension.arms.exporters.arms_endpoints_state import (  # pylint: disable=import-outside-toplevel  # noqa: PLC0415
-            global_arms_endpoints_state,
-        )
-
-        endpoint = global_arms_endpoints_state.get_one_endpoint()
+        endpoint = _load_arms_endpoints_state().get_one_endpoint()
     except Exception:  # pylint: disable=broad-except
         _logger.debug(
             "ARMS endpoint state unavailable for multimodal presign",
@@ -115,43 +134,51 @@ def resolve_presign_endpoint(snapshot: Any) -> Optional[str]:
     return endpoint or None
 
 
-def _unwrap_payload(payload: Any) -> Optional[Mapping[str, Any]]:
+def _as_mapping(value: object) -> Optional[Mapping[str, object]]:
+    if not isinstance(value, Mapping):
+        return None
+    return cast(Mapping[str, object], value)
+
+
+def _unwrap_payload(payload: object) -> Optional[Mapping[str, object]]:
     """Walk known envelope keys until a mapping carrying a URL is found."""
     seen = 0
-    current = payload
-    while isinstance(current, Mapping) and seen < 4:
+    current = _as_mapping(payload)
+    while current is not None and seen < 4:
         if any(current.get(key) for key in _URL_KEYS):
             return current
         for key in _ENVELOPE_KEYS:
-            nested = current.get(key)
-            if isinstance(nested, Mapping):
+            nested = _as_mapping(current.get(key))
+            if nested is not None:
                 current = nested
                 break
         else:
             return current
         seen += 1
-    return current if isinstance(current, Mapping) else None
+    return current
 
 
-def _envelope_failure(payload: Any) -> Optional[str]:
-    if not isinstance(payload, Mapping):
+def _envelope_failure(payload: object) -> Optional[str]:
+    body = _as_mapping(payload)
+    if body is None:
         return None
     for key in _SUCCESS_KEYS:
-        if key in payload and payload[key] is False:
+        if key in body and body[key] is False:
             for message_key in _FAILURE_MESSAGE_KEYS:
-                message = payload.get(message_key)
+                message = body.get(message_key)
                 if message:
                     return str(message)
             return "presign request reported failure"
     return None
 
 
-def _string_headers(value: Any) -> Dict[str, str]:
+def _string_headers(value: object) -> Dict[str, str]:
     if not isinstance(value, Mapping):
         return {}
+    headers = cast(Mapping[object, object], value)
     return {
         str(name): str(header_value)
-        for name, header_value in value.items()
+        for name, header_value in headers.items()
         if name and header_value is not None
     }
 
@@ -168,7 +195,7 @@ def _plain_url(text: str) -> Optional[str]:
     return None
 
 
-def parse_presign_response(payload: Any) -> PresignedUpload:
+def parse_presign_response(payload: object) -> PresignedUpload:
     """Parse a presign response, tolerating envelope and naming variants."""
     failure = _envelope_failure(payload)
     if failure:
