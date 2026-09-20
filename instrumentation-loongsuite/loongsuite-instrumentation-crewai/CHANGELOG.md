@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Keep incidental provider requests out of the CrewAI VCR cassettes so a
+  first-use model-metadata fetch cannot fail the recorded tests.
+  ([#270](https://github.com/alibaba/loongsuite-python/pull/270))
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.
