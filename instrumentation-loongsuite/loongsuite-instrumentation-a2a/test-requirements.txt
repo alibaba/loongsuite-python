@@ -1,0 +1,10 @@
+pytest
+pytest-asyncio
+pytest-forked==1.6.0
+setuptools
+wrapt
+a2a-sdk
+
+-e opentelemetry-instrumentation
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-a2a

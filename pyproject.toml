@@ -178,6 +178,8 @@ ignore = [
 "docs/**/*.*" = ["A001"]
 # The benchmark integrations in PR #200 build fake optional dependency modules
 # inside tests and import several optional targets lazily inside patch paths.
+"instrumentation-loongsuite/loongsuite-instrumentation-a2a/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-a2a/tests/**/*.py" = ["E402", "F811"]
 "instrumentation-loongsuite/loongsuite-instrumentation-algotune/**/*.py" = ["PLC0415"]
 "instrumentation-loongsuite/loongsuite-instrumentation-algotune/tests/**/*.py" = ["E402", "F811"]
 "instrumentation-loongsuite/loongsuite-instrumentation-bfclv4/**/*.py" = ["PLC0415"]
