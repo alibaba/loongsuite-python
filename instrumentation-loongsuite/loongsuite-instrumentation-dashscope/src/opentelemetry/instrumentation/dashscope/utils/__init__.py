@@ -22,6 +22,8 @@ from __future__ import annotations
 # Common utilities
 from .common import (
     _SKIP_INSTRUMENTATION_KEY,
+    DASHSCOPE_SERVER_ADDRESS,
+    DASHSCOPE_SERVER_PORT,
     _extract_task_id,
     _extract_usage,
     _get_parameter,
@@ -66,6 +68,8 @@ __all__ = [
     "_extract_usage",
     "_extract_task_id",
     "_SKIP_INSTRUMENTATION_KEY",
+    "DASHSCOPE_SERVER_ADDRESS",
+    "DASHSCOPE_SERVER_PORT",
     # Generation
     "_extract_input_messages",
     "_extract_tool_definitions",

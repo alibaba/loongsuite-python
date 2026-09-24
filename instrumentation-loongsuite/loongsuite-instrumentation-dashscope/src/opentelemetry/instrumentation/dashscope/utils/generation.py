@@ -31,9 +31,41 @@ from opentelemetry.util.genai.types import (
     ToolDefinition,
 )
 
-from .common import _extract_usage, _get_parameter
+from .common import (
+    DASHSCOPE_SERVER_ADDRESS,
+    DASHSCOPE_SERVER_PORT,
+    _extract_usage,
+    _get_parameter,
+)
 
 logger = logging.getLogger(__name__)
+
+_MISSING = object()
+
+
+def _safe_get(obj: Any, key: str, default: Any = None) -> Any:
+    """Read a field from dict-like DashScope objects without leaking KeyError."""
+    if obj is None:
+        return default
+
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+
+    try:
+        get = getattr(obj, "get", None)
+    except (AttributeError, KeyError):
+        get = None
+
+    if callable(get):
+        try:
+            return get(key, default)
+        except (AttributeError, KeyError, TypeError):
+            pass
+
+    try:
+        return getattr(obj, key)
+    except (AttributeError, KeyError):
+        return default
 
 
 def _extract_input_messages(kwargs: dict) -> List[InputMessage]:
@@ -127,12 +159,12 @@ def _extract_input_messages(kwargs: dict) -> List[InputMessage]:
                             parts=[Text(content=str(content), type="text")],
                         )
                     )
-            elif hasattr(msg, "role"):
+            elif _safe_get(msg, "role", _MISSING) is not _MISSING:
                 # Handle message objects
-                role = getattr(msg, "role", "user")
-                content = getattr(msg, "content", "")
-                tool_call_id = getattr(msg, "tool_call_id", None)
-                tool_calls = getattr(msg, "tool_calls", None)
+                role = _safe_get(msg, "role", "user")
+                content = _safe_get(msg, "content", "")
+                tool_call_id = _safe_get(msg, "tool_call_id")
+                tool_calls = _safe_get(msg, "tool_calls")
 
                 parts = []
 
@@ -166,24 +198,23 @@ def _extract_input_messages(kwargs: dict) -> List[InputMessage]:
                 # Add tool calls if present
                 if tool_calls:
                     for tool_call in tool_calls:
-                        if hasattr(tool_call, "function"):
-                            function = getattr(tool_call, "function", None)
-                            if function:
-                                tool_name = getattr(function, "name", None)
-                                tool_args = getattr(
-                                    function, "arguments", None
-                                )
-                                tc_id = getattr(tool_call, "id", None)
+                        function = _safe_get(tool_call, "function", _MISSING)
+                        if function is _MISSING:
+                            continue
+                        if function:
+                            tool_name = _safe_get(function, "name")
+                            tool_args = _safe_get(function, "arguments")
+                            tc_id = _safe_get(tool_call, "id")
 
-                                if tool_name:
-                                    parts.append(
-                                        ToolCall(
-                                            name=tool_name,
-                                            arguments=tool_args,
-                                            id=tc_id,
-                                            type="tool_call",
-                                        )
+                            if tool_name:
+                                parts.append(
+                                    ToolCall(
+                                        name=tool_name,
+                                        arguments=tool_args,
+                                        id=tc_id,
+                                        type="tool_call",
                                     )
+                                )
 
                 if parts:
                     input_messages.append(
@@ -306,14 +337,12 @@ def _extract_output_messages(response: Any) -> List[OutputMessage]:
         return output_messages
 
     try:
-        # Use getattr with default None to safely access attributes
-        # DashScope response uses __getattr__ which raises KeyError for missing attributes
-        output = getattr(response, "output", None)
+        output = _safe_get(response, "output")
         if not output:
             return output_messages
 
         # Check for choices format (qwen-vl and some models)
-        choices = getattr(output, "choices", None)
+        choices = _safe_get(output, "choices")
         if choices and isinstance(choices, list) and len(choices) > 0:
             # Process each choice
             for choice in choices:
@@ -321,16 +350,16 @@ def _extract_output_messages(response: Any) -> List[OutputMessage]:
                     continue
 
                 # Extract message from choice
-                message = getattr(choice, "message", None)
+                message = _safe_get(choice, "message")
                 if not message:
                     continue
 
                 # Extract content and tool_calls
-                content = getattr(message, "content", None)
-                tool_calls = getattr(message, "tool_calls", None)
-                finish_reason = getattr(
-                    choice, "finish_reason", None
-                ) or getattr(output, "finish_reason", "stop")
+                content = _safe_get(message, "content")
+                tool_calls = _safe_get(message, "tool_calls")
+                finish_reason = _safe_get(
+                    choice, "finish_reason"
+                ) or _safe_get(output, "finish_reason", "stop")
 
                 parts = []
 
@@ -375,25 +404,26 @@ def _extract_output_messages(response: Any) -> List[OutputMessage]:
                                         type="tool_call",
                                     )
                                 )
-                        elif hasattr(tool_call, "function"):
-                            # Handle tool call objects
-                            function = getattr(tool_call, "function", None)
-                            if function:
-                                tool_name = getattr(function, "name", None)
-                                tool_args = getattr(
-                                    function, "arguments", None
-                                )
-                                tool_call_id = getattr(tool_call, "id", None)
+                            continue
 
-                                if tool_name:
-                                    parts.append(
-                                        ToolCall(
-                                            name=tool_name,
-                                            arguments=tool_args,
-                                            id=tool_call_id,
-                                            type="tool_call",
-                                        )
+                        # Handle tool call objects
+                        function = _safe_get(tool_call, "function", _MISSING)
+                        if function is _MISSING:
+                            continue
+                        if function:
+                            tool_name = _safe_get(function, "name")
+                            tool_args = _safe_get(function, "arguments")
+                            tool_call_id = _safe_get(tool_call, "id")
+
+                            if tool_name:
+                                parts.append(
+                                    ToolCall(
+                                        name=tool_name,
+                                        arguments=tool_args,
+                                        id=tool_call_id,
+                                        type="tool_call",
                                     )
+                                )
 
                 # Create output message if we have parts OR if finish_reason indicates tool_calls
                 # (even if content is empty, tool calls should be captured)
@@ -407,10 +437,8 @@ def _extract_output_messages(response: Any) -> List[OutputMessage]:
                     )
         else:
             # Standard format: output.text
-            text = getattr(output, "text", None) or getattr(
-                output, "content", None
-            )
-            finish_reason = getattr(output, "finish_reason", "stop")
+            text = _safe_get(output, "text") or _safe_get(output, "content")
+            finish_reason = _safe_get(output, "finish_reason", "stop")
 
             if text:
                 output_messages.append(
@@ -446,6 +474,10 @@ def _create_invocation_from_generation(
 
     invocation = LLMInvocation(request_model=request_model)
     invocation.provider = "dashscope"
+    # DashScope SDK always targets dashscope.aliyuncs.com; if custom endpoint
+    # support is added in the future, extract from instance/env instead.
+    invocation.server_address = DASHSCOPE_SERVER_ADDRESS
+    invocation.server_port = DASHSCOPE_SERVER_PORT
     invocation.input_messages = _extract_input_messages(kwargs)
 
     # Extract tool definitions and convert to FunctionToolDefinition objects
@@ -545,28 +577,24 @@ def _update_invocation_from_response(
         invocation.input_tokens = input_tokens
         invocation.output_tokens = output_tokens
 
+        # Extract cache token usage
+        from ..utils.common import _extract_cache_tokens  # noqa: PLC0415
+
+        cache_creation, cache_read = _extract_cache_tokens(response)
+        if cache_creation is not None:
+            invocation.usage_cache_creation_input_tokens = cache_creation
+        if cache_read is not None:
+            invocation.usage_cache_read_input_tokens = cache_read
+
         # Extract response model name (if available)
-        # Use try-except to safely access attributes
-        # DashScope response uses __getattr__ which raises KeyError for missing attributes
-        try:
-            response_model = getattr(response, "model", None)
-            if response_model:
-                invocation.response_model_name = response_model
-        except (KeyError, AttributeError) as e:
-            logger.debug(
-                "Failed to extract response model from Generation response: %s",
-                e,
-            )
+        response_model = _safe_get(response, "model")
+        if response_model:
+            invocation.response_model_name = response_model
 
         # Extract request ID (if available)
-        try:
-            request_id = getattr(response, "request_id", None)
-            if request_id:
-                invocation.response_id = request_id
-        except (KeyError, AttributeError) as e:
-            logger.debug(
-                "Failed to extract request_id from Generation response: %s", e
-            )
+        request_id = _safe_get(response, "request_id")
+        if request_id:
+            invocation.response_id = request_id
     except (KeyError, AttributeError) as e:
         # If any attribute access fails, silently continue with available data
         logger.debug(
@@ -586,8 +614,8 @@ def _create_accumulated_response(original_response, accumulated_text):
         A response object with accumulated text, or original_response if modification fails
     """
     try:
-        output = getattr(original_response, "output", None)
-        if output and hasattr(output, "text"):
+        output = _safe_get(original_response, "output")
+        if output and _safe_get(output, "text") is not None:
             # Try to set the accumulated text directly
             try:
                 output.text = accumulated_text
@@ -603,7 +631,7 @@ def _create_accumulated_response(original_response, accumulated_text):
         class AccumulatedOutput:
             def __init__(self, original_output, accumulated_text):
                 self.text = accumulated_text
-                self.finish_reason = getattr(
+                self.finish_reason = _safe_get(
                     original_output, "finish_reason", "stop"
                 )
                 self.content = accumulated_text
@@ -613,16 +641,9 @@ def _create_accumulated_response(original_response, accumulated_text):
                 self.output = accumulated_output
                 # Copy other attributes from original response
                 for attr in ["usage", "request_id", "model"]:
-                    try:
-                        value = getattr(original_response, attr, None)
-                        if value is not None:
-                            setattr(self, attr, value)
-                    except (KeyError, AttributeError) as e:
-                        logger.debug(
-                            "Failed to set attribute %s on accumulated response: %s",
-                            attr,
-                            e,
-                        )
+                    value = _safe_get(original_response, attr)
+                    if value is not None:
+                        setattr(self, attr, value)
 
         accumulated_output = AccumulatedOutput(output, accumulated_text)
         return AccumulatedResponse(original_response, accumulated_output)

@@ -1,748 +1,162 @@
 OpenTelemetry Util for GenAI - LoongSuite 扩展
 =================================================
 
-本文档介绍 LoongSuite 对 OpenTelemetry GenAI Util 包的扩展功能。
+本文档描述 LoongSuite 对 OpenTelemetry GenAI Util 的扩展：适用范围、接入步骤与配置项。\ **对外发行**\ 时 PyPI 包名为 \ **loongsuite-otel-util-genai**\ ；Python 导入命名空间仍为 \ ``opentelemetry.util.genai``\ （与上游 GenAI Util 一致，见下节）。本仓库源码目录为 \ ``util/opentelemetry-util-genai``\ 。
 
-概述
-----
+.. note::
 
-LoongSuite 扩展为 OpenTelemetry GenAI Util 包提供了额外的 Generative AI 操作支持，包括：
+   旧发行名 ``loongsuite-util-genai`` 仍可供历史安装使用，但新的 LoongSuite GenAI
+   工具库更新会发布到 ``loongsuite-otel-util-genai``。迁移时只需要更新 pip
+   依赖名；Python import 仍保持 ``opentelemetry.util.genai``。
 
-- **llm**: 增强了多模态数据处理，支持异步上传图片、音频、视频等多模态内容到配置的存储后端
-- **invoke_agent**: Agent 调用操作，支持消息、工具定义和系统指令
-- **create_agent**: Agent 创建操作
-- **embedding**: 向量嵌入生成操作
-- **execute_tool**: 工具执行操作
-- **retrieval**: 文档检索操作（向量数据库查询）
-- **rerank**: 文档重排序操作
-- **memory**: 记忆操作，支持记忆的增删改查等操作
-- **entry**: AI 应用系统入口标识，支持 session_id/user_id 的 Baggage 传播
-- **react_step**: ReAct 轮次标识，记录 Agent 推理-行动迭代
+------------------------------------------------------------------------
+1. 概述
+------------------------------------------------------------------------
 
-这些扩展操作遵循 OpenTelemetry GenAI 语义约定，并与基础的 LLM 操作保持一致的使用体验。
+本仓库与 opentelemetry-util-genai 的关系
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-环境变量配置
-------------
+本模块在设计与演进上作为 OpenTelemetry 生态中 GenAI Util（包名 ``opentelemetry-util-genai``）的扩展：在兼容上游 API 与约定方向的前提下，由 LoongSuite **先行落地** 更丰富、更完整的 GenAI 语义与属性模型，并在合入社区前于本仓库迭代。覆盖范围包括 Agent、检索、记忆、入口与 ReAct 等场景。
 
-扩展功能使用与基础包相同的环境变量配置：
+**发行名称**：交付时，本模块以 **loongsuite-otel-util-genai** 发布至制品库（如 PyPI）；安装后提供的仍是 ``opentelemetry.util.genai`` 包及 ``ExtendedTelemetryHandler`` 等扩展接口，与从本 monorepo 构建安装的产物一致。
 
-必需配置
-~~~~~~~~
+定位与能力
+~~~~~~~~~~
 
-设置环境变量 ``OTEL_SEMCONV_STABILITY_OPT_IN`` 为 ``gen_ai_latest_experimental`` 以启用实验性功能。
+面向大语言模型、Agent、工具调用与向量检索等场景，将调用语义映射为 OpenTelemetry 遥测数据：统一的 Span 命名与属性、可选的消息内容捕获、可选的 GenAI 事件，以及与 LoongSuite / OpenTelemetry 导出链路的对接。
 
-内容捕获模式
+本实现在上游 GenAI Util 能力之上提供扩展，主要包括：
+
+- **llm**：聊天/补全类调用；支持多模态消息的**外置存储与 URI 替换**（见第 4 节），减轻 Trace 体积。
+- **invoke_agent / create_agent**：Agent 调用与创建；``invoke_agent`` 可将
+  Agent 名称写入 Baggage key ``gen_ai.agent.name``，使其下游 LLM、
+  工具、检索、ReAct step 等 GenAI 子 Span 自动带上
+  ``gen_ai.agent.name`` 属性。
+- **embedding**：向量嵌入。
+- **execute_tool**：工具/函数执行。
+  - 当工具执行对应某个 skill 的加载动作时，可额外写入 ``gen_ai.skill.*`` 语义属性。
+- **retrieval / rerank**：检索与重排序。
+- **memory**：记忆读写等操作。
+- **entry**：应用入口；可将 ``session_id`` / ``user_id`` 写入 Baggage，配合 ``BaggageSpanProcessor`` 做整条链路的染色。
+- **react_step**：ReAct 单轮迭代标识。
+
+相关操作对齐 **OpenTelemetry GenAI 语义约定** 并与上游 LLM 采集 API 衔接：``ExtendedTelemetryHandler`` 在基础 ``TelemetryHandler`` 之上扩展（详见上节与语义约定文档）。
+
+------------------------------------------------------------------------
+2. 快速使用
+------------------------------------------------------------------------
+
+请先安装发行包（见下节）。下文示例均使用 \ ``get_extended_telemetry_handler()``\ 获取单例 Handler；在首次获取前，全局 Tracer/Meter/Logger Provider 建议由 Instrumentation 自动注入，或由你在代码里显式完成 Provider 初始化（见 2.2 节）。
+
+安装注意事项
 ~~~~~~~~~~~~
 
-设置环境变量 ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`` 来控制消息内容捕获：
+- **与上游包并存**：**loongsuite-otel-util-genai** 与社区发行 **opentelemetry-util-genai** 混装或重复指定时容易引发依赖解析冲突。**建议优先采用 LoongSuite 发行链路**，通过 ``loongsuite-instrument`` 及根目录 ``README.md`` 中的安装说明完成探针与本模块的组合安装与启动。
+- **monorepo 本地安装探针时**：若 instrumentor 是从 **本仓库本地路径** 安装的（例如 ``pip install ./instrumentation-loongsuite/...``），则 **必须** 先从 **同一 monorepo 源码树** 安装本模块（例如 ``pip install -e ./util/opentelemetry-util-genai``）。否则安装 instrumentor 时，解析结果可能回落为**上游** GenAI Util，与本地探针版本不一致，导致扩展能力或行为不符合预期。
 
-- ``NO_CONTENT``: 不捕获消息内容（默认）
-- ``SPAN_ONLY``: 仅在 span 中捕获消息内容（JSON 字符串格式）
-- ``EVENT_ONLY``: 仅在 event 中捕获消息内容（结构化格式）
-- ``SPAN_AND_EVENT``: 同时在 span 和 event 中捕获消息内容
+2.1. 使用 LoongSuite / OpenTelemetry Instrumentation 接入
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-事件发出控制
-~~~~~~~~~~~~
+前提：已通过 ``loongsuite-instrument``、``opentelemetry-instrument`` 或等价方式在进程启动时配置全局 Provider 与导出器，应用代码不自行构造 ``TracerProvider`` / ``MeterProvider``。
 
-设置环境变量 ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` 来控制是否发出事件：
-
-- ``true``: 启用事件发出（当内容捕获模式为 ``EVENT_ONLY`` 或 ``SPAN_AND_EVENT`` 时）
-- ``false``: 禁用事件发出（默认）
-
-多模态上传控制
-~~~~~~~~~~~~~~
-
-多模态内容（图片/音频/视频）通常体积较大，如果直接保留在 span/event 中，会带来链路负担和存储压力。
-因此探针提供“多模态剥离上传”能力：将原始多模态数据上传到外部存储，并在消息中保留可引用的 URI。
-
-关键组件
-
-- ``PreUploader``（预处理器）：负责“识别 + 改写”，不负责真正写存储
-  - 识别 ``Base64Blob`` / ``Blob`` / ``Uri``，生成 ``UploadItem`` 列表
-  - 按 ``{base_path}/{date}/{md5}.{ext}`` 生成目标 URI
-  - 原地修改消息，把可处理的多模态 part 替换为新的 ``Uri``
-- ``Uploader``（上传器）：负责“实际上传”
-  - 接收 ``UploadItem`` 后异步入队上传（不阻塞业务线程）
-  - 支持幂等跳过（相同内容不重复上传），失败只记日志，不向业务抛异常
-- 固定调用顺序：先 ``pre_uploader.pre_upload(...)``，再对返回的每个 item 调用 ``uploader.upload(...)``
-- 两者成对工作：如果任一 hook 加载失败或返回 ``None``，会整体降级为禁用多模态上传（``uploader/pre-uploader`` 同时为 ``None``）
-
-必需参数
-
-- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE``: 控制处理方向（默认 ``none``）
-  - ``none``: 不处理任何多模态内容（完全关闭上传链路）
-  - ``input``: 仅处理请求入参中的多模态内容（用户输入）
-  - ``output``: 仅处理模型输出中的多模态内容（模型返回）
-  - ``both``: 同时处理输入与输出
-  - 选择建议：只关心上行用 ``input``；只关心下行用 ``output``；全链路统一存储用 ``both``
-- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH``: 指定上传目标存储根路径
-  - 当 ``UPLOAD_MODE=none`` 时不生效
-  - 当 ``UPLOAD_MODE`` 不是 ``none`` 时必需配置，否则无法完成上传
-
-支持的存储协议包括：
-
-- ``file:///path/to/dir``: 本地文件系统
-- ``memory://``: 内存文件系统
-- ``oss://bucket-name/prefix``: 阿里云 OSS
-- ``sls://project/logstore``: 阿里云 SLS
-- 其他 fsspec 支持的协议
-
-可选参数：
-
-- Hook 选择（默认一般不需要改）：
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER``: uploader hook 名称（默认 ``fs``）
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER``: pre-uploader hook 名称（默认 ``fs``）
-- 处理行为开关：
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED``: 是否将外部 URI 资源下载后再上传到配置存储（``true`` / ``false``，默认 ``false``）
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_SSL_VERIFY``: 下载时是否校验 SSL 证书（``true`` / ``false``，默认 ``true``）
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_AUDIO_CONVERSION_ENABLED``: 是否启用音频转码（当前支持 PCM16/L16/PCM 转 WAV，``true`` / ``false``，默认 ``false``）
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED``: 是否允许读取并上传本地文件（支持 ``file://`` URI、绝对路径和相对路径，``true`` / ``false``，默认 ``false``）
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS``: 允许访问的本地文件根目录列表（逗号分隔，启用本地文件处理时必需配置）
-
-``pyproject.toml`` entry point 配置（插件扩展方式）::
-
-    [project.entry-points.opentelemetry_genai_multimodal_uploader]
-    fs = "opentelemetry.util.genai._multimodal_upload.fs_uploader:fs_uploader_hook"
-
-    [project.entry-points.opentelemetry_genai_multimodal_pre_uploader]
-    fs = "opentelemetry.util.genai._multimodal_upload.pre_uploader:fs_pre_uploader_hook"
-
-运行时示例配置::
-
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH=file:///var/log/genai/multimodal
-
-如果启用了多模态上传，``ExtendedTelemetryHandler`` 会在首次初始化时注册 ``atexit`` 回调，
-并在进程退出时按顺序关闭 ``ExtendedTelemetryHandler`` / ``PreUploader`` / ``Uploader``。
-
-如需在应用生命周期中主动关闭（例如服务框架 shutdown hook）:
-
-    from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
-
-    ExtendedTelemetryHandler.shutdown()
-
-依赖要求:
-  多模态上传功能需要安装 ``fsspec`` 和 ``httpx`` 包（必需），以及 ``numpy`` 和 ``soundfile`` 包（可选，用于音频格式pcm - wav 转换，且需 ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_AUDIO_CONVERSION_ENABLED=true`` 才会启用）。
-  可以通过 ``pip install opentelemetry-util-genai[multimodal_upload]`` 安装必需依赖； ``pip install opentelemetry-util-genai[audio_conversion]`` 安装音频格式转换依赖。
-
-示例配置
-~~~~~~~~
+**安装**
 
 ::
 
-    export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
-    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
-    export OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH=file:///var/log/genai/multimodal
+    pip install loongsuite-otel-util-genai
 
-支持的操作
-----------
+从本 monorepo 本地安装时（与发行包等价源码树）::
 
-1. LLM 调用 (llm)
-~~~~~~~~~~~~~~~~~~
+    pip install -e ./util/opentelemetry-util-genai
 
-用于跟踪大语言模型（LLM）的聊天补全调用操作。LoongSuite 扩展增强了多模态数据处理能力，支持图片、音频、视频等多模态内容的自动上传和管理。
+Framework 探针若已声明对本包的依赖，会随探针一并安装；单独手写 GenAI Span 时仍需安装 \ **loongsuite-otel-util-genai**\ （或上述本地路径）。
 
-**支持的多模态 Part 类型:**
+**LLM 示例代码**
 
-消息中的 ``parts`` 字段支持以下类型：
-
-- ``Text``: 文本内容
-- ``Base64Blob``: Base64 编码的二进制数据（图片、音频、视频）
-- ``Blob``: 原始二进制数据
-- ``Uri``: 引用远程资源的 URI（http/https URL 或已上传的文件路径）
-
-多模态数据处理流程：
-
-1. ``Base64Blob`` 和 ``Blob`` 会被自动解码并上传到配置的存储后端
-2. ``Uri`` 中的 http/https URL 会被下载并上传（如启用下载功能）
-3. 上传后，原始的 ``Base64Blob``/``Blob``/``Uri`` 会被替换为指向新存储位置的 ``Uri``
-4. 消息内容在 span/event 中序列化时会包含替换后的 ``Uri``
-
-**增强的属性:**
-
-消息内容（受内容捕获模式控制）:
-  - ``gen_ai.input.messages``: 输入消息（包含多模态 parts，经过上传处理后的内容）
-  - ``gen_ai.output.messages``: 输出消息（包含多模态 parts，经过上传处理后的内容）
-
-多模态元数据（LoongSuite 扩展属性）:
-  - ``gen_ai.input.multimodal_metadata``: 输入消息的多模态元数据，记录处理的多模态内容信息（JSON 格式）
-  - ``gen_ai.output.multimodal_metadata``: 输出消息的多模态元数据，记录处理的多模态内容信息（JSON 格式）
-
-**多模态元数据示例:**
-
-当处理包含多模态内容的消息时，会自动生成元数据记录处理信息::
-
-    # gen_ai.input.multimodal_metadata 属性值示例
-    [
-        {
-            "modality": "image",
-            "mime_type": "image/png",
-            "uri": "oss://bucket/20260107/abc123.png",  # 上传后的路径
-            "type": "uri"  # 类型
-        }
-    ]
-
-
-2. Agent 调用 (invoke_agent)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-用于跟踪 AI Agent 的调用操作，支持完整的消息流、工具定义和系统指令。
-
-**支持的属性:**
-
-基础属性:
-  - ``gen_ai.operation.name``: 操作名称，固定为 "invoke_agent"
-  - ``gen_ai.provider.name``: 提供商名称（如 "openai", "anthropic"）
-  - ``gen_ai.request.model``: 请求的模型名称
-  - ``gen_ai.response.model``: 响应的模型名称
-  - ``gen_ai.response.id``: 响应 ID
-
-Agent 特定属性:
-  - ``gen_ai.agent.id``: Agent 的唯一标识符
-  - ``gen_ai.agent.name``: Agent 名称
-  - ``gen_ai.agent.description``: Agent 描述
-  - ``gen_ai.conversation.id``: 会话 ID
-  - ``gen_ai.data_source.id``: 数据源 ID
-
-消息和工具（受内容捕获模式控制）:
-  - ``gen_ai.input.messages``: 输入消息
-  - ``gen_ai.output.messages``: 输出消息
-  - ``gen_ai.system_instructions``: 系统指令
-  - ``gen_ai.tool.definitions``: 工具定义
-
-请求参数:
-  - ``gen_ai.request.temperature``: 温度参数
-  - ``gen_ai.request.top_p``: Top-p 参数
-  - ``gen_ai.request.max_tokens``: 最大 token 数
-  - ``gen_ai.request.frequency_penalty``: 频率惩罚
-  - ``gen_ai.request.presence_penalty``: 存在惩罚
-  - ``gen_ai.request.stop_sequences``: 停止序列
-  - ``gen_ai.request.seed``: 随机种子
-
-Token 使用:
-  - ``gen_ai.usage.input_tokens``: 输入 token 数量
-  - ``gen_ai.usage.output_tokens``: 输出 token 数量
-
-**事件支持:**
-
-当 ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` 设置为 ``true`` 且提供 LoggerProvider 时，会发出 ``gen_ai.client.agent.invoke.operation.details`` 事件，包含结构化的消息内容（受内容捕获模式控制）。
-
-**使用示例:**
+依赖 Instrumentation 把全局 Tracer/Meter/Logger Provider 配好；业务侧只需通过 OpenTelemetry API 确认 Provider 已就绪（可选），再拿 **扩展 Handler** 包一层 LLM 调用即可。
 
 ::
 
+    from opentelemetry import trace
     from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler
-    from opentelemetry.util.genai.extended_types import InvokeAgentInvocation
-    from opentelemetry.util.genai.types import InputMessage, OutputMessage, Text
+    from opentelemetry.util.genai.types import InputMessage, LLMInvocation, OutputMessage, Text
+
+    # 可选：确认当前进程已由 Instrumentation 设置 TracerProvider（未设置时多为 NoOp）
+    _ = trace.get_tracer_provider()
 
     handler = get_extended_telemetry_handler()
 
-    # 使用上下文管理器（推荐）
-    with handler.invoke_agent() as invocation:
-        invocation.provider = "openai"
-        invocation.request_model = "gpt-4"
-        invocation.agent_name = "CustomerSupport"
-        invocation.agent_id = "agent-123"
-        
-        # 设置输入消息
-        invocation.input_messages = [
-            InputMessage(role="user", parts=[Text(content="帮我查询订单状态")])
-        ]
-        
-        # 模拟 agent 处理...
-        # 设置输出消息
-        invocation.output_messages = [
+    invocation = LLMInvocation(
+        provider="openai",
+        request_model="gpt-4o-mini",
+        input_messages=[
+            InputMessage(role="user", parts=[Text(content="用一句话解释 OpenTelemetry。")]),
+        ],
+    )
+    with handler.llm(invocation) as inv:
+        # 此处调用真实模型 API…
+        inv.output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="好的，我来帮您查询订单状态。")],
-                finish_reason="stop"
+                parts=[Text(content="OpenTelemetry 是用于可观测性的开放标准与实现。")],
+                finish_reason="stop",
             )
         ]
-        
-        invocation.input_tokens = 15
-        invocation.output_tokens = 20
+        inv.input_tokens = 10
+        inv.output_tokens = 20
 
+未向 ``get_extended_telemetry_handler()`` 传入 ``tracer_provider`` / ``logger_provider`` 时，Handler 内部的 ``get_tracer`` / ``get_logger`` 会使用**当前全局** Provider（由 Instrumentation 注入）。
 
-3. Agent 创建 (create_agent)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**环境变量**
 
-用于跟踪 AI Agent 的创建操作。
+若需在 Trace/Event 中采集**模型输入、输出等正文**（或完整消息结构），**必须**按 **2.3 节** 设置相关变量；否则默认不采集消息正文。
 
-**支持的属性:**
+**进程启动（Instrumentation）**
 
-- ``gen_ai.operation.name``: 操作名称，固定为 "create_agent"
-- ``gen_ai.provider.name``: 提供商名称
-- ``gen_ai.agent.id``: Agent 的唯一标识符
-- ``gen_ai.agent.name``: Agent 名称
-- ``gen_ai.agent.description``: Agent 描述
-- ``gen_ai.request.model``: 请求的模型名称
-- ``server.address``: 服务器地址
-- ``server.port``: 服务器端口
+使用本仓库推荐的启动方式时，请参阅 **仓库根目录** 的 ``README.md``（例如通过 ``loongsuite-instrument`` 指定导出器与 ``service_name`` 后再执行 ``python your_app.py``）。
 
-**使用示例:**
+若尚未安装 LoongSuite Instrumentation，请按根目录 ``README.md`` 的 **Quick start / INSTALL** 安装 ``opentelemetry-distro``、对应框架的 instrumentor，以及本 util 包，再使用包装命令启动进程。
 
-::
+2.2. 使用 OpenTelemetry SDK 直接接入
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-    with handler.create_agent() as invocation:
-        invocation.provider = "openai"
-        invocation.agent_name = "SupportAgent"
-        invocation.agent_description = "客户支持 Agent"
-        invocation.request_model = "gpt-4"
+前提：不依赖进程级 auto-instrument，由应用入口显式注册 TracerProvider、MeterProvider、LoggerProvider 及导出器。
 
-
-4. 向量嵌入 (embedding)
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-用于跟踪向量嵌入生成操作。
-
-**支持的属性:**
-
-- ``gen_ai.operation.name``: 操作名称，固定为 "embedding"
-- ``gen_ai.provider.name``: 提供商名称
-- ``gen_ai.request.model``: 请求的模型名称
-- ``gen_ai.response.model``: 响应的模型名称
-- ``gen_ai.response.id``: 响应 ID
-- ``gen_ai.embeddings.dimension.count``: 嵌入向量维度
-- ``gen_ai.request.encoding_formats``: 编码格式
-- ``gen_ai.usage.input_tokens``: 输入 token 数量
-- ``server.address``: 服务器地址
-- ``server.port``: 服务器端口
-
-**使用示例:**
+**安装**
 
 ::
 
-    from opentelemetry.util.genai.extended_types import EmbeddingInvocation
+    pip install loongsuite-otel-util-genai opentelemetry-sdk
 
-    with handler.embedding() as invocation:
-        invocation.provider = "openai"
-        invocation.request_model = "text-embedding-3-small"
-        invocation.dimension_count = 1536
-        invocation.input_tokens = 50
+按需增加导出器，例如 ``opentelemetry-exporter-otlp``。
 
+**LLM 示例代码**
 
-5. 工具执行 (execute_tool)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-用于跟踪工具或函数的执行操作。
-
-**支持的属性:**
-
-- ``gen_ai.operation.name``: 操作名称，固定为 "execute_tool"
-- ``gen_ai.provider.name``: 提供商名称（可选）
-- ``gen_ai.tool.name``: 工具名称
-- ``gen_ai.tool.call.arguments``: 工具调用参数（受内容捕获模式控制）
-- ``gen_ai.tool.call.result``: 工具执行结果（受内容捕获模式控制）
-
-**使用示例:**
+在获取 Handler **之前**初始化全局 Provider；创建 Handler 时把 **TracerProvider** 与 **LoggerProvider** 传入（便于 Span 与 GenAI Event；Metrics 使用 ``metrics.set_meter_provider`` 设置全局后，Handler 内 ``get_meter(..., meter_provider=None)`` 会使用全局 MeterProvider）。
 
 ::
 
-    from opentelemetry.util.genai.extended_types import ExecuteToolInvocation
-
-    with handler.execute_tool() as invocation:
-        invocation.tool_name = "get_weather"
-        invocation.tool_call_arguments = {"city": "Beijing", "unit": "celsius"}
-        
-        # 执行工具...
-        result = {"temperature": 25, "condition": "sunny"}
-        
-        invocation.tool_call_result = result
-
-
-6. 文档检索 (retrieval)
-~~~~~~~~~~~~~~~~~~~~~~~
-
-用于跟踪从向量数据库或搜索系统检索文档的操作。
-
-**支持的属性:**
-
-- ``gen_ai.operation.name``: 操作名称，固定为 "retrieval"
-- ``gen_ai.span.kind``: 固定为 "RETRIEVER"
-- ``gen_ai.data_source.id``: 数据源唯一标识（有条件时必须）
-- ``gen_ai.provider.name``: 提供商名称（有条件时必须）
-- ``gen_ai.request.model``: 请求模型（有条件时必须）
-- ``gen_ai.request.top_k``: 请求 topK（推荐）
-- ``gen_ai.retrieval.query.text``: 检索内容短句（可选，受内容捕获模式控制）
-- ``gen_ai.retrieval.documents``: 召回的文档列表，格式 [{"id": str, "score": float}, ...]（可选，受内容捕获模式控制）
-
-**Span 命名:** ``retrieval {gen_ai.data_source.id}``，无 data_source_id 时为 ``retrieval``
-
-**文档格式:** 使用 ``List[RetrievalDocument]``，instrumentation 需将框架类型（如 LangChain Document）转换为 ``RetrievalDocument``。当 OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT 为 NO_CONTENT 时仅记录 id 和 score；SPAN_ONLY/SPAN_AND_EVENT 时记录完整。
-
-**使用示例:**
-
-::
-
-    from opentelemetry.util.genai.extended_types import RetrievalInvocation, RetrievalDocument
-
-    with handler.retrieval() as invocation:
-        invocation.provider = "chroma"
-        invocation.data_source_id = "H7STPQYOND"
-        invocation.query = "什么是 OpenTelemetry?"
-        invocation.top_k = 5.0
-        
-        # 执行检索...
-        invocation.documents = [
-            RetrievalDocument(id="doc1", score=0.95, content="...", metadata={}),
-            RetrievalDocument(id="doc2", score=0.88, content="...", metadata={}),
-        ]
-
-
-1. 文档重排序 (rerank)
-~~~~~~~~~~~~~~~~~~~~~~~
-
-用于跟踪文档重排序操作，支持基于模型和基于 LLM 的重排序器。
-
-**支持的属性:**
-
-基础属性:
-  - ``gen_ai.operation.name``: 操作名称，固定为 "rerank"
-  - ``gen_ai.provider.name``: 提供商名称
-  - ``gen_ai.request.model``: 重排序模型名称
-  - ``gen_ai.rerank.documents.count``: 输入文档数量
-
-重排序特定属性:
-  - ``gen_ai.rerank.input_documents``: 输入文档（受内容捕获模式控制）
-  - ``gen_ai.rerank.output_documents``: 重排序后的文档（受内容捕获模式控制）
-  - ``gen_ai.rerank.scoring_prompt``: LLM 重排序的评分提示词（受内容捕获模式控制）
-  - ``gen_ai.rerank.return_documents``: 是否返回完整文档内容
-  - ``gen_ai.rerank.max_chunks_per_doc``: 每个文档的最大分块数
-  - ``gen_ai.rerank.device``: 推理设备（如 "cuda", "cpu"）
-  - ``gen_ai.rerank.batch_size``: 批处理大小
-  - ``gen_ai.rerank.max_length``: 最大长度
-  - ``gen_ai.rerank.normalize``: 是否归一化分数
-
-**使用示例:**
-
-::
-
-    from opentelemetry.util.genai.extended_types import RerankInvocation
-
-    # 基于模型的重排序（如 Cohere, BGE）
-    with handler.rerank() as invocation:
-        invocation.provider = "cohere"
-        invocation.request_model = "rerank-v2"
-        invocation.rerank_input_documents = [
-            {"text": "文档1内容", "id": "doc1"},
-            {"text": "文档2内容", "id": "doc2"}
-        ]
-        invocation.rerank_documents_count = 2
-        
-        # 执行重排序...
-        invocation.rerank_output_documents = [
-            {"index": 1, "relevance_score": 0.95},
-            {"index": 0, "relevance_score": 0.78}
-        ]
-
-    # 基于 LLM 的重排序
-    with handler.rerank() as invocation:
-        invocation.provider = "openai"
-        invocation.request_model = "gpt-4"
-        invocation.rerank_scoring_prompt = "请评估以下文档与查询的相关性..."
-        invocation.rerank_input_documents = [...]
-        
-        # 执行 LLM 重排序...
-        invocation.rerank_output_documents = [...]
-
-
-8. 入口标识 (entry)
-~~~~~~~~~~~~~~~~~~~
-
-用于标识一次对 AI 应用系统的调用入口。Entry span 会自动将 ``session_id`` 和 ``user_id`` 写入
-Baggage，配合 ``BaggageSpanProcessor`` 可实现流量染色：所有在 Entry 块内创建的子 span 都会
-自动继承这两个值作为 span attribute。
-
-**支持的属性:**
-
-- ``gen_ai.operation.name``: 操作名称，固定为 "enter"
-- ``gen_ai.span.kind``: 固定为 "ENTRY"（LoongSuite 扩展）
-- ``gen_ai.session.id``: 会话 ID（条件必需）
-- ``gen_ai.user.id``: 应用的 C 端用户标识（条件必需）
-- ``gen_ai.input.messages``: 输入消息（受内容捕获模式控制）
-- ``gen_ai.output.messages``: 输出消息（受内容捕获模式控制）
-- ``gen_ai.response.time_to_first_token``: 首包响应耗时（纳秒）
-
-**Baggage 传播机制:**
-
-当 ``session_id`` 或 ``user_id`` 在创建 ``EntryInvocation`` 时设置，``start_entry`` 会将它们
-写入当前上下文的 Baggage（key 分别为 ``gen_ai.session.id`` 和 ``gen_ai.user.id``）。如果
-Baggage 中已有同名 key，则会被覆盖。
-
-配合 ``BaggageSpanProcessor``，所有子 span（如 LLM、Agent、Tool 等）在 ``on_start`` 时会
-自动将 Baggage 中的值拷贝为 span attribute，从而实现全链路的 session/user 标记。
-
-.. important::
-
-   为使 Baggage 传播对子 span 生效，``session_id`` / ``user_id`` 必须在调用
-   ``start_entry`` **之前**设置（即在 ``EntryInvocation`` 构造时传入）。
-
-**使用示例:**
-
-::
-
-    from opentelemetry.util.genai._extended_common import EntryInvocation
-    from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler
-
-    handler = get_extended_telemetry_handler()
-
-    # session_id 和 user_id 在构造时传入，确保 Baggage 传播生效
-    entry_inv = EntryInvocation(
-        session_id="ddde34343-f93a-4477-33333-sdfsdaf",
-        user_id="u-lK8JddD",
-    )
-    with handler.entry(entry_inv) as invocation:
-        invocation.response_time_to_first_token = 1000000  # 纳秒
-
-        # 在 Entry 块内的所有子操作都会通过 BaggageSpanProcessor 继承
-        # gen_ai.session.id 和 gen_ai.user.id
-        with handler.invoke_agent() as agent_inv:
-            agent_inv.provider = "openai"
-            agent_inv.agent_name = "MyAgent"
-            # ...
-
-**配合 BaggageSpanProcessor 实现流量染色:**
-
-::
-
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.processor.baggage import BaggageSpanProcessor, ALLOW_ALL_BAGGAGE_KEYS
-
-    provider = TracerProvider()
-    provider.add_span_processor(BaggageSpanProcessor(ALLOW_ALL_BAGGAGE_KEYS))
-
-
-9. ReAct 轮次标识 (react_step)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-用于标识 Agent 的一次 Reasoning-Acting 迭代过程。
-
-**支持的属性:**
-
-- ``gen_ai.operation.name``: 操作名称，固定为 "react"
-- ``gen_ai.span.kind``: 固定为 "STEP"（LoongSuite 扩展）
-- ``gen_ai.react.finish_reason``: 本轮 ReAct 结束的原因（推荐）
-- ``gen_ai.react.round``: 本轮 ReAct 的轮次号，从 1 开始（推荐）
-
-**使用示例:**
-
-::
-
-    from opentelemetry.util.genai._extended_common import ReactStepInvocation
-
-    # 在 Agent 调用中记录每一轮 ReAct 迭代
-    with handler.invoke_agent() as agent_inv:
-        agent_inv.provider = "openai"
-        agent_inv.agent_name = "ReActAgent"
-
-        for round_num in range(1, 4):
-            step_inv = ReactStepInvocation(round=round_num)
-            with handler.react_step(step_inv) as step:
-                # Reasoning: LLM 推理
-                with handler.llm(llm_invocation):
-                    pass
-
-                # Acting: 工具调用
-                with handler.execute_tool() as tool_inv:
-                    tool_inv.tool_name = "search"
-                    pass
-
-                step.finish_reason = "stop" if round_num == 3 else "continue"
-
-
-10. 记忆操作 (memory)
-~~~~~~~~~~~~~~~~~~~~~
-
-用于跟踪 AI Agent 的记忆操作，支持记忆的增删改查、搜索和历史查询等功能。
-
-**支持的操作类型:**
-
-- ``add``: 添加记忆记录
-- ``search``: 搜索记忆记录
-- ``update``: 更新记忆记录
-- ``batch_update``: 批量更新记忆记录
-- ``get``: 获取特定记忆记录
-- ``get_all``: 获取所有记忆记录
-- ``history``: 获取记忆历史
-- ``delete``: 删除记忆记录
-- ``batch_delete``: 批量删除记忆记录
-- ``delete_all``: 删除所有记忆记录
-
-**支持的属性:**
-
-基础属性:
-  - ``gen_ai.operation.name``: 操作名称，固定为 "memory_operation"
-  - ``gen_ai.memory.operation``: 记忆操作类型（必需）
-
-标识符（条件必需）:
-  - ``gen_ai.memory.user_id``: 用户标识符
-  - ``gen_ai.memory.agent_id``: Agent 标识符
-  - ``gen_ai.memory.run_id``: 运行标识符
-  - ``gen_ai.memory.app_id``: 应用标识符（用于托管平台）
-  - ``gen_ai.memory.id``: 记忆 ID（用于 get、update、delete 操作）
-
-操作参数（可选）:
-  - ``gen_ai.memory.limit``: 返回结果数量限制
-  - ``gen_ai.memory.page``: 分页页码
-  - ``gen_ai.memory.page_size``: 分页大小
-  - ``gen_ai.memory.top_k``: 返回 Top K 结果数量（用于托管 API）
-  - ``gen_ai.memory.memory_type``: 记忆类型（如 "procedural_memory"）
-  - ``gen_ai.memory.threshold``: 相似度阈值（用于搜索操作）
-  - ``gen_ai.memory.rerank``: 是否启用重排序
-
-记忆内容（受内容捕获模式控制）:
-  - ``gen_ai.memory.input.messages``: 原始记忆内容
-  - ``gen_ai.memory.output.messages``: 查询结果
-
-服务器信息:
-  - ``server.address``: 服务器地址
-  - ``server.port``: 服务器端口
-
-**事件支持:**
-
-当配置为 ``EVENT_ONLY`` 或 ``SPAN_AND_EVENT`` 模式且提供 LoggerProvider 时，会发出 ``gen_ai.memory.operation.details`` 事件，包含结构化的记忆内容。
-
-**使用示例:**
-
-::
-
-    from opentelemetry.util.genai._extended_memory import MemoryInvocation
-
-    # 添加记忆
-    invocation = MemoryInvocation(operation="add")
-    with handler.memory(invocation) as invocation:
-        invocation.user_id = "user_123"
-        invocation.agent_id = "agent_456"
-        invocation.run_id = "run_789"
-        invocation.input_messages = "用户喜欢苹果"
-        invocation.server_address = "api.mem0.ai"
-        invocation.server_port = 443
-
-    # 搜索记忆
-    invocation = MemoryInvocation(operation="search")
-    with handler.memory(invocation) as invocation:
-        invocation.user_id = "user_123"
-        invocation.agent_id = "agent_456"
-        invocation.limit = 10
-        invocation.threshold = 0.7
-        invocation.rerank = True
-        invocation.top_k = 5
-        
-        # 执行搜索...
-        invocation.output_messages = [
-            {"memory_id": "mem1", "content": "用户喜欢苹果", "score": 0.95},
-            {"memory_id": "mem2", "content": "用户喜欢橙子", "score": 0.88}
-        ]
-
-    # 更新记忆
-    invocation = MemoryInvocation(operation="update")
-    with handler.memory(invocation) as invocation:
-        invocation.memory_id = "mem_abc123"
-        invocation.user_id = "user_123"
-        invocation.input_messages = "更新后的记忆内容"
-
-    # 获取记忆
-    invocation = MemoryInvocation(operation="get")
-    with handler.memory(invocation) as invocation:
-        invocation.memory_id = "mem_xyz789"
-        invocation.user_id = "user_123"
-        invocation.agent_id = "agent_456"
-
-    # 获取所有记忆（带分页）
-    invocation = MemoryInvocation(operation="get_all")
-    with handler.memory(invocation) as invocation:
-        invocation.user_id = "user_123"
-        invocation.page = 1
-        invocation.page_size = 100
-
-    # 获取记忆历史
-    invocation = MemoryInvocation(operation="history")
-    with handler.memory(invocation) as invocation:
-        invocation.user_id = "user_123"
-        invocation.agent_id = "agent_456"
-        invocation.run_id = "run_789"
-
-    # 删除记忆
-    invocation = MemoryInvocation(operation="delete")
-    with handler.memory(invocation) as invocation:
-        invocation.memory_id = "mem_to_delete"
-        invocation.user_id = "user_123"
-
-
-错误处理
---------
-
-所有操作都支持错误处理，当操作失败时会自动设置错误状态：
-
-::
-
-    from opentelemetry.util.genai.types import Error
-
-    try:
-        with handler.invoke_agent() as invocation:
-            invocation.provider = "openai"
-            # ... 设置其他属性 ...
-            
-            # 执行可能失败的操作
-            result = call_agent_api()
-            
-            if not result.success:
-                raise RuntimeError("Agent 调用失败")
-    except Exception as e:
-        # 错误会自动记录在 span 中，包含 error.type 属性
-        pass
-
-
-手动生命周期管理
-----------------
-
-如果不使用上下文管理器，也可以手动管理操作的生命周期：
-
-::
-
-    invocation = InvokeAgentInvocation(
-        provider="openai",
-        request_model="gpt-4",
-        agent_name="SupportAgent"
-    )
-    
-    # 开始操作（打开 span）
-    handler.start_invoke_agent(invocation)
-    
-    try:
-        # 执行操作...
-        invocation.input_messages = [...]
-        invocation.output_messages = [...]
-        
-        # 成功结束操作（关闭 span）
-        handler.stop_invoke_agent(invocation)
-    except Exception as e:
-        # 失败结束操作（标记错误并关闭 span）
-        error = Error(type=type(e), message=str(e))
-        handler.fail_invoke_agent(invocation, error)
-
-
-集成示例
---------
-
-完整的 Agent 应用集成示例：
-
-::
-
-    from opentelemetry import trace, _logs
-    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry import metrics, trace, _logs
     from opentelemetry.sdk._logs import LoggerProvider
-    from opentelemetry.sdk.trace.export import ConsoleSpanExporter, BatchSpanProcessor
-    from opentelemetry.sdk._logs.export import ConsoleLogRecordExporter, BatchLogRecordProcessor
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor, ConsoleLogRecordExporter
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, PeriodicExportingMetricReader
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
     from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler
-    from opentelemetry.util.genai.types import InputMessage, OutputMessage, Text, FunctionToolDefinition
+    from opentelemetry.util.genai.types import InputMessage, LLMInvocation, OutputMessage, Text
 
-    # 配置 OpenTelemetry
+    # 以下使用 Console*Exporter 便于本地调试。生产环境可将 SpanExporter / MetricExporter /
+    # LogRecordExporter 替换为 OTLP、gRPC、Jaeger 等实现，以上报到 Collector 或兼容后端。
     trace.set_tracer_provider(TracerProvider())
     trace.get_tracer_provider().add_span_processor(
         BatchSpanProcessor(ConsoleSpanExporter())
+    )
+
+    metrics.set_meter_provider(
+        MeterProvider(
+            metric_readers=[PeriodicExportingMetricReader(ConsoleMetricExporter())]
+        )
     )
 
     logger_provider = LoggerProvider()
@@ -751,119 +165,384 @@ Baggage 中已有同名 key，则会被覆盖。
     )
     _logs.set_logger_provider(logger_provider)
 
-    # 获取扩展 handler
     handler = get_extended_telemetry_handler(
         tracer_provider=trace.get_tracer_provider(),
-        logger_provider=logger_provider
+        logger_provider=logger_provider,
     )
 
-    # 创建 Agent
-    with handler.create_agent() as create_inv:
-        create_inv.provider = "openai"
-        create_inv.agent_name = "ShoppingAssistant"
-        create_inv.agent_description = "购物助手 Agent"
-
-    # 定义工具
-    tools = [
-        FunctionToolDefinition(
-            name="search_products",
-            type="function",
-            description="搜索商品",
-            parameters={"query": "string", "category": "string"}
-        )
-    ]
-
-    # 调用 Agent
-    with handler.invoke_agent() as invoke_inv:
-        invoke_inv.provider = "openai"
-        invoke_inv.request_model = "gpt-4"
-        invoke_inv.agent_name = "ShoppingAssistant"
-        invoke_inv.tool_definitions = tools
-        invoke_inv.system_instruction = [
-            Text(content="你是一个专业的购物助手。")
+    with handler.llm() as inv:
+        inv.provider = "openai"
+        inv.request_model = "gpt-4o-mini"
+        inv.input_messages = [
+            InputMessage(role="user", parts=[Text(content="你好")]),
         ]
-        
-        invoke_inv.input_messages = [
-            InputMessage(role="user", parts=[Text(content="推荐一些笔记本电脑")])
-        ]
-        
-        # 执行 Agent 调用...
-        
-        invoke_inv.output_messages = [
+        inv.output_messages = [
             OutputMessage(
                 role="assistant",
-                parts=[Text(content="我来帮您搜索笔记本电脑...")],
-                finish_reason="tool_calls"
+                parts=[Text(content="你好！")],
+                finish_reason="stop",
             )
         ]
 
-    # 执行工具
-    with handler.execute_tool() as tool_inv:
-        tool_inv.tool_name = "search_products"
-        tool_inv.tool_call_arguments = {"query": "笔记本电脑", "category": "electronics"}
-        
-        # 执行工具...
-        
-        tool_inv.tool_call_result = {"products": [...]}
+**环境变量**
 
-    # 检索相关文档
-    from opentelemetry.util.genai.extended_types import RetrievalDocument
-    with handler.retrieval() as retrieval_inv:
-        retrieval_inv.provider = "chroma"
-        retrieval_inv.data_source_id = "my_vector_store"
-        retrieval_inv.query = "笔记本电脑推荐"
-        
-        # 执行检索...
-        
-        retrieval_inv.documents = [
-            RetrievalDocument(id="doc1", score=0.95, content="...", metadata={}),
-            RetrievalDocument(id="doc2", score=0.88, content="...", metadata={}),
-        ]
+若需在 Trace/Event 中采集**输入输出正文**，**必须**按 **2.3 节** 配置。
 
-    # 重排序结果
-    with handler.rerank() as rerank_inv:
-        rerank_inv.provider = "cohere"
-        rerank_inv.request_model = "rerank-v2"
-        rerank_inv.rerank_input_documents = [...]
-        
-        # 执行重排序...
-        
-        rerank_inv.rerank_output_documents = [...]
+**进程启动（直接运行）**
 
-    # 记忆操作
-    from opentelemetry.util.genai._extended_memory import MemoryInvocation
+::
 
-    # 添加记忆
-    memory_inv = MemoryInvocation(operation="add")
-    with handler.memory(memory_inv) as memory_inv:
-        memory_inv.user_id = "user_123"
-        memory_inv.agent_id = "ShoppingAssistant"
-        memory_inv.input_messages = "用户偏好：喜欢轻薄型笔记本电脑"
-        
-        # 执行添加记忆...
+    python your_app.py
 
-    # 搜索记忆
-    search_inv = MemoryInvocation(operation="search")
-    with handler.memory(search_inv) as search_inv:
-        search_inv.user_id = "user_123"
-        search_inv.agent_id = "ShoppingAssistant"
-        search_inv.limit = 5
-        search_inv.threshold = 0.7
-        
-        # 执行搜索...
-        search_inv.output_messages = [
-            {"memory_id": "mem1", "content": "用户偏好：喜欢轻薄型笔记本电脑", "score": 0.92}
-        ]
+无需 ``opentelemetry-instrument`` / ``loongsuite-instrument``，除非你还在同进程使用其他 auto-instrumentation。
 
+2.3. 环境变量
+~~~~~~~~~~~~~
 
-设计文档
---------
+本节是 GenAI 遥测是否**完整、可用**的关键：默认策略不将提示词、模型回复等消息正文写入遥测（``NO_CONTENT``），以降低敏感数据暴露与导出体积。若需要在可观测平台中排查或审计「输入与输出」正文，或以 Event 形式查看结构化消息，则必须以本节为准配置 ``OTEL_SEMCONV_STABILITY_OPT_IN``、``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``，并在选用 Event 路径时配合 ``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT`` 及 LoggerProvider（参见 2.2 节）。
 
-OpenTelemetry GenAI Utils 的设计文档: `Design Document <https://docs.google.com/document/d/1w9TbtKjuRX_wymS8DRSwPA03_VhrGlyx65hHAdNik1E/edit?tab=t.qneb4vabc1wc#heading=h.kh4j6stirken>`_
+``OTEL_SEMCONV_STABILITY_OPT_IN``
 
-参考资料
---------
+取值 ``gen_ai_latest_experimental`` 时启用 GenAI 实验性语义约定，便于与文档及导出器行为一致；未设置时部分属性可能不可用或与约定不一致。
 
-* `OpenTelemetry Project <https://opentelemetry.io/>`_
-* `OpenTelemetry GenAI Semantic Conventions <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
-* `LoongSuite OpenTelemetry Python Agent <https://github.com/loongsuite/loongsuite-python-agent>`_
+``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``\ （消息内容落点）
+
+- ``NO_CONTENT``：不采集消息正文（默认）。
+- ``SPAN_ONLY``：正文写入 Span 属性（如 JSON 字符串）。
+- ``EVENT_ONLY``：正文写入结构化 Event（需 LoggerProvider 及下方事件开关）。
+- ``SPAN_AND_EVENT``：Span 与 Event 同时携带内容。
+
+``OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT``\ （GenAI Event）
+
+- ``true``：在 ``EVENT_ONLY`` / ``SPAN_AND_EVENT`` 且已配置 LoggerProvider 时，按约定发出例如 ``gen_ai.client.*.operation.details`` 等事件。
+- ``false``：不发出（默认）。
+
+**配置示例**
+
+::
+
+    export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_AND_EVENT
+    export OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true
+
+------------------------------------------------------------------------
+3. Span 类型与用法
+------------------------------------------------------------------------
+
+约定：``handler = get_extended_telemetry_handler()``；在 ``with`` 块内仅修改 invocation 数据字段，勿直接修改 span。以下各节为典型用法（属性全集见语义约定与源码中的 attribute 写入逻辑）。
+
+**llm** — ``handler.llm(invocation)`` 或 ``with handler.llm() as inv:``
+
+::
+
+    from opentelemetry.util.genai.types import LLMInvocation, InputMessage, OutputMessage, Text
+
+    inv = LLMInvocation(provider="openai", request_model="gpt-4", input_messages=[InputMessage(role="user", parts=[Text(content="hi")])])
+    with handler.llm(inv) as i:
+        i.output_messages = [OutputMessage(role="assistant", parts=[Text(content="hello")], finish_reason="stop")]
+
+**invoke_agent** — ``handler.invoke_agent()``
+
+::
+
+    from opentelemetry.util.genai.types import InputMessage, OutputMessage, Text
+
+    with handler.invoke_agent() as inv:
+        inv.provider = "openai"
+        inv.request_model = "gpt-4"
+        inv.agent_name = "DemoAgent"
+        inv.input_messages = [InputMessage(role="user", parts=[Text(content="任务说明")])]
+        inv.output_messages = [OutputMessage(role="assistant", parts=[Text(content="回复")], finish_reason="stop")]
+
+**create_agent** — ``handler.create_agent()``
+
+::
+
+    with handler.create_agent() as inv:
+        inv.provider = "openai"
+        inv.agent_name = "SupportAgent"
+        inv.request_model = "gpt-4"
+
+**embedding** — ``handler.embedding()``
+
+::
+
+    from opentelemetry.util.genai.extended_types import EmbeddingInvocation
+
+    with handler.embedding() as inv:
+        inv.provider = "openai"
+        inv.request_model = "text-embedding-3-small"
+        inv.dimension_count = 1536
+        inv.input_tokens = 50
+
+**execute_tool** — ``handler.execute_tool()``
+
+::
+
+    from opentelemetry.util.genai.extended_types import ExecuteToolInvocation
+
+    with handler.execute_tool() as inv:
+        inv.tool_name = "get_weather"
+        inv.tool_call_arguments = {"city": "Beijing"}
+        inv.tool_call_result = {"temp_c": 25}
+
+当框架侧已经识别到该次工具调用对应某个 skill 的加载动作时，可在同一个
+``execute_tool`` Span 上附加 skill 元信息：
+
+::
+
+    with handler.execute_tool() as inv:
+        inv.tool_name = "read_file"
+        inv.skill_name = "news"
+        inv.skill_id = "workspace:default:news"
+        inv.skill_description = "Read and summarize recent news."
+        inv.skill_version = "1.0"
+
+对应的 Span 属性为：
+
+- ``gen_ai.skill.name``
+- ``gen_ai.skill.id``
+- ``gen_ai.skill.description``
+- ``gen_ai.skill.version``
+
+**retrieval** — \ ``handler.retrieval()``\ （Span kind 为 RETRIEVER）
+
+::
+
+    from opentelemetry.util.genai.extended_types import RetrievalDocument, RetrievalInvocation
+
+    with handler.retrieval() as inv:
+        inv.provider = "chroma"
+        inv.data_source_id = "my_store"
+        inv.query = "OpenTelemetry 是什么？"
+        inv.top_k = 5
+        inv.documents = [RetrievalDocument(id="d1", score=0.9, content="…", metadata={})]
+
+**rerank** — ``handler.rerank()``
+
+::
+
+    from opentelemetry.util.genai.extended_types import RerankInvocation
+
+    with handler.rerank() as inv:
+        inv.provider = "cohere"
+        inv.request_model = "rerank-v2"
+        inv.rerank_input_documents = [{"id": "1", "text": "doc a"}, {"id": "2", "text": "doc b"}]
+        inv.rerank_documents_count = 2
+        inv.rerank_output_documents = [{"index": 0, "relevance_score": 0.95}]
+
+**entry** — ``handler.entry(entry_inv)``；``session_id`` / ``user_id`` 须在构造 ``EntryInvocation`` 时传入，以便写入 Baggage。
+
+::
+
+    from opentelemetry.util.genai.extended_types import EntryInvocation
+
+    entry_inv = EntryInvocation(session_id="sess-1", user_id="user-1")
+    with handler.entry(entry_inv) as inv:
+        inv.response_time_to_first_token = 1_000_000  # 纳秒
+
+**react_step** — ``handler.react_step(step_inv)``
+
+::
+
+    from opentelemetry.util.genai.extended_types import ReactStepInvocation
+
+    step_inv = ReactStepInvocation(round=1)
+    with handler.react_step(step_inv) as step:
+        with handler.llm() as llm_inv:
+            llm_inv.provider = "openai"
+            llm_inv.request_model = "gpt-4"
+        step.finish_reason = "continue"
+
+**memory** — ``handler.memory(MemoryInvocation(operation="add"))`` 等
+
+::
+
+    from opentelemetry.util.genai.extended_memory import MemoryInvocation
+
+    mem = MemoryInvocation(operation="add")
+    with handler.memory(mem) as inv:
+        inv.user_id = "u1"
+        inv.input_messages = "用户偏好：夜间模式"
+
+------------------------------------------------------------------------
+4. 多模态外置存储
+------------------------------------------------------------------------
+
+多模态 payload（图像、音频、视频等）体积较大，内联于 Span/Event 将显著增加存储与传输开销。本功能在导出遥测前将可处理部分**写入外部存储**，并在消息内把 ``Base64Blob``、``Blob`` 与部分 ``Uri`` 等多模态片段**替换**为目标存储 URI；Span 可附带 ``gen_ai.input.multimodal_metadata``、``gen_ai.output.multimodal_metadata`` 等扩展属性。
+
+**组件与调用顺序**
+
+- PreUploader（预处理器）：识别多模态 part，生成上传任务与目标 URI 布局（占位路径形如 ``BASE/DATE/HASH.ext``，对应实现中的 base_path、日期与文件扩展名布局），原地改写消息中的 part。
+- **Uploader（上传器）**：异步消费上传任务，真正写入存储；失败只记日志，**不向业务抛异常**；相同内容可幂等跳过。
+- 必须先 ``pre_upload`` 再 ``upload``；若任一 hook 未加载或返回 ``None``，整条多模态上传链路会降级为关闭（两者都为空）。
+
+**环境变量**
+
+- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE``（默认 ``none``）
+
+  - ``none``：关闭。
+  - ``input`` / ``output`` / ``both``：分别处理请求侧、响应侧或两侧多模态。
+
+- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH``：存储根路径；当 mode 非 ``none`` 时**必须**配置。
+
+**存储协议示例**：``file:///path/to/dir``、``memory://``、``oss://bucket/prefix``、``sls://project/logstore``，以及 fsspec 支持的其它协议。
+
+**扩展环境变量**
+
+- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER`` / ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER``：hook 名称（默认 ``fs``）。
+- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_DOWNLOAD_ENABLED``：是否下载 http(s) URI 后再上传。
+- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_LOCAL_FILE_ENABLED`` + ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_ALLOWED_ROOT_PATHS``：是否允许读本地文件及允许路径前缀。
+- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_AUDIO_CONVERSION_ENABLED``：PCM 等转 WAV（需可选依赖 numpy/soundfile）。
+
+**命令行示例**
+
+::
+
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH=file:///var/log/genai/multimodal
+
+**依赖**
+
+::
+
+    pip install loongsuite-otel-util-genai[multimodal_upload]
+
+音频转码还需安装可选依赖：先执行 ``pip install loongsuite-otel-util-genai``，再按 ``pyproject.toml`` 中 ``audio_conversion`` extra 的说明添加转码相关包（并打开对应环境变量）。
+
+**资源释放**：启用多模态时，\ ``ExtendedTelemetryHandler``\ 在首次初始化时注册 \ ``atexit``\ ，进程退出时依次关闭 Handler / PreUploader / Uploader。常驻服务可显式调用 \ ``ExtendedTelemetryHandler.shutdown()``\ （见第 5 节）。
+
+**自定义上传实现**：通过 ``pyproject.toml`` 中的 entry point ``opentelemetry_genai_multimodal_uploader``、``opentelemetry_genai_multimodal_pre_uploader`` 注册实现；本仓库默认提供 ``fs`` hook（见包内 ``pyproject.toml``）。
+
+**运行时动态配置**
+
+进程内维护一份多模态配置 snapshot（``MultimodalRuntimeConfig`` / ``MultimodalConfigSnapshot``）。启动时仍由上述环境变量完成 bootstrap；之后可通过公开 API 热更新，无需重启进程：
+
+::
+
+    from opentelemetry.util.genai._multimodal_upload import (
+        get_multimodal_config_snapshot,
+        update_multimodal_runtime_config,
+    )
+
+    update_multimodal_runtime_config(
+        upload_mode="both",
+        storage_base_path="file:///var/log/genai/multimodal",
+        uploader_hook_name="fs",
+        pre_uploader_hook_name="fs",
+    )
+    snapshot = get_multimodal_config_snapshot()
+
+策略字段（如 ``upload_mode``、``download_enabled``、``local_file_enabled``、
+``allowed_root_paths``）变更会递增 ``strategy_version``，立即作用于后续请求；
+构造字段（如 ``storage_base_path``、uploader/pre-uploader hook 名）变更会递增
+``uploader_generation``，并在下次上传前通过 ``get_or_rebuild_uploader_pair()``
+热重建 uploader/pre-uploader。
+
+**可选上传记录**：``FsUploader`` 终态成功/失败时会调用全局 ``MultimodalUsageRecorder``（默认 no-op）。需要时可通过 ``set_multimodal_usage_recorder()`` 注册自定义实现。
+
+预授权 OSS 模式（presign）
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+多模态数据落在服务端预授权的 OSS Bucket 里时，应用本地不持有任何 OSS AK/SK：每个对象上传前先用 LicenseKey 申请一个短时有效的预签名 URL，再直接把数据 ``PUT`` 到该 URL。
+
+Bucket 由服务端持有和决定，本地不需要（也无法）指定，因此对象地址不含 bucket，与 ``arms`` 模式同构：
+
+::
+
+    sls://{project}/{logstore}[/{prefix}]/{objectName}
+
+这个地址在上传发起前即可本地确定，所以 Span 属性同步写出、上传保持异步，两者不会不一致。实际存储位置为 ``{bucket}/{project}/{logstore}[/{prefix}]/{objectName}``，仅多一个服务端自持的 bucket 前缀。
+
+- hook 名：``presign``（亦接受 ``oss-presign`` / ``oss_presign`` / ``presigned-oss`` / ``presigned_oss`` 别名）。
+- 申请链路：``POST {endpoint}/apm/meta/api/v1/multimodal/upload/presign``，请求头 ``x-arms-license-key``、``x-cms-workspace``，请求体 ``{"project", "logstore", "objectName"}``。响应中的上传 URL 支持 ``uploadUrl`` / ``signedUrl`` / ``url`` 等字段名，可被 ``data`` / ``result`` 包裹，也允许响应体直接是一个裸 URL 文本；``method`` 缺省为 ``PUT``。
+- 上传阶段不自注入 ``Content-Type``：预签名 URL 的签名可能已覆盖该 header，客户端再加会导致 OSS 返回 403 SignatureDoesNotMatch。
+
+- 环境变量：
+
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY``：鉴权用的 LicenseKey，缺省回落到 ``ARMS_LICENSE_KEY``。**必填**，取不到时整条多模态链路降级为关闭。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE``：对象归属的 CMS workspace，缺省回落到 ``ARMS_WORKSPACE``；留空时由服务端按 LicenseKey 推导。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT``：申请预签名 URL 的 endpoint，需填写包含 http:// 或 https:// 的 base URL（不带末尾斜杠），原样追加 presign API 路径。挂载 ARMS 探针时可留空以复用其 OneEndpoint 探活结果，独立使用时\ **需显式配置**\ 。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT``：申请与上传超时（秒，默认 ``30``）。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX``：可选；给本应用所有对象加统一路径前缀，如 ``genai/my-app``。首尾 ``/`` 会被去掉，非法值（空段、``.``、``..``）记 warning 并视为未配置。
+  - ``APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT`` / ``_SLS_LOGSTORE``：对象地址与请求体里的 project / logstore。project 取不到时本模式整体降级；logstore 缺省为 ``logstore-multimodal``，该缺省值同时作用于 URI 与请求体，二者不会分叉。
+  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET`` 在本模式下\ **已废弃且被忽略**\ ，仅对 ``oss`` hook 仍有意义。
+
+出于安全考虑，LicenseKey、workspace 与 endpoint 只从环境变量读取，\ **不允许**\ 通过运行时动态配置改写。
+
+::
+
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER=presign
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER=presign
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY='<your-license-key>'
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT=https://cn-hangzhou.log.aliyuncs.com
+    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX=genai/my-app
+    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT=proj-xtrace-xxx-cn-hangzhou
+    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_LOGSTORE=multimodal
+
+SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploader 与 pre-uploader 同时返回 ``None``，多模态链路整体降级为关闭：消息中的多模态内容保持原样，不会被替换成无法访问的 ``sls://`` URI。这样避开了“属性看起来正常、实际指向不存在的对象”这种更难排查的状态。
+
+反过来也要注意：地址在上传发起前就已写入属性，**属性被替换不代表上传成功**。确认是否真的落地要看上传链路日志里 presign 返回 200 且后续 OSS ``PUT ... 200 OK``。
+
+纯 SDK（手动埋点）方式下没有探针注入身份，presign 所需的 project、endpoint 与 LicenseKey 都必须显式配置。
+
+------------------------------------------------------------------------
+5. 补充说明
+------------------------------------------------------------------------
+
+显式生命周期
+~~~~~~~~~~~~~
+
+推荐采用上下文管理器（``with handler.llm(...)`` 等）。需与既有控制流对接时，可使用 ``start_*`` / ``stop_*`` / ``fail_*``，例如 Agent 调用：
+
+::
+
+    from opentelemetry.util.genai.extended_types import InvokeAgentInvocation
+    from opentelemetry.util.genai.types import Error
+
+    inv = InvokeAgentInvocation(provider="openai")
+    inv.request_model = "gpt-4"
+    inv.agent_name = "A"
+    handler.start_invoke_agent(inv)
+    try:
+        inv.input_messages = [...]
+        inv.output_messages = [...]
+        handler.stop_invoke_agent(inv)
+    except Exception as e:
+        handler.fail_invoke_agent(inv, Error(type=type(e), message=str(e)))
+
+错误处理
+~~~~~~~~
+
+在 ``with`` 块内抛出异常时，Handler 会将 Span 标为错误并记录类型等信息；你也可以在业务层捕获后自行决定如何 **re-raise**。
+
+::
+
+    try:
+        with handler.invoke_agent() as inv:
+            inv.provider = "openai"
+            inv.request_model = "gpt-4"
+            raise RuntimeError("downstream failed")
+    except RuntimeError:
+        pass  # Span 上已反映错误；若需自定义 error 字段可改用 start/fail API
+
+进程退出与上传收尾
+~~~~~~~~~~~~~~~~~~
+
+::
+
+    from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
+
+    ExtendedTelemetryHandler.shutdown()
+
+可在 Web 框架或运行时的 shutdown 回调中调用，以便收尾异步上传等逻辑（以实现代码为准）。
+
+------------------------------------------------------------------------
+6. 参考
+------------------------------------------------------------------------
+
+- OpenTelemetry GenAI Utils 设计说明：`Design Document <https://docs.google.com/document/d/1w9TbtKjuRX_wymS8DRSwPA03_VhrGlyx65hHAdNik1E/edit?tab=t.qneb4vabc1wc#heading=h.kh4j6stirken>`_
+- `OpenTelemetry 项目 <https://opentelemetry.io/>`_
+- `OpenTelemetry GenAI 语义约定 <https://opentelemetry.io/docs/specs/semconv/gen-ai/>`_
+- LoongSuite Python Agent 仓库：`loongsuite-python <https://github.com/alibaba/loongsuite-python>`_（仓库根目录 ``README.md``：安装 Instrumentation 与 ``loongsuite-instrument`` 的 Quick start）

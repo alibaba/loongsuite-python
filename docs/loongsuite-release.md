@@ -61,11 +61,16 @@ LoongSuite 采用**双轨发布策略**：
 
 | 发布后包名 | 发布目标 | 来源 | 说明 |
 |-----------|----------|------|------|
-| `loongsuite-util-genai` | **PyPI** | `util/opentelemetry-util-genai` | 重命名后发布 |
+| `loongsuite-otel-util-genai` | **PyPI** | `util/opentelemetry-util-genai` | 重命名后发布 |
 | `loongsuite-distro` | **PyPI** | `loongsuite-distro` | 引导器 |
 | `loongsuite-instrumentation-*`（`instrumentation-loongsuite/*`） | **PyPI** | 各插件目录 | 与 release 版本对齐的独立 wheel（`agno` / `mcp` / `dify` 暂不上 PyPI，见构建脚本 FIXME） |
 | `loongsuite-instrumentation-*` | **GitHub Release** | `instrumentation-genai/*` + `instrumentation-loongsuite/*` | 仍打入 tar.gz，供 bootstrap 离线安装 |
 | `opentelemetry-instrumentation-*` | **PyPI (上游)** | `instrumentation/*` | 由上游 OpenTelemetry 发布 |
+
+> **包名迁移说明：**`loongsuite-util-genai` 是历史发行名，仍可供旧环境使用；
+> 新版本的 LoongSuite GenAI 工具库更新发布到 `loongsuite-otel-util-genai`。
+> 本次迁移只改变 PyPI distribution 名，Python import 仍保持
+> `opentelemetry.util.genai`。
 
 **依赖关系图：**
 
@@ -74,12 +79,12 @@ LoongSuite 采用**双轨发布策略**：
 ├── loongsuite-distro (PyPI)
 │   ├── provides: loongsuite-bootstrap, loongsuite-instrument
 │   └── depends: opentelemetry-api, opentelemetry-sdk
-├── loongsuite-util-genai (PyPI)
+├── loongsuite-otel-util-genai (PyPI)
 │   └── GenAI 通用工具库
 ├── loongsuite-instrumentation-*（PyPI：除 agno/mcp/dify 外其余 `instrumentation-loongsuite/*`；tar 内仍含全部 loongsuite 插桩）
 │   ├── loongsuite-instrumentation-dashscope
 │   ├── loongsuite-instrumentation-vertexai (renamed from opentelemetry-*)
-│   └── ... (依赖 loongsuite-util-genai)
+│   └── ... (依赖 loongsuite-otel-util-genai)
 └── opentelemetry-instrumentation-* (PyPI 上游)
     ├── opentelemetry-instrumentation-flask
     ├── opentelemetry-instrumentation-redis
@@ -154,10 +159,10 @@ python scripts/loongsuite/build_loongsuite_package.py --build-pypi \
 ```
 
 **处理逻辑：**
-- 构建 `util/opentelemetry-util-genai` → 输出 `loongsuite_util_genai-*.whl`
+- 构建 `util/opentelemetry-util-genai` → 输出 `loongsuite_otel_util_genai-*.whl`
   - 使用 TOML 解析修改 `pyproject.toml` 中的 `name` 字段
 - 构建 `loongsuite-distro` → 输出 `loongsuite_distro-*.whl`
-- 遍历 `instrumentation-loongsuite/*` → 输出 `loongsuite_instrumentation_*-*.whl`（`agno` / `mcp` / `dify` 在 `loongsuite_pypi_manifest.py` 中硬编码跳过 PyPI，FIXME 待测全后放开；依赖中的 `opentelemetry-util-genai` 临时替换为 `loongsuite-util-genai`；另受 `loongsuite-build-config.json` 的 `skip_packages` 约束）；`--collect` 生成的 release notes 含本次上传 PyPI 的发行版名列表（与 manifest 一致）
+- 遍历 `instrumentation-loongsuite/*` → 输出 `loongsuite_instrumentation_*-*.whl`（`agno` / `mcp` / `dify` 在 `loongsuite_pypi_manifest.py` 中硬编码跳过 PyPI，FIXME 待测全后放开；依赖中的 `opentelemetry-util-genai` 临时替换为 `loongsuite-otel-util-genai`；另受 `loongsuite-build-config.json` 的 `skip_packages` 约束）；`--collect` 生成的 release notes 含本次上传 PyPI 的发行版名列表（与 manifest 一致）
 
 #### Step 3: 构建 GitHub Release 包
 
@@ -169,10 +174,10 @@ python scripts/loongsuite/build_loongsuite_package.py --build-github-release \
 **处理逻辑：**
 - 遍历 `instrumentation-genai/` 目录：
   - **规则 1**：`opentelemetry-*` 前缀的包重命名为 `loongsuite-*`
-  - **规则 2**：动态检测依赖，将 `opentelemetry-util-genai` 替换为 `loongsuite-util-genai`
+  - **规则 2**：动态检测依赖，将 `opentelemetry-util-genai` 替换为 `loongsuite-otel-util-genai`
 - 遍历 `instrumentation-loongsuite/` 目录：
   - 仅应用依赖替换规则
-- 所有 `.whl` 打包为 `loongsuite-python-agent-{version}.tar.gz`
+- 所有 `.whl` 打包为 `loongsuite-python-{version}.tar.gz`
 
 **规则匹配（无需硬编码包名）：**
 
@@ -290,8 +295,8 @@ Phase 2: 从 PyPI 安装 opentelemetry-* 包
 
 ```bash
 # 克隆仓库
-git clone https://github.com/alibaba/loongsuite-python-agent.git
-cd loongsuite-python-agent
+git clone https://github.com/alibaba/loongsuite-python.git
+cd loongsuite-python
 
 # 创建虚拟环境
 python -m venv .venv
@@ -380,7 +385,7 @@ pytest instrumentation-loongsuite/loongsuite-instrumentation-dashscope/tests/
 | `--upstream-version` | 上游 OpenTelemetry 包版本 | `0.60b1`, `0.61b0` |
 
 **应用规则：**
-- `loongsuite-version` → `loongsuite-util-genai`, `loongsuite-distro`, `loongsuite-instrumentation-*`
+- `loongsuite-version` → `loongsuite-otel-util-genai`, `loongsuite-distro`, `loongsuite-instrumentation-*`
 - `upstream-version` → `bootstrap_gen.py` 中的 `opentelemetry-instrumentation-*` 版本
 
 ### 5.2 本地验证 (Dry Run)
@@ -411,8 +416,8 @@ Dry Run 模式**不会**创建分支、归档 changelog、提交代码或创建 
 
 **验证要点：**
 
-- `loongsuite-util-genai`、`loongsuite-distro` 以及 `instrumentation-loongsuite` 中参与 PyPI 构建的 `loongsuite-instrumentation-*` wheel 在 `dist-pypi/` 中（`agno` / `mcp` / `dify` 当前不产出 PyPI wheel）
-- `loongsuite-util-genai` 不在 `tar.gz` 中
+- `loongsuite-otel-util-genai`、`loongsuite-distro` 以及 `instrumentation-loongsuite` 中参与 PyPI 构建的 `loongsuite-instrumentation-*` wheel 在 `dist-pypi/` 中（`agno` / `mcp` / `dify` 当前不产出 PyPI wheel）
+- `loongsuite-otel-util-genai` 不在 `tar.gz` 中
 - `loongsuite-instrumentation-*`（含 genai 重命名包与 loongsuite 插件）在 `tar.gz` 中
 - `opentelemetry-util-genai` 不在任何产物中（避免冲突）
 - 安装后依赖关系正确
@@ -484,7 +489,7 @@ git push origin v0.1.0
 
 2. **OIDC Trusted Publishing**（推荐）：
    - PyPI 项目设置 → Publishing → Add a new pending publisher
-   - Owner: `alibaba`，Repository: `loongsuite-python-agent`
+   - Owner: `alibaba`，Repository: `loongsuite-python`
    - Workflow: `loongsuite-release.yml`，Environment: `pypi`
    - 在 GitHub 仓库中创建 Environment `pypi`（Settings → Environments）
 
@@ -496,8 +501,8 @@ git push origin v0.1.0
 
 **重要说明：**
 
-- `dist-pypi/` 中的 `loongsuite_util_genai-*.whl`、`loongsuite_distro-*.whl` 以及 `loongsuite_instrumentation_*.whl`（`instrumentation-loongsuite` 中当前参与 PyPI 构建的插件；`agno` / `mcp` / `dify` 暂排除）会上传到 PyPI；每个新插件首次发布前需在 PyPI 上完成项目/Trusted Publisher 配置
-- `loongsuite-python-agent-*.tar.gz` 仅用于 GitHub Release，**禁止**上传到 PyPI
+- `dist-pypi/` 中的 `loongsuite_otel_util_genai-*.whl`、`loongsuite_distro-*.whl` 以及 `loongsuite_instrumentation_*.whl`（`instrumentation-loongsuite` 中当前参与 PyPI 构建的插件；`agno` / `mcp` / `dify` 暂排除）会上传到 PyPI；每个新插件首次发布前需在 PyPI 上完成项目/Trusted Publisher 配置
+- `loongsuite-python-*.tar.gz` 仅用于 GitHub Release，**禁止**上传到 PyPI
 
 ### 5.4 Post-Release PR
 
@@ -642,17 +647,17 @@ pip install tomlkit
 
 ### 安装问题
 
-**问题**: `loongsuite-util-genai` 找不到
+**问题**: `loongsuite-otel-util-genai` 找不到
 ```bash
 # 原因: PyPI 包未正确构建
-# 解决: 检查 dry run step 3 的输出，确认包名为 loongsuite_util_genai
+# 解决: 检查 dry run step 3 的输出，确认包名为 loongsuite_otel_util_genai
 ```
 
-**问题**: `opentelemetry-util-genai` 和 `loongsuite-util-genai` 冲突
+**问题**: `opentelemetry-util-genai` 和 `loongsuite-otel-util-genai` 冲突
 ```bash
 # 解决: 卸载旧包
 pip uninstall opentelemetry-util-genai
-pip install loongsuite-util-genai
+pip install loongsuite-otel-util-genai
 ```
 
 ### 发布问题

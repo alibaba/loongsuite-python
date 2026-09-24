@@ -86,11 +86,18 @@ def list_pypi_distribution_names(
         util_genai_dir.is_dir()
         and (util_genai_dir / "pyproject.toml").is_file()
     ):
-        names.append("loongsuite-util-genai")
+        names.append("loongsuite-otel-util-genai")
 
     distro_dir = base_dir / "loongsuite-distro"
     if distro_dir.is_dir() and (distro_dir / "pyproject.toml").is_file():
         names.append("loongsuite-distro")
+
+    site_bootstrap_dir = base_dir / "loongsuite-site-bootstrap"
+    if (
+        site_bootstrap_dir.is_dir()
+        and (site_bootstrap_dir / "pyproject.toml").is_file()
+    ):
+        names.append("loongsuite-site-bootstrap")
 
     inst_dir = base_dir / "instrumentation-loongsuite"
     if inst_dir.is_dir():

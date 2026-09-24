@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "loongsuite-site-bootstrap"
+dynamic = ["version"]
+description = "LoongSuite .pth site bootstrap for OpenTelemetry auto-instrumentation (opt-in via env)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+authors = [
+  { name = "Minghui Zhang", email = "zmh1625lumian@gmail.com" },
+  { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = [
+  "loongsuite-distro",
+]
+
+[project.urls]
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/loongsuite-site-bootstrap"
+Repository = "https://github.com/alibaba/loongsuite-python"
+
+[tool.hatch.version]
+path = "src/loongsuite_site_bootstrap/version.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/pth",
+  "/README.md",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/loongsuite_site_bootstrap"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"pth/loongsuite-site-bootstrap.pth" = "loongsuite-site-bootstrap.pth"

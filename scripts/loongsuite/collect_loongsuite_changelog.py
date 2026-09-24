@@ -22,12 +22,13 @@ Modes:
                      (includes a PyPI distribution list from loongsuite_pypi_manifest).
   --archive          Replace Unreleased headers with a versioned header in-place
                      (empty Unreleased bodies get a one-line English placeholder).
-  --bump-dev         Bump instrumentation-loongsuite and loongsuite-distro versions to the next dev version.
-  --rename-packages  Rename opentelemetry-util-genai to loongsuite-util-genai in pyproject.toml files.
+  --bump-dev            Bump instrumentation-loongsuite, loongsuite-distro, and loongsuite-site-bootstrap versions to the next dev version.
+  --pin-release-versions  Pin __version__ to the release version for PyPI packages (release branch; includes util-genai).
+  --rename-packages  Rename opentelemetry-util-genai to loongsuite-otel-util-genai in pyproject.toml files.
 
 Changelog sources (in order):
   1. CHANGELOG-loongsuite.md              (root, label: loongsuite)
-  2. util/opentelemetry-util-genai/CHANGELOG-loongsuite.md  (label: loongsuite-util-genai)
+  2. util/opentelemetry-util-genai/CHANGELOG-loongsuite.md  (label: loongsuite-otel-util-genai)
   3. instrumentation-loongsuite/*/CHANGELOG.md              (per-package)
 
 Usage:
@@ -38,6 +39,9 @@ Usage:
       --version 0.1.0
 
   python scripts/loongsuite/collect_loongsuite_changelog.py --bump-dev \\
+      --version 0.1.0
+
+  python scripts/loongsuite/collect_loongsuite_changelog.py --pin-release-versions \\
       --version 0.1.0
 """
 
@@ -82,7 +86,7 @@ def _changelog_sources(repo: Path) -> List[Tuple[str, Path]]:
         repo / "util" / "opentelemetry-util-genai" / "CHANGELOG-loongsuite.md"
     )
     if util_cl.exists():
-        sources.append(("loongsuite-util-genai", util_cl))
+        sources.append(("loongsuite-otel-util-genai", util_cl))
 
     inst_dir = repo / "instrumentation-loongsuite"
     if inst_dir.is_dir():
@@ -146,7 +150,7 @@ def collect(
 ) -> None:
     """Collect all Unreleased sections into a single release-notes file."""
     parts: List[str] = []
-    parts.append(f"# loongsuite-python-agent {version}\n")
+    parts.append(f"# loongsuite-python {version}\n")
     parts.append("## Installation\n")
     parts.append("```bash")
     parts.append(f"pip install loongsuite-distro=={version}")
@@ -245,7 +249,59 @@ def archive(version: str, repo: Path, date_str: Optional[str] = None) -> None:
             print(f"No Unreleased section in {label}: {path} (skipped)")
 
 
-VERSION_RE = re.compile(r'^(__version__\s*=\s*["\']).*(["\'])', re.MULTILINE)
+# Opening/closing quote must match (\2); optional trailing comment after the string literal.
+VERSION_RE = re.compile(
+    r'^(__version__\s*=\s*(["\']))([^\n]*?)\2(\s*(?:#.*)?)$',
+    re.MULTILINE,
+)
+
+
+def _managed_loongsuite_version_files(
+    repo: Path, *, include_util_genai: bool
+) -> List[Path]:
+    """Paths to version.py files versioned with the LoongSuite release train."""
+    version_files: List[Path] = []
+
+    inst_dir = repo / "instrumentation-loongsuite"
+    if inst_dir.is_dir():
+        version_files.extend(sorted(inst_dir.rglob("version.py")))
+
+    distro_version_py = (
+        repo
+        / "loongsuite-distro"
+        / "src"
+        / "loongsuite"
+        / "distro"
+        / "version.py"
+    )
+    if distro_version_py.is_file():
+        version_files.append(distro_version_py)
+
+    site_version_py = (
+        repo
+        / "loongsuite-site-bootstrap"
+        / "src"
+        / "loongsuite_site_bootstrap"
+        / "version.py"
+    )
+    if site_version_py.is_file():
+        version_files.append(site_version_py)
+
+    if include_util_genai:
+        util_version_py = (
+            repo
+            / "util"
+            / "opentelemetry-util-genai"
+            / "src"
+            / "opentelemetry"
+            / "util"
+            / "genai"
+            / "version.py"
+        )
+        if util_version_py.is_file():
+            version_files.append(util_version_py)
+
+    return sorted(version_files, key=lambda p: str(p))
 
 
 def _next_dev_version(released_version: str) -> str:
@@ -263,35 +319,36 @@ def _next_dev_version(released_version: str) -> str:
     return f"{major}.{minor + 1}.0.dev"
 
 
+def pin_release_versions(released_version: str, repo: Path) -> None:
+    """Set managed packages' __version__ to the release version (before PyPI publish)."""
+    version_files = _managed_loongsuite_version_files(
+        repo, include_util_genai=True
+    )
+    if not version_files:
+        print("WARNING: no version.py files to pin for release")
+        return
+
+    for vf in version_files:
+        text = vf.read_text(encoding="utf-8")
+        m = VERSION_RE.search(text)
+        if m:
+            new_text = VERSION_RE.sub(rf"\g<1>{released_version}\2\4", text)
+            vf.write_text(new_text, encoding="utf-8")
+            print(
+                f'Pinned {vf.relative_to(repo)} -> __version__ = "{released_version}"'
+            )
+        else:
+            print(f"WARNING: no __version__ found in {vf.relative_to(repo)}")
+
+
 def bump_dev(
     released_version: str, repo: Path, next_version: Optional[str] = None
 ) -> None:
-    """Bump instrumentation-loongsuite and loongsuite-distro to the next dev version."""
+    """Bump managed packages to the next dev version."""
     next_ver = next_version or _next_dev_version(released_version)
-    version_files: List[Path] = []
-
-    inst_dir = repo / "instrumentation-loongsuite"
-    if inst_dir.is_dir():
-        version_files.extend(sorted(inst_dir.rglob("version.py")))
-    else:
-        print(
-            f"WARNING: {inst_dir} not found, skipping instrumentation-loongsuite version bump"
-        )
-
-    distro_version_py = (
-        repo
-        / "loongsuite-distro"
-        / "src"
-        / "loongsuite"
-        / "distro"
-        / "version.py"
+    version_files = _managed_loongsuite_version_files(
+        repo, include_util_genai=False
     )
-    if distro_version_py.is_file():
-        version_files.append(distro_version_py)
-    else:
-        print(
-            f"WARNING: {distro_version_py} not found, skipping loongsuite-distro version bump"
-        )
 
     if not version_files:
         print("WARNING: no version.py files to bump")
@@ -301,7 +358,7 @@ def bump_dev(
         text = vf.read_text(encoding="utf-8")
         m = VERSION_RE.search(text)
         if m:
-            new_text = VERSION_RE.sub(rf"\g<1>{next_ver}\2", text)
+            new_text = VERSION_RE.sub(rf"\g<1>{next_ver}\2\4", text)
             vf.write_text(new_text, encoding="utf-8")
             print(
                 f'Bumped {vf.relative_to(repo)}: {m.group(0).strip()} -> __version__ = "{next_ver}"'
@@ -311,7 +368,7 @@ def bump_dev(
 
 
 def rename_packages(version: str, repo: Path) -> None:
-    """Permanently rename opentelemetry-util-genai to loongsuite-util-genai in pyproject.toml files.
+    """Permanently rename opentelemetry-util-genai to loongsuite-otel-util-genai in pyproject.toml files.
 
     This makes the release branch a self-contained snapshot where package names
     and dependencies already reflect the published names.
@@ -324,7 +381,7 @@ def rename_packages(version: str, repo: Path) -> None:
         )
         sys.exit(1)
 
-    util_dep_spec = f"loongsuite-util-genai ~= {version}"
+    util_dep_spec = f"loongsuite-otel-util-genai ~= {version}"
 
     # 1. Rename util/opentelemetry-util-genai itself
     util_pyproject = (
@@ -333,10 +390,10 @@ def rename_packages(version: str, repo: Path) -> None:
     if util_pyproject.exists():
         doc = tomlkit.parse(util_pyproject.read_text(encoding="utf-8"))
         old_name = doc["project"]["name"]
-        doc["project"]["name"] = "loongsuite-util-genai"
+        doc["project"]["name"] = "loongsuite-otel-util-genai"
         util_pyproject.write_text(tomlkit.dumps(doc), encoding="utf-8")
         print(
-            f"Renamed {util_pyproject.relative_to(repo)}: {old_name} -> loongsuite-util-genai"
+            f"Renamed {util_pyproject.relative_to(repo)}: {old_name} -> loongsuite-otel-util-genai"
         )
     else:
         print(f"WARNING: {util_pyproject} not found")
@@ -383,13 +440,24 @@ def main() -> None:
     group.add_argument(
         "--bump-dev",
         action="store_true",
-        help="Bump instrumentation-loongsuite + loongsuite-distro to next dev",
+        help=(
+            "Bump instrumentation-loongsuite + loongsuite-distro + "
+            "loongsuite-site-bootstrap to next dev"
+        ),
+    )
+    group.add_argument(
+        "--pin-release-versions",
+        action="store_true",
+        help=(
+            "Pin __version__ to release version for PyPI packages (util-genai, "
+            "distro, site-bootstrap, instrumentation-loongsuite)"
+        ),
     )
     parser.add_argument(
         "--rename-packages",
         action="store_true",
         default=True,
-        help="Rename opentelemetry-util-genai to loongsuite-util-genai (default, always runs unless other mode specified)",
+        help="Rename opentelemetry-util-genai to loongsuite-otel-util-genai (default, always runs unless other mode specified)",
     )
 
     parser.add_argument(
@@ -430,6 +498,8 @@ def main() -> None:
         archive(args.version, repo, args.date)
     elif args.bump_dev:
         bump_dev(args.version, repo, args.next_dev_version)
+    elif args.pin_release_versions:
+        pin_release_versions(args.version, repo)
     else:
         rename_packages(args.version, repo)
 

@@ -36,8 +36,10 @@ from opentelemetry.semconv.attributes import (
 )
 from opentelemetry.trace import Span
 from opentelemetry.trace.propagation import set_span_in_context
-from opentelemetry.util.genai._extended_semconv.gen_ai_extended_attributes import (  # pylint: disable=no-name-in-module
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (  # pylint: disable=no-name-in-module
     GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
+    GEN_AI_REACT_FINISH_REASON,
+    GEN_AI_REACT_ROUND,
     GEN_AI_RERANK_BATCH_SIZE,
     GEN_AI_RERANK_DEVICE,
     GEN_AI_RERANK_DOCUMENTS_COUNT,
@@ -48,20 +50,31 @@ from opentelemetry.util.genai._extended_semconv.gen_ai_extended_attributes impor
     GEN_AI_RERANK_OUTPUT_DOCUMENTS,
     GEN_AI_RERANK_RETURN_DOCUMENTS,
     GEN_AI_RERANK_SCORING_PROMPT,
+    GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN,
     GEN_AI_RETRIEVAL_DOCUMENTS,
     GEN_AI_RETRIEVAL_QUERY_TEXT,
+    GEN_AI_SESSION_ID,
+    GEN_AI_SKILL_DESCRIPTION,
+    GEN_AI_SKILL_ID,
+    GEN_AI_SKILL_NAME,
+    GEN_AI_SKILL_VERSION,
     GEN_AI_SPAN_KIND,
     GEN_AI_TOOL_CALL_ARGUMENTS,
     GEN_AI_TOOL_CALL_RESULT,
+    GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,
+    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,
     GEN_AI_USAGE_TOTAL_TOKENS,
+    GEN_AI_USER_ID,
     GenAiExtendedOperationNameValues,
     GenAiSpanKindValues,
 )
 from opentelemetry.util.genai.extended_types import (
     CreateAgentInvocation,
     EmbeddingInvocation,
+    EntryInvocation,
     ExecuteToolInvocation,
     InvokeAgentInvocation,
+    ReactStepInvocation,
     RerankInvocation,
     RetrievalDocument,
     RetrievalInvocation,
@@ -83,6 +96,26 @@ from opentelemetry.util.genai.utils import (
 # ==================== Helper Functions for Getting Attributes ====================
 
 # -------------------- Invoke Agent Attribute Helpers --------------------
+
+
+def _has_meaningful_text(value: str | None) -> bool:
+    """Return True when *value* contains non-whitespace text."""
+    return value is not None and value.strip() != ""
+
+
+def _apply_skill_attributes(
+    attributes: dict[str, Any], invocation: ExecuteToolInvocation
+) -> None:
+    """Write non-blank skill metadata onto execute_tool attributes."""
+    skill_fields = (
+        (GEN_AI_SKILL_NAME, invocation.skill_name),
+        (GEN_AI_SKILL_ID, invocation.skill_id),
+        (GEN_AI_SKILL_DESCRIPTION, invocation.skill_description),
+        (GEN_AI_SKILL_VERSION, invocation.skill_version),
+    )
+    for key, value in skill_fields:
+        if _has_meaningful_text(value):
+            attributes[key] = value
 
 
 def _get_invoke_agent_common_attributes(
@@ -181,6 +214,14 @@ def _get_invoke_agent_response_attributes(
         attributes[GenAI.GEN_AI_USAGE_INPUT_TOKENS] = invocation.input_tokens
     if invocation.output_tokens is not None:
         attributes[GenAI.GEN_AI_USAGE_OUTPUT_TOKENS] = invocation.output_tokens
+    if invocation.usage_cache_creation_input_tokens is not None:
+        attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] = (
+            invocation.usage_cache_creation_input_tokens
+        )
+    if invocation.usage_cache_read_input_tokens is not None:
+        attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] = (
+            invocation.usage_cache_read_input_tokens
+        )
 
     # Calculate total_tokens as sum of input and output tokens when both are available
     total_tokens = 0
@@ -190,6 +231,16 @@ def _get_invoke_agent_response_attributes(
         total_tokens += invocation.output_tokens
     if total_tokens > 0:
         attributes[GEN_AI_USAGE_TOTAL_TOKENS] = total_tokens
+
+    if (
+        invocation.monotonic_first_token_s is not None
+        and invocation.monotonic_start_s is not None
+        and invocation.monotonic_first_token_s >= invocation.monotonic_start_s
+    ):
+        attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN] = int(
+            (invocation.monotonic_first_token_s - invocation.monotonic_start_s)
+            * 1_000_000_000
+        )
 
     return attributes
 
@@ -483,8 +534,14 @@ def _apply_execute_tool_finish_attributes(
         )
     )
 
+    # Skill attributes (conditionally set when this tool execution loaded a skill)
+    _apply_skill_attributes(attributes, invocation)
+
     # Custom attributes
     attributes.update(invocation.attributes)
+
+    # Explicit skill fields take precedence over generic custom attributes.
+    _apply_skill_attributes(attributes, invocation)
 
     # Set all attributes on the span
     if attributes:
@@ -711,12 +768,77 @@ def _apply_rerank_finish_attributes(  # pylint: disable=too-many-branches
         span.set_attributes(attributes)
 
 
+def _apply_entry_finish_attributes(
+    span: Span, invocation: EntryInvocation
+) -> None:
+    """Apply attributes for Entry operations (LoongSuite ENTRY span kind)."""
+
+    span.update_name("enter_ai_application_system")
+
+    attributes: dict[str, Any] = {}
+
+    attributes[GenAI.GEN_AI_OPERATION_NAME] = (
+        GenAiExtendedOperationNameValues.ENTER.value
+    )
+    attributes[GEN_AI_SPAN_KIND] = GenAiSpanKindValues.ENTRY.value
+
+    if invocation.session_id is not None:
+        attributes[GEN_AI_SESSION_ID] = invocation.session_id
+    if invocation.user_id is not None:
+        attributes[GEN_AI_USER_ID] = invocation.user_id
+
+    if invocation.response_time_to_first_token is not None:
+        attributes[GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN] = (
+            invocation.response_time_to_first_token
+        )
+
+    attributes.update(
+        _get_llm_messages_attributes_for_span(
+            invocation.input_messages,
+            invocation.output_messages,
+            system_instruction=None,
+        )
+    )
+
+    attributes.update(invocation.attributes)
+
+    if attributes:
+        span.set_attributes(attributes)
+
+
+def _apply_react_step_finish_attributes(
+    span: Span, invocation: ReactStepInvocation
+) -> None:
+    """Apply attributes for ReAct Step operations (LoongSuite STEP span kind)."""
+
+    span.update_name("react step")
+
+    attributes: dict[str, Any] = {}
+
+    attributes[GenAI.GEN_AI_OPERATION_NAME] = (
+        GenAiExtendedOperationNameValues.REACT.value
+    )
+    attributes[GEN_AI_SPAN_KIND] = GenAiSpanKindValues.STEP.value
+
+    if invocation.finish_reason is not None:
+        attributes[GEN_AI_REACT_FINISH_REASON] = invocation.finish_reason
+    if invocation.round is not None:
+        attributes[GEN_AI_REACT_ROUND] = invocation.round
+
+    attributes.update(invocation.attributes)
+
+    if attributes:
+        span.set_attributes(attributes)
+
+
 __all__ = [
     "_apply_create_agent_finish_attributes",
     "_apply_embedding_finish_attributes",
+    "_apply_entry_finish_attributes",
     "_apply_execute_tool_finish_attributes",
     "_apply_invoke_agent_finish_attributes",
     "_apply_rerank_finish_attributes",
+    "_apply_react_step_finish_attributes",
     "_apply_retrieval_finish_attributes",
     "_maybe_emit_invoke_agent_event",
 ]

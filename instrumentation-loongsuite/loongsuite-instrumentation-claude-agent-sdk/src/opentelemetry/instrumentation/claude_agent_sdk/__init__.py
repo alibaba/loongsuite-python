@@ -102,15 +102,14 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 module="claude_agent_sdk",
                 name="ClaudeSDKClient.__init__",
-                wrapper=lambda wrapped,
-                instance,
-                args,
-                kwargs: wrap_claude_client_init(
-                    wrapped,
-                    instance,
-                    args,
-                    kwargs,
-                    handler=ClaudeAgentSDKInstrumentor._handler,
+                wrapper=lambda wrapped, instance, args, kwargs: (
+                    wrap_claude_client_init(
+                        wrapped,
+                        instance,
+                        args,
+                        kwargs,
+                        handler=ClaudeAgentSDKInstrumentor._handler,
+                    )
                 ),
             )
         except Exception as e:
@@ -122,15 +121,14 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 module="claude_agent_sdk",
                 name="ClaudeSDKClient.query",
-                wrapper=lambda wrapped,
-                instance,
-                args,
-                kwargs: wrap_claude_client_query(
-                    wrapped,
-                    instance,
-                    args,
-                    kwargs,
-                    handler=ClaudeAgentSDKInstrumentor._handler,
+                wrapper=lambda wrapped, instance, args, kwargs: (
+                    wrap_claude_client_query(
+                        wrapped,
+                        instance,
+                        args,
+                        kwargs,
+                        handler=ClaudeAgentSDKInstrumentor._handler,
+                    )
                 ),
             )
         except Exception as e:
@@ -140,15 +138,14 @@ class ClaudeAgentSDKInstrumentor(BaseInstrumentor):
             wrap_function_wrapper(
                 module="claude_agent_sdk",
                 name="ClaudeSDKClient.receive_response",
-                wrapper=lambda wrapped,
-                instance,
-                args,
-                kwargs: wrap_claude_client_receive_response(
-                    wrapped,
-                    instance,
-                    args,
-                    kwargs,
-                    handler=ClaudeAgentSDKInstrumentor._handler,
+                wrapper=lambda wrapped, instance, args, kwargs: (
+                    wrap_claude_client_receive_response(
+                        wrapped,
+                        instance,
+                        args,
+                        kwargs,
+                        handler=ClaudeAgentSDKInstrumentor._handler,
+                    )
                 ),
             )
         except Exception as e:

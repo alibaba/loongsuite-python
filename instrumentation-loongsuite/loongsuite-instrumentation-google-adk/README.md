@@ -1,12 +1,10 @@
-# OpenTelemetry Google ADK Instrumentation
-
-[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-GenAI_Semantic_Conventions-blue)](https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/)
+# LoongSuite Google ADK Instrumentation
 
 Google ADK (Agent Development Kit) Python Agent provides comprehensive observability for Google ADK applications using OpenTelemetry.
 
 ## Features
 
-- ✅ **Automatic Instrumentation**: Zero-code integration via `opentelemetry-instrument`
+- ✅ **Automatic Instrumentation**: Zero-code integration via `loongsuite-instrument`
 - ✅ **Manual Instrumentation**: Programmatic control via `GoogleAdkInstrumentor`
 - ✅ **GenAI Semantic Conventions**: Full compliance with OpenTelemetry GenAI standards
 - ✅ **Comprehensive Spans**: `invoke_agent`, `chat`, `execute_tool`
@@ -17,28 +15,35 @@ Google ADK (Agent Development Kit) Python Agent provides comprehensive observabi
 ## Quick Start
 
 ```bash
-# Install
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
+
+# Step 2 (Option C): install instrumentation from PyPI
+pip install loongsuite-instrumentation-google-adk
+
+# App dependencies
 pip install google-adk litellm
-pip install ./instrumentation-loongsuite/loongsuite-instrumentation-google-adk
 
 # Configure
 export DASHSCOPE_API_KEY=your-api-key
 
 # Run with auto instrumentation
-opentelemetry-instrument \
+loongsuite-instrument \
   --traces_exporter console \
   --service_name my-adk-app \
   python your_app.py
 ```
 
-For details on LoongSuite and Jaeger setup, refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+For details on LoongSuite and Jaeger setup, refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installing Google ADK Instrumentation
 
 ```shell
-# OpenTelemetry Core
-pip install opentelemetry-distro opentelemetry-exporter-otlp
-opentelemetry-bootstrap -a install
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
+
+# Step 2 (Option C): install this instrumentation from PyPI
+pip install loongsuite-instrumentation-google-adk
 
 # Google ADK and LLM Dependencies
 pip install google-adk>=0.1.0
@@ -47,10 +52,6 @@ pip install litellm
 # Demo Application Dependencies (optional, only if running examples)
 pip install fastapi uvicorn pydantic
 
-# GoogleAdkInstrumentor
-git clone https://github.com/alibaba/loongsuite-python-agent.git
-cd loongsuite-python-agent
-pip install ./instrumentation-loongsuite/loongsuite-instrumentation-google-adk
 ```
 
 ## Collect Data
@@ -63,30 +64,15 @@ Here's a simple demonstration of Google ADK instrumentation. The demo uses:
 
 > **Note**: The demo uses DashScope (Alibaba Cloud LLM service) by default. You need to set the `DASHSCOPE_API_KEY` environment variable.
 
-#### Option 1: Using OpenTelemetry Auto Instrumentation
+#### Option 1: Using LoongSuite auto instrumentation
 
 ```bash
 # Set your DashScope API key
 export DASHSCOPE_API_KEY=your-dashscope-api-key
 
 # Enable content capture (optional, for debugging)
-export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
-
-# Run with auto instrumentation
-opentelemetry-instrument \
-  --traces_exporter console \
-  --service_name demo-google-adk \
-  python examples/main.py
-```
-
-#### Option 2: Using Loongsuite
-
-```bash
-# Set your DashScope API key
-export DASHSCOPE_API_KEY=your-dashscope-api-key
-
-# Enable content capture (optional, for debugging)
-export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
 
 # Run with loongsuite instrumentation
 loongsuite-instrument \
@@ -95,22 +81,68 @@ loongsuite-instrument \
   python examples/main.py
 ```
 
-#### Option 3: Export to Jaeger
+#### Option 2: Export to Jaeger
 
 ```bash
 # Set your DashScope API key
 export DASHSCOPE_API_KEY=your-dashscope-api-key
 
 # Configure OTLP exporter
-export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
 export OTEL_TRACES_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 
 # Run the application
-opentelemetry-instrument \
+loongsuite-instrument \
   --service_name demo-google-adk \
   python examples/main.py
+```
+
+#### Option 3: Local otel-gui smoke scenarios
+
+`examples/otelgui_smoke.py` produces real non-streaming, SSE streaming, and
+concurrent Google ADK calls for local trace validation.
+
+```bash
+export DASHSCOPE_API_KEY=your-dashscope-api-key
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:5173
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:5173/v1/traces
+export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
+export OTEL_SERVICE_NAME=loongsuite-google-adk-smoke
+export GOOGLE_ADK_SMOKE_CONFIGURE_OTLP=1
+export GOOGLE_ADK_SMOKE_DISABLE_NATIVE_AGENT_SPAN=1
+
+python examples/otelgui_smoke.py --scenario all
+```
+
+`GOOGLE_ADK_SMOKE_DISABLE_NATIVE_AGENT_SPAN=1` uses a private ADK telemetry
+monkey-patch during smoke validation to remove ADK's native wrapper span, making
+the LoongSuite GenAI span tree easier to inspect in otel-gui. Keep it limited to
+local smoke tests because private ADK internals may change.
+
+When using the local `loongsuite-otelgui-plugin-verify` helper, select the
+GenAI util agent trace explicitly because Google ADK also emits an `invocation`
+trace:
+
+```bash
+python /path/to/run_loongsuite_plugin_smoke.py \
+  --repo-root /path/to/loongsuite-python \
+  --base-url http://127.0.0.1:5173 \
+  --service-name loongsuite-google-adk-non-stream \
+  --root-span-contains invoke_agent \
+  --capture-message-content SPAN_ONLY \
+  --expect-span-kind AGENT \
+  --expect-span-kind LLM \
+  --expect-span-kind TOOL \
+  --expect-content \
+  --env GOOGLE_ADK_SMOKE_CONFIGURE_OTLP=1 \
+  --env GOOGLE_ADK_SMOKE_DISABLE_NATIVE_AGENT_SPAN=1 \
+  --env OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:5173/v1/traces \
+  --run "python examples/otelgui_smoke.py --scenario non-stream"
 ```
 
 ### Expected Results
@@ -136,10 +168,11 @@ The instrumentation will generate traces showing the Google ADK operations:
     },
     "attributes": {
         "gen_ai.operation.name": "execute_tool",
+        "gen_ai.span.kind": "TOOL",
         "gen_ai.tool.name": "get_current_time",
         "gen_ai.tool.description": "xxx",
-        "input.value": "{xxx}",
-        "output.value": "{xxx}"
+        "gen_ai.tool.call.arguments": "{xxx}",
+        "gen_ai.tool.call.result": "{xxx}"
     },
     "events": [],
     "links": [],
@@ -163,6 +196,7 @@ The instrumentation will generate traces showing the Google ADK operations:
     "kind": "SpanKind.CLIENT",
     "attributes": {
         "gen_ai.operation.name": "chat",
+        "gen_ai.span.kind": "LLM",
         "gen_ai.request.model": "qwen-max",
         "gen_ai.response.model": "qwen-max",
         "gen_ai.usage.input_tokens": 150,
@@ -179,9 +213,10 @@ The instrumentation will generate traces showing the Google ADK operations:
     "kind": "SpanKind.CLIENT",
     "attributes": {
         "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.span.kind": "AGENT",
         "gen_ai.agent.name": "ToolAgent",
-        "input.value": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"现在几点了？\"}]}]",
-        "output.value": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"当前时间是 2025-11-27 14:36:33\"}]}]"
+        "gen_ai.input.messages": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What time is it?\"}]}]",
+        "gen_ai.output.messages": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"The current time is 2025-11-27 14:36:33\"}]}]"
     }
 }
 ```
@@ -198,7 +233,8 @@ The following environment variables can be used to configure the Google ADK inst
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Capture message content in traces | `false` |
+| `OTEL_SEMCONV_STABILITY_OPT_IN` | Enable latest experimental GenAI semantic conventions | - |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | Capture message content in traces (`NO_CONTENT`, `SPAN_ONLY`, `SPAN_AND_EVENT`) | `NO_CONTENT` |
 | `DASHSCOPE_API_KEY` | DashScope API key (required for demo) | - |
 
 ### Programmatic Configuration

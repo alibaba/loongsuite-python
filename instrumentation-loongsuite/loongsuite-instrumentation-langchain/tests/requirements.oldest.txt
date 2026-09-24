@@ -20,7 +20,7 @@ langchain<1.0.0
 langchain-community<1.0.0
 langchain-openai>=0.2.0
 pytest
-wrapt
+wrapt<2.0.0
 respx>=0.20.0
 httpx>=0.24.0
 numpy>=1.20.0

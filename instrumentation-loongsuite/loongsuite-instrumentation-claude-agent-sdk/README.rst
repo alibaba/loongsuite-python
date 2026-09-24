@@ -143,7 +143,7 @@ Span Hierarchy
 Examples
 --------
 
-See the `main README <https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md>`_ for complete usage examples.
+See the `main README <https://github.com/alibaba/loongsuite-python/blob/main/README.md>`_ for complete usage examples.
 
 License
 -------

@@ -45,8 +45,10 @@ AGENT_RUN_NAMES = frozenset(
 )
 
 _LANGGRAPH_REACT_METADATA_KEY = "_loongsuite_react_agent"
+_DEEPAGENTS_METADATA_KEY = "_loongsuite_deepagents_agent"
 
 LANGGRAPH_REACT_STEP_NODE = "agent"
+DEEPAGENTS_REACT_STEP_NODE = "model"
 
 
 def _is_agent_run(run: Any) -> bool:
@@ -72,6 +74,18 @@ def _has_langgraph_react_metadata(run: Any) -> bool:
     """
     metadata = getattr(run, "metadata", None) or {}
     return bool(metadata.get(_LANGGRAPH_REACT_METADATA_KEY))
+
+
+def _has_deepagents_metadata(run: Any) -> bool:
+    """Return *True* if *run* carries the DeepAgents agent metadata.
+
+    DeepAgents builds on ``langchain.agents.create_agent`` rather than
+    ``langgraph.prebuilt.create_react_agent``. Its model decision node is named
+    ``"model"`` instead of LangGraph ReAct's ``"agent"`` node, so the tracer
+    uses this separate marker to preserve the framework-specific STEP rule.
+    """
+    metadata = getattr(run, "metadata", None) or {}
+    return bool(metadata.get(_DEEPAGENTS_METADATA_KEY))
 
 
 # ---------------------------------------------------------------------------

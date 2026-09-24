@@ -1,0 +1,242 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "Reply with exactly one short sentence."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Say OK for request 2."
+              }
+            ]
+          }
+        ],
+        "model": "qwen-plus",
+        "max_tokens": 16,
+        "stream": false,
+        "enable_thinking": false
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '258'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - AsyncOpenAI/Python 2.40.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.40.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - <redacted>
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen-plus",
+          "id": "chatcmpl-0d58865c-c0c4-97df-9ef5-841029ada056",
+          "choices": [
+            {
+              "message": {
+                "content": "OK",
+                "role": "assistant"
+              },
+              "index": 0,
+              "finish_reason": "stop"
+            }
+          ],
+          "created": 1780388664,
+          "object": "chat.completion",
+          "usage": {
+            "total_tokens": 28,
+            "completion_tokens": 1,
+            "prompt_tokens": 27,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+    headers:
+      content-length:
+      - '328'
+      content-type:
+      - application/json
+      date:
+      - Tue, 02 Jun 2026 08:24:24 GMT
+      req-arrive-time:
+      - '1780388664520'
+      req-cost-time:
+      - '378'
+      resp-start-time:
+      - '1780388664899'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '378'
+      x-request-id:
+      - 0d58865c-c0c4-97df-9ef5-841029ada056
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "Reply with exactly one short sentence."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Say OK for request 1."
+              }
+            ]
+          }
+        ],
+        "model": "qwen-plus",
+        "max_tokens": 16,
+        "stream": false,
+        "enable_thinking": false
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '258'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - AsyncOpenAI/Python 2.40.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - async:asyncio
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.40.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - <redacted>
+      x-stainless-read-timeout:
+      - '600'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "model": "qwen-plus",
+          "id": "chatcmpl-b1d9db3b-e07f-9dea-a72e-79a244bac8d2",
+          "choices": [
+            {
+              "message": {
+                "content": "OK for request 1.",
+                "role": "assistant"
+              },
+              "index": 0,
+              "finish_reason": "stop"
+            }
+          ],
+          "created": 1780388664,
+          "object": "chat.completion",
+          "usage": {
+            "total_tokens": 33,
+            "completion_tokens": 6,
+            "prompt_tokens": 27,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+    headers:
+      content-length:
+      - '343'
+      content-type:
+      - application/json
+      date:
+      - Tue, 02 Jun 2026 08:24:24 GMT
+      req-arrive-time:
+      - '1780388664535'
+      req-cost-time:
+      - '510'
+      resp-start-time:
+      - '1780388665045'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '509'
+      x-request-id:
+      - b1d9db3b-e07f-9dea-a72e-79a244bac8d2
+    status:
+      code: 200
+      message: OK
+version: 1

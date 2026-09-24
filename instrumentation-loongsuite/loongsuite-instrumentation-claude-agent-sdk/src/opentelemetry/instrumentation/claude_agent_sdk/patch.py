@@ -15,9 +15,11 @@
 """Patch functions for Claude Agent SDK instrumentation."""
 
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
+from opentelemetry import baggage
 from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.claude_agent_sdk.utils import (
     extract_usage_from_result_message,
@@ -27,7 +29,10 @@ from opentelemetry.instrumentation.claude_agent_sdk.utils import (
 from opentelemetry.trace import set_span_in_context
 from opentelemetry.util.genai.extended_handler import (
     ExtendedTelemetryHandler,
-    get_extended_telemetry_handler,
+)
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
+    GEN_AI_SESSION_ID,
+    GEN_AI_USER_ID,
 )
 from opentelemetry.util.genai.extended_types import (
     ExecuteToolInvocation,
@@ -46,29 +51,112 @@ from opentelemetry.util.genai.types import (
 
 logger = logging.getLogger(__name__)
 
-# Storage for tool runs managed by client (created from response stream)
-# Key: tool_use_id, Value: tool_invocation
-_client_managed_runs: Dict[str, ExecuteToolInvocation] = {}
+
+def _current_baggage_value(key: str) -> Optional[str]:
+    try:
+        value = baggage.get_baggage(key)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
-def _clear_client_managed_runs() -> None:
+def _entry_baggage_identity_attributes() -> Dict[str, str]:
+    attributes: Dict[str, str] = {}
+    session_id = _current_baggage_value(GEN_AI_SESSION_ID)
+    user_id = _current_baggage_value(GEN_AI_USER_ID)
+    if session_id:
+        attributes[GEN_AI_SESSION_ID] = session_id
+    if user_id:
+        attributes[GEN_AI_USER_ID] = user_id
+    return attributes
+
+
+def _apply_session_identity(
+    invocation: Any, session_id: Optional[str]
+) -> None:
+    """Apply Entry baggage identity first, then Claude's own session fallback."""
+    entry_attributes = _entry_baggage_identity_attributes()
+    effective_session_id = (
+        entry_attributes.get(GEN_AI_SESSION_ID) or session_id
+    )
+
+    if effective_session_id:
+        if hasattr(invocation, "conversation_id"):
+            invocation.conversation_id = effective_session_id
+        invocation.attributes[GEN_AI_SESSION_ID] = effective_session_id
+
+    for key, value in entry_attributes.items():
+        invocation.attributes[key] = value
+
+
+def _set_session_id(
+    agent_invocation: InvokeAgentInvocation, session_id: Optional[str]
+) -> None:
+    """Set Entry session id or Claude session id on an agent invocation."""
+    _apply_session_identity(agent_invocation, session_id)
+
+
+def _set_llm_session_id(
+    llm_invocation: LLMInvocation, session_id: Optional[str]
+) -> None:
+    """Set Entry session id or Claude session id on an LLM invocation."""
+    _apply_session_identity(llm_invocation, session_id)
+
+
+def _normalize_model(model: Any) -> Optional[str]:
+    if model is None:
+        return None
+    model_text = str(model).strip()
+    return model_text or None
+
+
+def _is_unknown_model(model: Any) -> bool:
+    model_text = _normalize_model(model)
+    return model_text is None or model_text == "unknown"
+
+
+def _resolve_assistant_model(msg: Any, fallback_model: str) -> str:
+    """Use AssistantMessage.model when options/env did not provide a model."""
+    normalized_fallback = _normalize_model(fallback_model) or "unknown"
+    message_model = _normalize_model(getattr(msg, "model", None))
+    if _is_unknown_model(normalized_fallback) and message_model:
+        return message_model
+    return normalized_fallback
+
+
+def _apply_assistant_model(
+    agent_invocation: InvokeAgentInvocation, model: str
+) -> None:
+    """Late-fill the agent request model once the SDK reveals its default."""
+    if _is_unknown_model(
+        agent_invocation.request_model
+    ) and not _is_unknown_model(model):
+        agent_invocation.request_model = model
+
+
+def _extract_model_from_result_message(msg: Any) -> Optional[str]:
+    model_usage = getattr(msg, "model_usage", None)
+    if not isinstance(model_usage, dict) or not model_usage:
+        return None
+    if len(model_usage) == 1:
+        return _normalize_model(next(iter(model_usage)))
+    return None
+
+
+def _clear_client_managed_runs(
+    handler: ExtendedTelemetryHandler,
+    client_managed_runs: Dict[str, ExecuteToolInvocation],
+) -> None:
     """Clear all client-managed tool runs.
 
     This should be called when a conversation ends to avoid memory leaks
     and to clean up any orphaned tool runs.
     """
-    global _client_managed_runs
-
-    try:
-        handler = get_extended_telemetry_handler()
-    except Exception:
-        # If we can't get the handler (e.g., instrumentation not initialized),
-        # we still need to clear the tracking dictionary to prevent memory leaks.
-        _client_managed_runs.clear()
-        return
-
     # End any orphaned tool runs
-    for tool_use_id, tool_invocation in list(_client_managed_runs.items()):
+    for tool_use_id, tool_invocation in list(client_managed_runs.items()):
         try:
             handler.fail_execute_tool(
                 tool_invocation,
@@ -83,7 +171,137 @@ def _clear_client_managed_runs() -> None:
             # Best effort cleanup: continue processing remaining tools.
             pass
 
-    _client_managed_runs.clear()
+    client_managed_runs.clear()
+
+
+# The name of the Claude Agent SDK built-in tool that loads a Skill.
+_SKILL_TOOL_NAME = "Skill"
+
+# skill id prefix for project-scoped Claude Agent SDK skills.
+_SKILL_ID_PREFIX = "claude:project:"
+
+
+def _read_skill_metadata(skill_md_path: str) -> Dict[str, str]:
+    """Best-effort read of a Skill's SKILL.md frontmatter.
+
+    Returns a dict with any of ``name``/``description``/``version`` keys that
+    were present in the YAML frontmatter. On any error (missing file, parse
+    failure, ...) returns an empty dict so telemetry never breaks the SDK call.
+    """
+    try:
+        with open(skill_md_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception:
+        # Missing or unreadable SKILL.md is expected for non-project skills.
+        return {}
+
+    return _parse_skill_frontmatter(content)
+
+
+def _parse_skill_frontmatter(content: str) -> Dict[str, str]:
+    """Parse selected scalar fields from SKILL.md frontmatter.
+
+    This intentionally avoids a runtime PyYAML dependency. Claude skill
+    frontmatter only needs simple top-level scalar fields for telemetry.
+    """
+    try:
+        stripped = content.lstrip()
+        if not stripped.startswith("---"):
+            return {}
+        # Split off the leading ``---``; the next ``---`` closes the block.
+        after_open = stripped[3:]
+        end_index = after_open.find("\n---")
+        if end_index == -1:
+            # Frontmatter never closed; treat the remainder as the block.
+            frontmatter_text = after_open
+        else:
+            frontmatter_text = after_open[:end_index]
+    except Exception:
+        return {}
+
+    metadata: Dict[str, str] = {}
+    wanted_keys = {"name", "description", "version"}
+    for raw_line in frontmatter_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if key not in wanted_keys:
+            continue
+
+        value = value.strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0]
+            in {
+                '"',
+                "'",
+            }
+        ):
+            value = value[1:-1]
+        if value:
+            metadata[key] = value
+    return metadata
+
+
+def _apply_skill_metadata(
+    tool_invocation: ExecuteToolInvocation,
+    skill_name: str,
+    cwd: Optional[str],
+) -> None:
+    """Attach ``gen_ai.skill.*`` attributes to a Skill load tool span.
+
+    Reads the project-level ``SKILL.md`` frontmatter best-effort and fills in
+    ``skill_name``/``skill_id``/``skill_description``/``skill_version`` on the
+    invocation. Any failure is swallowed so the SDK call is never affected.
+    """
+    if not skill_name:
+        return
+
+    metadata: Dict[str, str] = {}
+    if cwd:
+        skill_md_path = os.path.join(
+            cwd, ".claude", "skills", skill_name, "SKILL.md"
+        )
+        metadata = _read_skill_metadata(skill_md_path)
+
+    # gen_ai.skill.name: prefer the requested tool input; frontmatter is
+    # supplemental metadata for description/version.
+    name = skill_name or metadata.get("name")
+    if not name:
+        return
+    tool_invocation.skill_name = name
+    tool_invocation.skill_id = f"{_SKILL_ID_PREFIX}{name}"
+
+    description = metadata.get("description")
+    if description:
+        tool_invocation.skill_description = description
+    version = metadata.get("version")
+    if version:
+        tool_invocation.skill_version = version
+
+
+def _apply_skill_fallback(
+    tool_invocation: ExecuteToolInvocation,
+    tool_use_result: Any,
+) -> None:
+    """Best-effort fallback to recover skill_name before closing a Skill span.
+
+    If ``skill_name`` was not captured at span start (e.g. cwd was unavailable
+    so SKILL.md could not be read), try ``UserMessage.tool_use_result.commandName``
+    per the SDK's Skill tool result format.
+    """
+    if tool_invocation.skill_name:
+        return
+    if not isinstance(tool_use_result, dict):
+        return
+    command_name = tool_use_result.get("commandName")
+    if command_name:
+        tool_invocation.skill_name = str(command_name)
+        tool_invocation.skill_id = f"{_SKILL_ID_PREFIX}{command_name}"
 
 
 def _extract_message_parts(msg: Any) -> List[Any]:
@@ -112,12 +330,18 @@ def _create_tool_spans_from_message(
     handler: ExtendedTelemetryHandler,
     agent_invocation: InvokeAgentInvocation,
     active_task_stack: List[Any],
+    client_managed_runs: Dict[str, ExecuteToolInvocation],
     exclude_tool_names: Optional[List[str]] = None,
+    cwd: Optional[str] = None,
 ) -> None:
     """Create tool execution spans from ToolUseBlocks in an AssistantMessage.
 
     Tool spans are children of the active SubAgent span (if any), otherwise agent span.
     When a Task tool is created, it's pushed onto active_task_stack along with a SubAgent span.
+
+    For the built-in ``Skill`` tool, ``gen_ai.skill.*`` attributes are read
+    best-effort from the project-level ``SKILL.md`` frontmatter (located via
+    ``cwd``) and attached to the tool span.
 
     The stack structure is: [{"task": ExecuteToolInvocation, "subagent": InvokeAgentInvocation}, ...]
     """
@@ -159,12 +383,32 @@ def _create_tool_spans_from_message(
             try:
                 tool_invocation = ExecuteToolInvocation(
                     tool_name=tool_name,
+                    tool_type="function",
                     tool_call_id=tool_use_id,
                     tool_call_arguments=tool_input,
                     tool_description=tool_name,
                 )
+                _apply_session_identity(
+                    tool_invocation, agent_invocation.conversation_id
+                )
+
+                # Skill load: attach gen_ai.skill.* attributes best-effort
+                # from the project SKILL.md frontmatter. Failures here must
+                # never propagate to break the SDK call.
+                if tool_name == _SKILL_TOOL_NAME:
+                    try:
+                        skill_name = ""
+                        if isinstance(tool_input, dict):
+                            skill_name = str(tool_input.get("skill") or "")
+                        _apply_skill_metadata(tool_invocation, skill_name, cwd)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to read Skill metadata for "
+                            f"'{tool_input}': {e}"
+                        )
+
                 handler.start_execute_tool(tool_invocation)
-                _client_managed_runs[tool_use_id] = tool_invocation
+                client_managed_runs[tool_use_id] = tool_invocation
 
                 # If this is a Task tool, create a SubAgent span under it
                 # https://platform.claude.com/docs/en/agent-sdk/python#task
@@ -202,6 +446,10 @@ def _create_tool_spans_from_message(
                             agent_name=subagent_type,
                             agent_description=task_description,
                             input_messages=input_messages,
+                        )
+                        _set_session_id(
+                            subagent_invocation,
+                            agent_invocation.conversation_id,
                         )
 
                         # Start SubAgent span
@@ -271,8 +519,13 @@ def _process_assistant_message(
     handler: ExtendedTelemetryHandler,
     collected_messages: List[Dict[str, Any]],
     active_task_stack: List[Any],
+    client_managed_runs: Dict[str, ExecuteToolInvocation],
+    cwd: Optional[str] = None,
 ) -> None:
     """Process AssistantMessage: create LLM turn, extract parts, create tool spans."""
+    message_model = _resolve_assistant_model(msg, model)
+    _apply_assistant_model(agent_invocation, message_model)
+
     parts = _extract_message_parts(msg)
     has_text_content = any(isinstance(p, Text) for p in parts)
     has_tool_calls = any(isinstance(p, ToolCall) for p in parts)
@@ -285,10 +538,11 @@ def _process_assistant_message(
             turn_tracker.close_llm_turn()
 
         message_arrival_time = time.time()
+        finish_reason = "tool_calls" if has_tool_calls else "stop"
 
         turn_tracker.start_llm_turn(
             msg,
-            model,
+            message_model,
             prompt,
             collected_messages,
             provider=infer_provider_from_base_url(),
@@ -297,9 +551,11 @@ def _process_assistant_message(
         )
 
         if parts:
-            turn_tracker.add_assistant_output(parts)
+            turn_tracker.add_assistant_output(parts, finish_reason)
             output_msg = OutputMessage(
-                role="assistant", parts=list(parts), finish_reason="stop"
+                role="assistant",
+                parts=list(parts),
+                finish_reason=finish_reason,
             )
             agent_invocation.output_messages.append(output_msg)
 
@@ -318,14 +574,8 @@ def _process_assistant_message(
                 last_output_msg.parts.extend(parts)
                 last_output_msg.finish_reason = "tool_calls"
             else:
-                turn_tracker.add_assistant_output(parts)
-                output_msg = OutputMessage(
-                    role="assistant",
-                    parts=list(parts),
-                    finish_reason="tool_calls",
-                )
-                turn_tracker.current_llm_invocation.output_messages.append(
-                    output_msg
+                turn_tracker.add_assistant_output(
+                    parts, finish_reason="tool_calls"
                 )
 
         # Only add to collected_messages if not inside a Task
@@ -348,12 +598,18 @@ def _process_assistant_message(
                     {"role": "assistant", "parts": list(parts)}
                 )
 
-    # Close LLM turn before creating tool spans to ensure correct timeline
+    # Close an existing LLM turn before creating tool spans to keep tool spans
+    # under the agent context and avoid leaking the LLM context into tools.
     if has_tool_calls and turn_tracker.current_llm_invocation:
         turn_tracker.close_llm_turn()
 
     _create_tool_spans_from_message(
-        msg, handler, agent_invocation, active_task_stack
+        msg,
+        handler,
+        agent_invocation,
+        active_task_stack,
+        client_managed_runs,
+        cwd=cwd,
     )
 
 
@@ -363,6 +619,7 @@ def _process_user_message(
     handler: ExtendedTelemetryHandler,
     collected_messages: List[Dict[str, Any]],
     active_task_stack: List[Any],
+    client_managed_runs: Dict[str, ExecuteToolInvocation],
 ) -> None:
     """Process UserMessage: close tool spans, collect message content, mark next LLM start."""
     user_parts: List[MessagePart] = []
@@ -376,8 +633,8 @@ def _process_user_message(
 
             if block_type == "ToolResultBlock":
                 tool_use_id = getattr(block, "tool_use_id", None)
-                if tool_use_id and tool_use_id in _client_managed_runs:
-                    tool_invocation = _client_managed_runs.pop(tool_use_id)
+                if tool_use_id and tool_use_id in client_managed_runs:
+                    tool_invocation = client_managed_runs.pop(tool_use_id)
 
                     # Set tool response
                     tool_content = getattr(block, "content", None)
@@ -474,6 +731,18 @@ def _process_user_message(
                             Error(message=error_msg, type=RuntimeError),
                         )
                     else:
+                        # Skill load: best-effort fallback to fill skill_name
+                        # from the tool result if it wasn't captured at start.
+                        if tool_invocation.tool_name == _SKILL_TOOL_NAME:
+                            try:
+                                _apply_skill_fallback(
+                                    tool_invocation, tool_use_result
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Failed to apply Skill metadata "
+                                    f"fallback: {e}"
+                                )
                         handler.stop_execute_tool(tool_invocation)
 
                 if tool_use_id:
@@ -522,18 +791,45 @@ def _process_user_message(
 def _process_system_message(
     msg: Any,
     agent_invocation: InvokeAgentInvocation,
-) -> None:
-    """Process SystemMessage: extract session_id early in the stream.
+) -> tuple[Optional[str], Optional[str]]:
+    """Process SystemMessage: extract session_id and cwd early in the stream.
 
     SystemMessage appears at the beginning of the message stream and contains
-    the session_id in its data field. We extract it here so that it's available
-    for all subsequent LLM spans.
+    the session_id and cwd in its data field. We extract them here so they are
+    available for all subsequent spans (cwd is needed to locate project-level
+    SKILL.md files for Skill tool telemetry).
+
+    Returns ``(cwd, model)`` when present.
     """
     if hasattr(msg, "subtype") and msg.subtype == "init":
         if hasattr(msg, "data") and isinstance(msg.data, dict):
             session_id = msg.data.get("session_id")
             if session_id:
-                agent_invocation.conversation_id = session_id
+                _set_session_id(agent_invocation, session_id)
+            cwd = msg.data.get("cwd")
+            model = _normalize_model(msg.data.get("model"))
+            if model:
+                _apply_assistant_model(agent_invocation, model)
+            return str(cwd) if cwd else None, model
+    return None, None
+
+
+def _process_stream_event_message(
+    msg: Any,
+    agent_invocation: InvokeAgentInvocation,
+) -> None:
+    """Process StreamEvent: extract session_id when streaming mode exposes it early."""
+    session_id = getattr(msg, "session_id", None)
+    if not session_id:
+        event = getattr(msg, "event", None)
+        if isinstance(event, dict):
+            session_id = event.get("session_id")
+
+    if not session_id:
+        # Entry baggage is already applied when the agent invocation starts.
+        return
+
+    _set_session_id(agent_invocation, session_id)
 
 
 def _process_result_message(
@@ -543,6 +839,13 @@ def _process_result_message(
 ) -> None:
     """Process ResultMessage: update session_id (fallback), token usage, and close any open LLM turn."""
 
+    result_model = _extract_model_from_result_message(msg)
+    if result_model:
+        _apply_assistant_model(agent_invocation, result_model)
+        turn_tracker.apply_model(result_model)
+
+    _set_session_id(agent_invocation, getattr(msg, "session_id", None))
+    turn_tracker.set_session_id(agent_invocation.conversation_id)
     _update_token_usage(agent_invocation, turn_tracker, msg)
 
     if turn_tracker.current_llm_invocation:
@@ -554,6 +857,7 @@ async def _process_agent_invocation_stream(
     handler: ExtendedTelemetryHandler,
     model: str,
     prompt: str,
+    session_id: Optional[str] = None,
 ) -> Any:
     """Unified handler for processing agent invocation stream.
 
@@ -564,18 +868,15 @@ async def _process_agent_invocation_stream(
         provider=infer_provider_from_base_url(),
         agent_name="claude-agent",
         request_model=model,
-        conversation_id="",
+        conversation_id=None,
         input_messages=[
             InputMessage(role="user", parts=[Text(content=prompt)])
         ]
         if prompt
         else [],
     )
+    _set_session_id(agent_invocation, session_id)
 
-    # Attach empty context to clear any previous context, ensuring each query
-    # creates an independent root trace. This is important for scenarios where
-    # multiple queries are called in the same script - each should have its own trace_id.
-    empty_context_token = otel_context.attach(otel_context.Context())
     handler.start_invoke_agent(agent_invocation)
 
     query_start_time = time.time()
@@ -589,23 +890,52 @@ async def _process_agent_invocation_stream(
     # When a Task tool is created, it's pushed here
     # When its ToolResultBlock is received, it's popped
     active_task_stack: List[Any] = []
+    client_managed_runs: Dict[str, ExecuteToolInvocation] = {}
+
+    # cwd captured from SystemMessage.data.cwd, used to locate project-level
+    # SKILL.md files for Skill tool telemetry.
+    session_cwd: Optional[str] = None
+    current_model = model
+    agent_closed = False
+
+    def close_agent_successfully() -> None:
+        nonlocal agent_closed
+        if not agent_closed:
+            handler.stop_invoke_agent(agent_invocation)
+            agent_closed = True
+
+    def fail_agent(error: Error) -> None:
+        nonlocal agent_closed
+        if not agent_closed:
+            handler.fail_invoke_agent(agent_invocation, error=error)
+            agent_closed = True
 
     try:
         async for msg in wrapped_stream:
             msg_type = type(msg).__name__
 
             if msg_type == "SystemMessage":
-                _process_system_message(msg, agent_invocation)
+                cwd, system_model = _process_system_message(
+                    msg, agent_invocation
+                )
+                if cwd:
+                    session_cwd = cwd
+                if system_model and _is_unknown_model(current_model):
+                    current_model = system_model
+            elif msg_type == "StreamEvent":
+                _process_stream_event_message(msg, agent_invocation)
             elif msg_type == "AssistantMessage":
                 _process_assistant_message(
                     msg,
-                    model,
+                    current_model,
                     prompt,
                     agent_invocation,
                     turn_tracker,
                     handler,
                     collected_messages,
                     active_task_stack,
+                    client_managed_runs,
+                    cwd=session_cwd,
                 )
             elif msg_type == "UserMessage":
                 _process_user_message(
@@ -614,22 +944,27 @@ async def _process_agent_invocation_stream(
                     handler,
                     collected_messages,
                     active_task_stack,
+                    client_managed_runs,
                 )
             elif msg_type == "ResultMessage":
                 _process_result_message(msg, agent_invocation, turn_tracker)
+                close_agent_successfully()
 
             yield msg
 
-        handler.stop_invoke_agent(agent_invocation)
+        close_agent_successfully()
 
-    except Exception as e:
+    except BaseException as e:
         error_msg = str(e)
-        if agent_invocation.span:
-            agent_invocation.span.set_attribute("error.type", type(e).__name__)
-            agent_invocation.span.set_attribute("error.message", error_msg)
-        handler.fail_invoke_agent(
-            agent_invocation, error=Error(message=error_msg, type=type(e))
-        )
+        error = Error(message=error_msg, type=type(e))
+        if not agent_closed:
+            turn_tracker.fail_llm_turn(error)
+            if agent_invocation.span:
+                agent_invocation.span.set_attribute(
+                    "error.type", type(e).__name__
+                )
+                agent_invocation.span.set_attribute("error.message", error_msg)
+            fail_agent(error)
 
         raise
     finally:
@@ -648,11 +983,7 @@ async def _process_agent_invocation_stream(
                 # Span closure failure should not break the application
                 pass
 
-        # Detach empty context token to restore the original context.
-        # Note: stop_invoke_agent/fail_invoke_agent already detached invocation.context_token,
-        # which restored to empty context. Now we detach empty_context_token to restore further.
-        otel_context.detach(empty_context_token)
-        _clear_client_managed_runs()
+        _clear_client_managed_runs(handler, client_managed_runs)
 
 
 class AssistantTurnTracker:
@@ -728,8 +1059,8 @@ class AssistantTurnTracker:
         # Add conversation_id (session_id) to LLM span attributes
         # This is a custom extension beyond standard GenAI semantic conventions
         if agent_invocation and agent_invocation.conversation_id:
-            llm_invocation.attributes["gen_ai.conversation.id"] = (
-                agent_invocation.conversation_id
+            _set_llm_session_id(
+                llm_invocation, agent_invocation.conversation_id
             )
 
         self.handler.start_llm(llm_invocation)
@@ -745,13 +1076,15 @@ class AssistantTurnTracker:
         self.current_llm_invocation = llm_invocation
         return llm_invocation
 
-    def add_assistant_output(self, parts: List[Any]) -> None:
+    def add_assistant_output(
+        self, parts: List[Any], finish_reason: str = "stop"
+    ) -> None:
         """Add output message parts to current LLM invocation."""
         if not self.current_llm_invocation or not parts:
             return
 
         output_msg = OutputMessage(
-            role="assistant", parts=list(parts), finish_reason="stop"
+            role="assistant", parts=list(parts), finish_reason=finish_reason
         )
         self.current_llm_invocation.output_messages.append(output_msg)
 
@@ -774,10 +1107,35 @@ class AssistantTurnTracker:
         if output_tokens is not None:
             target_invocation.output_tokens = output_tokens
 
+    def set_session_id(self, session_id: Optional[str]) -> None:
+        """Update the open LLM invocation with a late session id."""
+        target_invocation = self.current_llm_invocation
+        if target_invocation:
+            _set_llm_session_id(target_invocation, session_id)
+
+    def apply_model(self, model: str) -> None:
+        """Update an open or recently closed LLM invocation model if unknown."""
+        target_invocation = (
+            self.current_llm_invocation or self.last_closed_llm_invocation
+        )
+        if (
+            target_invocation
+            and _is_unknown_model(target_invocation.request_model)
+            and not _is_unknown_model(model)
+        ):
+            target_invocation.request_model = model
+
     def close_llm_turn(self) -> None:
         """Close the current LLM invocation span."""
         if self.current_llm_invocation:
             self.handler.stop_llm(self.current_llm_invocation)
+            self.last_closed_llm_invocation = self.current_llm_invocation
+            self.current_llm_invocation = None
+
+    def fail_llm_turn(self, error: Error) -> None:
+        """Fail the current LLM invocation span."""
+        if self.current_llm_invocation:
+            self.handler.fail_llm(self.current_llm_invocation, error)
             self.last_closed_llm_invocation = self.current_llm_invocation
             self.current_llm_invocation = None
 
@@ -798,6 +1156,7 @@ def wrap_claude_client_init(wrapped, instance, args, kwargs, handler=None):
 
     instance._otel_handler = handler
     instance._otel_prompt = None
+    instance._otel_session_id = None
 
     return result
 
@@ -808,6 +1167,10 @@ def wrap_claude_client_query(wrapped, instance, args, kwargs, handler=None):
         instance._otel_prompt = str(
             kwargs.get("prompt") or (args[0] if args else "")
         )
+        session_id = kwargs.get("session_id")
+        if session_id is None and len(args) > 1:
+            session_id = args[1]
+        instance._otel_session_id = session_id
 
     return wrapped(*args, **kwargs)
 
@@ -835,6 +1198,7 @@ async def wrap_claude_client_receive_response(
         handler=handler,
         model=model,
         prompt=prompt,
+        session_id=getattr(instance, "_otel_session_id", None),
     ):
         yield msg
 
@@ -852,11 +1216,13 @@ async def wrap_query(wrapped, instance, args, kwargs, handler=None):
 
     model = get_model_from_options_or_env(options)
     prompt_str = str(prompt) if isinstance(prompt, str) else ""
+    session_id = getattr(options, "resume", None) if options else None
 
     async for message in _process_agent_invocation_stream(
         wrapped(*args, **kwargs),
         handler=handler,
         model=model,
         prompt=prompt_str,
+        session_id=session_id,
     ):
         yield message

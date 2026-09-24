@@ -20,13 +20,14 @@ LoongSuite Release Build Script
 This script supports the following release modes:
 
 1. --build-pypi: Build packages for PyPI publishing
-   - loongsuite-util-genai (renamed from opentelemetry-util-genai)
+   - loongsuite-otel-util-genai (renamed from opentelemetry-util-genai)
    - loongsuite-distro
+   - loongsuite-site-bootstrap
    - loongsuite-instrumentation-* (each package under instrumentation-loongsuite/)
 
 2. --build-github-release: Build packages for GitHub Release (tar.gz)
-   - instrumentation-genai/ packages (renamed to loongsuite-*, depends on loongsuite-util-genai)
-   - instrumentation-loongsuite/ packages (depends on loongsuite-util-genai)
+   - instrumentation-genai/ packages (renamed to loongsuite-*, depends on loongsuite-otel-util-genai)
+   - instrumentation-loongsuite/ packages (depends on loongsuite-otel-util-genai)
 
 Version replacement:
 - --version: Sets version for all packages being built
@@ -34,7 +35,7 @@ Version replacement:
   (used in bootstrap_gen.py)
 
 Dependency replacement:
-- opentelemetry-util-genai -> loongsuite-util-genai (with ~= version spec)
+- opentelemetry-util-genai -> loongsuite-otel-util-genai (with ~= version spec)
 
 Package name replacement (for instrumentation-genai/):
 - opentelemetry-instrumentation-* -> loongsuite-instrumentation-*
@@ -145,7 +146,7 @@ def _patch_pyproject(pyproject_path: Path, modifications: Dict[str, Any]):
         modifications: Dict with optional keys:
             - "name": New package name (str)
             - "replace_dependency": Dict with "old_pattern" and "new_value"
-              e.g., {"old_pattern": "opentelemetry-util-genai", "new_value": "loongsuite-util-genai ~= 0.1.0"}
+              e.g., {"old_pattern": "opentelemetry-util-genai", "new_value": "loongsuite-otel-util-genai ~= 0.1.0"}
     """
     original_content = pyproject_path.read_text(encoding="utf-8")
     try:
@@ -201,8 +202,29 @@ def _patch_version_py(version_py_path: Path, new_version: str):
 
 
 def find_version_py(package_dir: Path) -> Optional[Path]:
-    """Find version.py file in package directory"""
-    for version_py in package_dir.rglob("version.py"):
+    """Find the version file used by the package build backend."""
+    pyproject_path = package_dir / "pyproject.toml"
+    if pyproject_path.exists():
+        try:
+            doc = tomlkit.parse(pyproject_path.read_text(encoding="utf-8"))
+            version_config = (
+                doc.get("tool", {}).get("hatch", {}).get("version", {})
+            )
+            version_path = version_config.get("path")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "Failed to read hatch version path from %s: %s",
+                pyproject_path,
+                exc,
+            )
+            version_path = None
+
+        if version_path:
+            candidate = package_dir / str(version_path)
+            if candidate.is_file():
+                return candidate
+
+    for version_py in sorted(package_dir.rglob("version.py")):
         if "site-packages" not in str(version_py):
             return version_py
     return None
@@ -271,8 +293,9 @@ def build_pypi_packages(
 ) -> List[Path]:
     """
     Build packages for PyPI:
-    - loongsuite-util-genai (renamed from opentelemetry-util-genai)
+    - loongsuite-otel-util-genai (renamed from opentelemetry-util-genai)
     - loongsuite-distro
+    - loongsuite-site-bootstrap
     - each loongsuite-instrumentation-* under instrumentation-loongsuite/
     """
     all_whl_files = []
@@ -280,19 +303,21 @@ def build_pypi_packages(
     skip_packages = skip_packages or set()
 
     util_ver = util_genai_version or version
-    util_dep_spec = f"loongsuite-util-genai ~= {util_ver}"
+    util_dep_spec = f"loongsuite-otel-util-genai ~= {util_ver}"
 
-    # 1. Build util/opentelemetry-util-genai as loongsuite-util-genai
+    # 1. Build util/opentelemetry-util-genai as loongsuite-otel-util-genai
     util_genai_dir = base_dir / "util" / "opentelemetry-util-genai"
     if (
         util_genai_dir.exists()
         and (util_genai_dir / "pyproject.toml").exists()
     ):
-        logger.info(f"Building loongsuite-util-genai (version {util_ver})...")
+        logger.info(
+            f"Building loongsuite-otel-util-genai (version {util_ver})..."
+        )
         version_py = find_version_py(util_genai_dir)
 
         modifications = {
-            "name": "loongsuite-util-genai",
+            "name": "loongsuite-otel-util-genai",
         }
 
         with _patch_pyproject(
@@ -324,7 +349,37 @@ def build_pypi_packages(
             all_whl_files.extend(whl_files)
             existing_whl_files.update(whl_files)
 
-    # 3. Build instrumentation-loongsuite/* (loongsuite-instrumentation-* on PyPI)
+    # 3. Build loongsuite-site-bootstrap
+    site_bootstrap_dir = base_dir / "loongsuite-site-bootstrap"
+    if (
+        site_bootstrap_dir.exists()
+        and (site_bootstrap_dir / "pyproject.toml").exists()
+    ):
+        logger.info(
+            f"Building loongsuite-site-bootstrap (version {version})..."
+        )
+        version_py = find_version_py(site_bootstrap_dir)
+        modifications = {
+            "replace_dependency": {
+                "old_pattern": "loongsuite-distro",
+                "new_value": f"loongsuite-distro ~= {version}",
+            },
+        }
+        with _patch_pyproject(
+            site_bootstrap_dir / "pyproject.toml", modifications
+        ):
+            with (
+                _patch_version_py(version_py, version)
+                if version_py
+                else nullcontext()
+            ):
+                whl_files = build_package(
+                    site_bootstrap_dir, dist_dir, existing_whl_files
+                )
+                all_whl_files.extend(whl_files)
+                existing_whl_files.update(whl_files)
+
+    # 4. Build instrumentation-loongsuite/* (loongsuite-instrumentation-* on PyPI)
     instrumentation_loongsuite_dir = base_dir / "instrumentation-loongsuite"
     if instrumentation_loongsuite_dir.exists():
         logger.info("Building instrumentation-loongsuite packages for PyPI...")
@@ -379,15 +434,15 @@ def build_github_release_packages(
 ) -> List[Path]:
     """
     Build packages for GitHub Release (tar.gz):
-    - instrumentation-genai/ (renamed to loongsuite-*, depends on loongsuite-util-genai)
-    - instrumentation-loongsuite/ (depends on loongsuite-util-genai)
+    - instrumentation-genai/ (renamed to loongsuite-*, depends on loongsuite-otel-util-genai)
+    - instrumentation-loongsuite/ (depends on loongsuite-otel-util-genai)
     """
     all_whl_files = []
     existing_whl_files = set(dist_dir.glob("*.whl"))
     skip_packages = skip_packages or set()
 
     util_ver = util_genai_version or version
-    util_dep_spec = f"loongsuite-util-genai ~= {util_ver}"
+    util_dep_spec = f"loongsuite-otel-util-genai ~= {util_ver}"
 
     # 1. Build instrumentation-genai/ packages
     instrumentation_genai_dir = base_dir / "instrumentation-genai"
@@ -572,8 +627,8 @@ Examples:
         "--build-pypi",
         action="store_true",
         help=(
-            "Build packages for PyPI (loongsuite-util-genai, loongsuite-distro, "
-            "instrumentation-loongsuite/*)"
+            "Build packages for PyPI (loongsuite-otel-util-genai, loongsuite-distro, "
+            "loongsuite-site-bootstrap, instrumentation-loongsuite/*)"
         ),
     )
     parser.add_argument(
@@ -600,7 +655,7 @@ Examples:
         "--util-genai-version",
         type=str,
         default=None,
-        help="Version for loongsuite-util-genai (default: same as --version)",
+        help="Version for loongsuite-otel-util-genai (default: same as --version)",
     )
 
     # Output
@@ -614,7 +669,12 @@ Examples:
     args = parser.parse_args()
 
     base_dir = args.base_dir.resolve()
-    dist_dir = args.dist_dir or (base_dir / "dist")
+    if args.dist_dir is None:
+        dist_dir = base_dir / "dist"
+    elif args.dist_dir.is_absolute():
+        dist_dir = args.dist_dir
+    else:
+        dist_dir = base_dir / args.dist_dir
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     # Clean old whl files
@@ -671,7 +731,7 @@ Examples:
 
         if github_whl_files:
             output_path = args.output or (
-                dist_dir / f"loongsuite-python-agent-{args.version}.tar.gz"
+                dist_dir / f"loongsuite-python-{args.version}.tar.gz"
             )
             create_tar_archive(github_whl_files, output_path)
             logger.info(f"GitHub Release tar: {output_path}")
@@ -687,7 +747,7 @@ Examples:
 
     if github_whl_files:
         logger.info(
-            f"GitHub Release tar ready: {dist_dir}/loongsuite-python-agent-{args.version}.tar.gz"
+            f"GitHub Release tar ready: {dist_dir}/loongsuite-python-{args.version}.tar.gz"
         )
 
 

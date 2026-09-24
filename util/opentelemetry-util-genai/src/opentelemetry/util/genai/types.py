@@ -226,6 +226,9 @@ class GenAIInvocation:
     context_token: ContextToken | None = None
     span: Span | None = None
     attributes: dict[str, Any] = field(default_factory=_new_str_any_dict)
+    _lifecycle_finalized: bool = field(
+        default=False, init=False, repr=False, compare=False
+    )
 
 
 @dataclass
@@ -278,6 +281,20 @@ class LLMInvocation(GenAIInvocation):
     seed: int | None = None
     server_address: str | None = None
     server_port: int | None = None
+    conversation_id: str | None = None  # LoongSuite Extension
+    """``gen_ai.conversation.id``."""
+    output_type: str | None = None  # LoongSuite Extension
+    """``gen_ai.output.type`` (e.g. text, json, image)."""
+    choice_count: int | None = None  # LoongSuite Extension
+    """``gen_ai.request.choice.count`` (omit on span when ``1``)."""
+    top_k: float | None = None  # LoongSuite Extension
+    """``gen_ai.request.top_k``."""
+    usage_cache_creation_input_tokens: int | None = (
+        None  # LoongSuite Extension
+    )
+    """``gen_ai.usage.cache_creation.input_tokens``."""
+    usage_cache_read_input_tokens: int | None = None  # LoongSuite Extension
+    """``gen_ai.usage.cache_read.input_tokens``."""
     # Monotonic start time in seconds (from timeit.default_timer) used
     # for duration calculations to avoid mixing clock sources. This is
     # populated by the TelemetryHandler when starting an invocation.

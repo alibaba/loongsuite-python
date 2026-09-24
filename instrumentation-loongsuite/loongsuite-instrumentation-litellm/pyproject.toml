@@ -41,18 +41,18 @@ instruments = [
 litellm = "opentelemetry.instrumentation.litellm:LiteLLMInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/open-telemetry/opentelemetry-python-contrib/tree/main/instrumentation/opentelemetry-instrumentation-litellm"
-Repository = "https://github.com/open-telemetry/opentelemetry-python-contrib"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-litellm"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/litellm/version.py"
 
 [tool.hatch.build.targets.sdist]
 include = [
+  "/examples",
   "/src",
   "/tests",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentelemetry"]
-

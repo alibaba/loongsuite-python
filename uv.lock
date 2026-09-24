@@ -3982,7 +3982,6 @@ name = "opentelemetry-util-genai"
 source = { editable = "util/opentelemetry-util-genai" }
 dependencies = [
     { name = "opentelemetry-api" },
-    { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-semantic-conventions" },
 ]
 
@@ -4009,7 +4008,6 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'multimodal-upload'" },
     { name = "numpy", marker = "extra == 'audio-conversion'" },
     { name = "opentelemetry-api", git = "https://github.com/open-telemetry/opentelemetry-python?subdirectory=opentelemetry-api&branch=main" },
-    { name = "opentelemetry-instrumentation", editable = "opentelemetry-instrumentation" },
     { name = "opentelemetry-semantic-conventions", git = "https://github.com/open-telemetry/opentelemetry-python?subdirectory=opentelemetry-semantic-conventions&branch=main" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
     { name = "soundfile", marker = "extra == 'audio-conversion'" },

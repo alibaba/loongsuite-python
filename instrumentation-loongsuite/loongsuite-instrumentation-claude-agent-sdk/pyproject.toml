@@ -28,6 +28,7 @@ dependencies = [
   "opentelemetry-api ~= 1.37",
   "opentelemetry-instrumentation ~= 0.58b0",
   "opentelemetry-semantic-conventions ~= 0.58b0",
+  "wrapt >= 1.0.0, < 2.0.0",
   # Note: opentelemetry-util-genai should be installed from local source
   # for extended features (ExtendedTelemetryHandler)
   "opentelemetry-util-genai",
@@ -42,8 +43,8 @@ instruments = [
 claude_agent_sdk = "opentelemetry.instrumentation.claude_agent_sdk:ClaudeAgentSDKInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/claude_agent_sdk/version.py"
@@ -61,4 +62,3 @@ packages = ["src/opentelemetry"]
 markers = [
   "requires_cli: marks tests that require Claude CLI executable (skipped in CI)",
 ]
-

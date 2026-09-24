@@ -1,0 +1,93 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen-turbo",
+        "parameters": {
+          "result_format": "message"
+        },
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Reply with exactly: dashscope plain message"
+            }
+          ]
+        }
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '168'
+      Content-Type:
+      - application/json
+      authorization:
+      - Bearer test_dashscope_api_key
+      user-agent:
+      - dashscope/1.23.6; python/3.13.12; platform/macOS-15.1.1-arm64-arm-64bit-Mach-O;
+        processor/arm
+    method: POST
+    uri: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  response:
+    body:
+      string: |-
+        {
+          "output": {
+            "choices": [
+              {
+                "finish_reason": "stop",
+                "message": {
+                  "content": "dashscope plain message",
+                  "role": "assistant"
+                }
+              }
+            ]
+          },
+          "usage": {
+            "input_tokens": 20,
+            "output_tokens": 4,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 24
+          },
+          "request_id": "19291c35-da65-9ab4-8cc7-abd7aefffa0a"
+        }
+    headers:
+      content-length:
+      - '276'
+      content-type:
+      - application/json
+      date:
+      - Fri, 08 May 2026 10:21:25 GMT
+      req-arrive-time:
+      - '1778235685437'
+      req-cost-time:
+      - '191'
+      resp-start-time:
+      - '1778235685629'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'true'
+      x-dashscope-timeout:
+      - '298'
+      x-envoy-upstream-service-time:
+      - '184'
+      x-request-id:
+      - 19291c35-da65-9ab4-8cc7-abd7aefffa0a
+    status:
+      code: 200
+      message: OK
+version: 1

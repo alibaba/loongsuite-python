@@ -1,17 +1,17 @@
-# OpenTelemetry LangChain Instrumentation
+# LoongSuite LangChain Instrumentation
 
-This package provides OpenTelemetry instrumentation for LangChain applications, allowing you to automatically trace and monitor your LangChain workflows. For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+This package provides LoongSuite instrumentation for LangChain applications, allowing you to automatically trace and monitor your LangChain workflows. For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installation
 
-### Install instrumentation with source code
+### Install instrumentation (recommended: root README Option C)
 
 ```bash
-git clone https://github.com/alibaba/loongsuite-python-agent.git
-cd loongsuite-python-agent
-pip install -e ./util/opentelemetry-util-genai
-pip install -e ./instrumentation-loongsuite/loongsuite-instrumentation-langchain
-pip install -e ./loongsuite-distro
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
+
+# Step 2 (Option C): install this instrumentation from PyPI
+pip install loongsuite-instrumentation-langchain
 ```
 
 ## RUN

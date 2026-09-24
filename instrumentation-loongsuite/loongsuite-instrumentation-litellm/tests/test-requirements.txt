@@ -20,7 +20,6 @@
 # with multiple other dependencies in the top-level "tox-loongsuite.ini"
 # file. In particular, please see:
 #
-#   loongsuite-litellm: {[testenv]test_deps}
 #   loongsuite-litellm: -r {toxinidir}/instrumentation-loongsuite/loongsuite-instrumentation-litellm/tests/test-requirements.txt
 #
 # This provides additional dependencies, namely:
@@ -42,6 +41,7 @@ pytest-asyncio
 openai
 opentelemetry-test-utils
 vcrpy
+aiohttp<3.12
 pytest-recording
 
 -e opentelemetry-instrumentation

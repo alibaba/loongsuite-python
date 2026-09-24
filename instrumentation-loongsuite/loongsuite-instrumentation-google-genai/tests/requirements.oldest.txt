@@ -1,0 +1,11 @@
+google-genai==1.32.0
+opentelemetry-api==1.37.0
+opentelemetry-sdk==1.37.0
+opentelemetry-instrumentation==0.58b0
+opentelemetry-semantic-conventions==0.58b0
+pytest
+pytest-asyncio
+pytest-vcr
+vcrpy
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-google-genai

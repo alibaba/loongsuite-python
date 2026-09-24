@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "LoongSuite CrewAI instrumentation"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.10,<4"
+requires-python = ">=3.10"
 authors = [
   { name = "Zhiyong Liu", email = "liuzhiyong.lzy@alibaba-inc.com" },
   { name = "OpenTelemetry Authors", email = "cncf-opentelemetry-contributors@lists.cncf.io" },
@@ -21,13 +21,14 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
   "opentelemetry-api >= 1.37.0",
   "opentelemetry-instrumentation >= 0.58b0",
   "opentelemetry-semantic-conventions >= 0.58b0",
   "wrapt >= 1.0.0, < 2.0.0",
-  "opentelemetry-util-genai >= 0.3b0.dev0",
+  "opentelemetry-util-genai",
 ]
 
 [project.optional-dependencies]
@@ -39,8 +40,8 @@ instruments = [
 crewai = "opentelemetry.instrumentation.crewai:CrewAIInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-crewai"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-crewai"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/crewai/version.py"
@@ -53,4 +54,3 @@ include = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentelemetry"]
-

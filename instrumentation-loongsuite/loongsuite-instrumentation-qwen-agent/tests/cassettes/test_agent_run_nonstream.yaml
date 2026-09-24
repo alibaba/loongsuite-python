@@ -1,0 +1,85 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen-max",
+        "parameters": {
+          "result_format": "message",
+          "incremental_output": true,
+          "seed": 993050835
+        },
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Say 'OK' and nothing else."
+            }
+          ]
+        }
+      }
+    headers:
+      Accept:
+      - text/event-stream
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '196'
+      Content-Type:
+      - application/json
+      X-Accel-Buffering:
+      - 'no'
+      X-DashScope-SSE:
+      - enable
+      authorization:
+      - Bearer test_dashscope_api_key
+      user-agent:
+      - dashscope/1.25.2; python/3.12.10; platform/macOS-15.1.1-arm64-arm-64bit; processor/arm;
+        incremental_to_full/0
+    method: POST
+    uri: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  response:
+    body:
+      string: |+
+        id:1
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"OK","role":"assistant"},"finish_reason":"null"}]},"usage":{"total_tokens":17,"output_tokens":1,"input_tokens":16,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"81fdbf28-1e5f-4c23-964c-0568e8684665"}
+
+        id:2
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"","role":"assistant"},"finish_reason":"stop"}]},"usage":{"total_tokens":17,"output_tokens":1,"input_tokens":16,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"81fdbf28-1e5f-4c23-964c-0568e8684665"}
+
+    headers:
+      content-type:
+      - text/event-stream;charset=UTF-8
+      date:
+      - Fri, 20 Mar 2026 02:22:37 GMT
+      req-arrive-time:
+      - '1773973357553'
+      req-cost-time:
+      - '523'
+      resp-start-time:
+      - '1773973358076'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'false'
+      x-dashscope-timeout:
+      - '298'
+      x-envoy-upstream-service-time:
+      - '515'
+      x-request-id:
+      - 81fdbf28-1e5f-4c23-964c-0568e8684665
+    status:
+      code: 200
+      message: OK
+version: 1

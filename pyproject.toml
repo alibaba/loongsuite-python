@@ -176,6 +176,34 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "docs/**/*.*" = ["A001"]
+# The benchmark integrations in PR #200 build fake optional dependency modules
+# inside tests and import several optional targets lazily inside patch paths.
+"instrumentation-loongsuite/loongsuite-instrumentation-algotune/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-algotune/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-bfclv4/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-bfclv4/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-claw-eval/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-claw-eval/src/opentelemetry/instrumentation/claw_eval/internal/wrappers.py" = ["E402"]
+"instrumentation-loongsuite/loongsuite-instrumentation-claw-eval/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-minisweagent/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-minisweagent/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-openhands/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-openhands/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-slop-code/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-slop-code/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-terminus2/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-terminus2/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-vita/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-vita/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-webarena/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-webarena/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-widesearch/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-widesearch/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-wildtool/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-wildtool/tests/**/*.py" = ["E402", "F811"]
+# Microsoft Agent Framework is an optional dependency and its internal modules
+# are imported lazily to keep auto-instrumentation usable when MAF is absent.
+"instrumentation-loongsuite/loongsuite-instrumentation-microsoft-agent-framework/**/*.py" = ["PLC0415"]
 
 [tool.ruff.lint.isort]
 detect-same-package = false # to not consider instrumentation packages as first-party

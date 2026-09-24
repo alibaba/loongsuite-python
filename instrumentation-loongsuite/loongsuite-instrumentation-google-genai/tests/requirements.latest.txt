@@ -1,0 +1,9 @@
+google-genai==1.47.0; python_version < "3.10"
+google-genai>=2.14.0,<3; python_version >= "3.10"
+pytest
+pytest-asyncio
+pytest-vcr
+vcrpy
+-e opentelemetry-instrumentation
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-google-genai

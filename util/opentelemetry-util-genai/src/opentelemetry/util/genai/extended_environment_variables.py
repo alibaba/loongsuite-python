@@ -134,3 +134,75 @@ Select multimodal pre-uploader hook name from entry point group
 ``opentelemetry_genai_multimodal_pre_uploader``.
 Defaults to ``fs`` when unset.
 """
+
+OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET = (
+    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET"
+)
+"""
+.. envvar:: OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET
+
+Deprecated and ignored by the ``presign`` uploader: the backing bucket is owned
+and decided by the server, so it cannot be selected by the agent. Use
+``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX`` to group an
+application's objects under a common path instead.
+"""
+
+OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX = (
+    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX"
+)
+"""
+.. envvar:: OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX
+
+Common path prefix applied to every multimodal object uploaded by this
+application, for example ``my-app`` or ``my-app/images``. Objects are then
+addressed as ``sls://{project}/{logstore}/{prefix}/{date}/{md5}.{ext}``.
+Optional; when unset objects are stored directly under the logstore.
+"""
+
+OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT = (
+    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT"
+)
+"""
+.. envvar:: OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT
+
+Override the endpoint used to request presigned multimodal upload URLs.
+Requires a base URL including its HTTP or HTTPS scheme, without a trailing
+slash (for example ``https://cn-hangzhou.log.aliyuncs.com``). The URL is used
+unchanged before appending the presign API path. A trailing slash produces a
+double slash in the request path, which the server may reject. When unset,
+the endpoint is resolved from the ARMS/SLS OneEndpoint state, which is only
+available when running under an ARMS agent.
+"""
+
+OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT = (
+    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT"
+)
+"""
+.. envvar:: OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT
+
+Timeout in seconds for presign requests and presigned uploads.
+Defaults to ``30``.
+"""
+
+OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY = (
+    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY"
+)
+"""
+.. envvar:: OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY
+
+License key authenticating presign requests. Falls back to ``ARMS_LICENSE_KEY``
+so applications already running under an ARMS agent need no extra
+configuration. Required by the ``presign`` uploader: without it the whole
+multimodal upload chain degrades to disabled.
+"""
+
+OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE = (
+    "OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE"
+)
+"""
+.. envvar:: OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE
+
+CMS workspace the multimodal objects belong to. Falls back to
+``ARMS_WORKSPACE``. Optional; the server derives a default workspace from the
+license key when omitted.
+"""

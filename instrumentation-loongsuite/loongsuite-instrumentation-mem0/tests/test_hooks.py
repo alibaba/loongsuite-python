@@ -38,7 +38,7 @@ from opentelemetry.instrumentation.mem0.internal._wrapper import (
 )
 from opentelemetry.instrumentation.mem0.types import set_memory_hooks
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.util.genai._extended_memory import MemoryInvocation
+from opentelemetry.util.genai.extended_memory import MemoryInvocation
 
 
 class _DummyTelemetryHandler:

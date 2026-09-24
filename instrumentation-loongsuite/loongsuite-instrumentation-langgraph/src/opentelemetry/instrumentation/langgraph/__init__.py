@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-LongSuite LangGraph instrumentation supporting ``langgraph >= 0.2``.
+LoongSuite LangGraph instrumentation supporting ``langgraph >= 0.2``.
 
 Usage
 -----

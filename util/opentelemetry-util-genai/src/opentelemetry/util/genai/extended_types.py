@@ -121,6 +121,11 @@ class ExecuteToolInvocation:
     tool_type: str | None = None  # function, extension, datastore
     tool_call_arguments: Any = None
     tool_call_result: Any = None
+    # Skill attributes (conditionally set when this tool execution loaded a skill)
+    skill_name: str | None = None
+    skill_id: str | None = None
+    skill_description: str | None = None
+    skill_version: str | None = None
     monotonic_start_s: float | None = None
 
 
@@ -183,6 +188,8 @@ class InvokeAgentInvocation:
     finish_reasons: List[str] | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    usage_cache_creation_input_tokens: int | None = None
+    usage_cache_read_input_tokens: int | None = None
     # Request parameters
     output_type: str | None = None
     choice_count: int | None = None
@@ -198,6 +205,8 @@ class InvokeAgentInvocation:
     server_port: int | None = None
     monotonic_start_s: float | None = None
     monotonic_end_s: float | None = None
+    monotonic_first_token_s: float | None = None
+    """Streaming: first-token time; TTFT attribute derived like ``LLMInvocation``."""
 
 
 @dataclass
@@ -261,4 +270,59 @@ class RerankInvocation:
     output_documents: Any = (
         None  # gen_ai.rerank.output_documents (optional, sensitive)
     )
+    monotonic_start_s: float | None = None
+
+
+@dataclass
+class EntryInvocation:
+    """
+    Represents a single AI application system entry invocation.
+
+    Entry identifies the call entry point to an AI application system.
+    Follows LoongSuite semantic conventions: gen_ai.span.kind=ENTRY,
+    gen_ai.operation.name=enter.
+
+    When creating an EntryInvocation object, only update the data attributes.
+    The span and context_token attributes are set by the TelemetryHandler.
+    """
+
+    context_token: ContextToken | None = None
+    span: Span | None = None
+    attributes: Dict[str, Any] = field(default_factory=_new_str_any_dict)
+    session_id: str | None = None  # gen_ai.session.id
+    user_id: str | None = None  # gen_ai.user.id
+    input_messages: List[InputMessage] = field(
+        default_factory=_new_input_messages
+    )
+    output_messages: List[OutputMessage] = field(
+        default_factory=_new_output_messages
+    )
+    system_instruction: List[MessagePart] = field(
+        default_factory=_new_system_instruction
+    )
+    tool_definitions: List[ToolDefinition] = field(
+        default_factory=_new_tool_definitions
+    )
+    response_time_to_first_token: int | None = None  # nanoseconds
+    monotonic_start_s: float | None = None
+
+
+@dataclass
+class ReactStepInvocation:
+    """
+    Represents a single ReAct step invocation.
+
+    ReAct Step identifies one Reasoning-Acting iteration in an Agent.
+    Follows LoongSuite semantic conventions: gen_ai.span.kind=STEP,
+    gen_ai.operation.name=react.
+
+    When creating a ReactStepInvocation object, only update the data attributes.
+    The span and context_token attributes are set by the TelemetryHandler.
+    """
+
+    context_token: ContextToken | None = None
+    span: Span | None = None
+    attributes: Dict[str, Any] = field(default_factory=_new_str_any_dict)
+    finish_reason: str | None = None  # gen_ai.react.finish_reason
+    round: int | None = None  # gen_ai.react.round, 1-based
     monotonic_start_s: float | None = None

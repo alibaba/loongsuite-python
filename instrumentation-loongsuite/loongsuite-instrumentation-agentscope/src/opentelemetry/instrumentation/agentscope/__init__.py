@@ -13,7 +13,7 @@
 # limitations under the License.
 
 """
-AgentScope instrumentation supporting `agentscope >= 1.0.0`.
+AgentScope instrumentation supporting `agentscope >= 1.0.0, < 3.0.0`.
 
 Usage
 -----
@@ -49,24 +49,21 @@ API
 from __future__ import annotations
 
 import logging
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as metadata_version
 from typing import Any, Collection
 
 from wrapt import wrap_function_wrapper
 
 from opentelemetry import trace as trace_api
-from opentelemetry.instrumentation.agentscope.package import _instruments
+from opentelemetry.instrumentation.agentscope.package import (
+    get_installed_instrumentation_dependencies,
+)
 from opentelemetry.instrumentation.agentscope.version import __version__
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.semconv.schemas import Schemas
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
-
-from ._wrapper import (
-    AgentScopeAgentWrapper,
-    AgentScopeChatModelWrapper,
-    AgentScopeEmbeddingModelWrapper,
-)
-from .patch import wrap_formatter_format, wrap_tool_call
 
 logger = logging.getLogger(__name__)
 
@@ -94,9 +91,10 @@ class AgentScopeInstrumentor(BaseInstrumentor):
         self._handler = (
             None  # ExtendedTelemetryHandler handles all other operations
         )
+        self._agentscope_major = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
-        return _instruments
+        return get_installed_instrumentation_dependencies()
 
     def _setup_tracing_patch(self, wrapped, instance, args, kwargs):
         """Replace setup_tracing with no-op to use OTEL instead."""
@@ -125,6 +123,23 @@ class AgentScopeInstrumentor(BaseInstrumentor):
             __version__,
             tracer_provider,
             schema_url=Schemas.V1_37_0.value,
+        )
+
+        self._agentscope_major = _get_agentscope_major()
+        if self._agentscope_major >= 2:
+            self._instrument_v2()
+        else:
+            self._instrument_v1()
+
+    def _instrument_v1(self) -> None:
+        from ._wrapper import (  # noqa: PLC0415
+            AgentScopeAgentWrapper,
+            AgentScopeChatModelWrapper,
+            AgentScopeEmbeddingModelWrapper,
+        )
+        from .patch import (  # noqa: PLC0415
+            wrap_formatter_format,
+            wrap_tool_call,
         )
 
         # Instrument ChatModelBase
@@ -224,21 +239,48 @@ class AgentScopeInstrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable AgentScope instrumentation."""
+        del kwargs
+        if self._agentscope_major is None:
+            self._agentscope_major = _get_agentscope_major()
+        if self._agentscope_major >= 2:
+            self._uninstrument_v2()
+        else:
+            self._uninstrument_v1()
+        self._handler = None
+        self._tracer = None
+        self._agentscope_major = None
+
+    def _uninstrument_v1(self) -> None:
         try:
-            AgentScopeChatModelWrapper.restore_original_methods()
-            logger.debug("Restored ChatModelBase methods")
+            from ._wrapper import (  # noqa: PLC0415
+                AgentScopeAgentWrapper,
+                AgentScopeChatModelWrapper,
+                AgentScopeEmbeddingModelWrapper,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to import AgentScope wrappers: {e}")
+            AgentScopeAgentWrapper = None
+            AgentScopeChatModelWrapper = None
+            AgentScopeEmbeddingModelWrapper = None
+
+        try:
+            if AgentScopeChatModelWrapper is not None:
+                AgentScopeChatModelWrapper.restore_original_methods()
+                logger.debug("Restored ChatModelBase methods")
         except Exception as e:
             logger.warning(f"Failed to restore ChatModelBase: {e}")
 
         try:
-            AgentScopeAgentWrapper.restore_original_methods()
-            logger.debug("Restored AgentBase methods")
+            if AgentScopeAgentWrapper is not None:
+                AgentScopeAgentWrapper.restore_original_methods()
+                logger.debug("Restored AgentBase methods")
         except Exception as e:
             logger.warning(f"Failed to restore AgentBase: {e}")
 
         try:
-            AgentScopeEmbeddingModelWrapper.restore_original_methods()
-            logger.debug("Restored EmbeddingModelBase methods")
+            if AgentScopeEmbeddingModelWrapper is not None:
+                AgentScopeEmbeddingModelWrapper.restore_original_methods()
+                logger.debug("Restored EmbeddingModelBase methods")
         except Exception as e:
             logger.warning(f"Failed to restore EmbeddingModelBase: {e}")
 
@@ -301,3 +343,52 @@ class AgentScopeInstrumentor(BaseInstrumentor):
             logger.warning(
                 f"Failed to uninstrument _check_tracing_enabled: {e}"
             )
+
+    def _instrument_v2(self) -> None:
+        from ._v2_middleware import (  # noqa: PLC0415
+            AgentScopeV2Middleware,
+            append_loongsuite_middleware,
+        )
+
+        try:
+
+            def wrap_agent_init(wrapped, instance, args, kwargs):
+                args, kwargs = append_loongsuite_middleware(
+                    args,
+                    kwargs,
+                    # Resolve the handler lazily so reinstrumentation uses the
+                    # current handler instead of the one captured at init time.
+                    AgentScopeV2Middleware(handler=lambda: self._handler),
+                )
+                return wrapped(*args, **kwargs)
+
+            wrap_function_wrapper(
+                module=_AGENT_MODULE,
+                name="Agent.__init__",
+                wrapper=wrap_agent_init,
+            )
+            logger.debug("Instrumented AgentScope v2 Agent")
+        except Exception as e:
+            logger.warning(f"Failed to instrument AgentScope v2 Agent: {e}")
+
+    def _uninstrument_v2(self) -> None:
+        try:
+            import agentscope.agent  # noqa: PLC0415
+
+            unwrap(agentscope.agent.Agent, "__init__")
+            logger.debug("Uninstrumented AgentScope v2 Agent")
+        except Exception as e:
+            logger.warning(f"Failed to uninstrument AgentScope v2 Agent: {e}")
+
+
+def _get_agentscope_major() -> int:
+    try:
+        installed_version = metadata_version("agentscope")
+    except PackageNotFoundError:
+        return 1
+
+    major_text = installed_version.split(".", 1)[0]
+    try:
+        return int(major_text)
+    except ValueError:
+        return 1

@@ -29,6 +29,7 @@ dependencies = [
   "opentelemetry-api ~= 1.37",
   "opentelemetry-instrumentation ~= 0.58b0",
   "opentelemetry-semantic-conventions ~= 0.58b0",
+  "wrapt >= 1.0.0, < 2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -53,8 +54,8 @@ test = [
 mcp = "opentelemetry.instrumentation.mcp:MCPInstrumentor"
 
 [project.urls]
-Homepage = "https://github.com/alibaba/loongsuite-python-agent/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-mcp"
-Repository = "https://github.com/alibaba/loongsuite-python-agent"
+Homepage = "https://github.com/alibaba/loongsuite-python/tree/main/instrumentation-loongsuite/loongsuite-instrumentation-mcp"
+Repository = "https://github.com/alibaba/loongsuite-python"
 
 [tool.hatch.version]
 path = "src/opentelemetry/instrumentation/mcp/version.py"

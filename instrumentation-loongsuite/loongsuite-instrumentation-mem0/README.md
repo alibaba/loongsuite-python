@@ -5,20 +5,19 @@
 Mem0 Python Agent provides observability for applications that use [Mem0](https://github.com/mem0ai/mem0) as a long‑term memory backend.  
 This document shows how to install the Mem0 instrumentation, how to run a simple example, and what telemetry data you can expect.  
 For details on usage and installation of LoongSuite and Jaeger, please refer to  
-[LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+[LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installing Mem0 Instrumentation
 
 ```bash
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
+
+# Step 2 (Option C): install this instrumentation from PyPI
 pip install loongsuite-instrumentation-mem0
+
+# Optional dependency for threading context propagation
 pip install opentelemetry-instrumentation-threading
-```
-
-If you have not installed OpenTelemetry yet, you can install a minimal setup with:
-
-```bash
-pip install opentelemetry-distro opentelemetry-exporter-otlp
-opentelemetry-bootstrap -a install
 ```
 
 ## Collect Data
@@ -56,24 +55,9 @@ export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
 export OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT=true
 ```
 
-### Option 1: Using opentelemetry-instrument
+### Recommended: Using loongsuite-instrument
 
-Mem0 instrumentation is automatically enabled via the standard OpenTelemetry auto‑instrumentation entry point:
-
-```bash
-opentelemetry-instrument \
-    --traces_exporter console \
-    python demo.py
-```
-
-If everything is working, you should see spans for:
-
-- Top‑level Mem0 operations (such as `add`, `search`, `update`, `delete`)
-- Optional internal phases (Vector Store, Graph Store, Reranker) when enabled
-
-### Option 2: Using loongsuite-instrument
-
-You can also start your application with `loongsuite-instrument` to forward data to LoongSuite/Jaeger:
+Start your application with `loongsuite-instrument` (recommended in root README):
 
 ```bash
 export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
@@ -141,7 +125,7 @@ Apache License 2.0
 ## Issues & Support
 
 If you encounter problems or have feature requests, please open an issue in the  
-[loongsuite-python-agent GitHub repository](https://github.com/alibaba/loongsuite-python-agent/issues).
+[loongsuite-python GitHub repository](https://github.com/alibaba/loongsuite-python/issues).
 
 ## Related Resources
 

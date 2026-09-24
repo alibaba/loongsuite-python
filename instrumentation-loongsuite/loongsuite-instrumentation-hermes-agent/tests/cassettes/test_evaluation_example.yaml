@@ -1,0 +1,512 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:51 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "请务必调用 mcp_demo_grade_candidate 工具做评估。reference 传 ENTRY > AGENT > STEP hierarchy with tools under the active step。candidate 传 The trace keeps ENTRY > AGENT > STEP hierarchy with tools under the active step.。rubric 传 exact_keyword_overlap。拿到结果后，只回复 verdict 字段，不要解释。"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_get_current_time",
+              "description": "Return the current time in ISO-8601 format for the requested timezone.",
+              "parameters": {
+                "properties": {
+                  "timezone": {
+                    "default": "UTC",
+                    "title": "Timezone",
+                    "type": "string"
+                  }
+                },
+                "title": "get_current_timeArguments",
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_get_prompt",
+              "description": "Get a prompt by name from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the prompt to retrieve"
+                  },
+                  "arguments": {
+                    "type": "object",
+                    "description": "Optional arguments to pass to the prompt"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_grade_candidate",
+              "description": "Grade a candidate answer using a deterministic keyword overlap check.",
+              "parameters": {
+                "properties": {
+                  "reference": {
+                    "title": "Reference",
+                    "type": "string"
+                  },
+                  "candidate": {
+                    "title": "Candidate",
+                    "type": "string"
+                  },
+                  "rubric": {
+                    "default": "exact_keyword_overlap",
+                    "title": "Rubric",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reference",
+                  "candidate"
+                ],
+                "title": "grade_candidateArguments",
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_list_prompts",
+              "description": "List available prompts from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_list_resources",
+              "description": "List available resources from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_read_resource",
+              "description": "Read a resource by URI from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "type": "string",
+                    "description": "URI of the resource to read"
+                  }
+                },
+                "required": [
+                  "uri"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_search_briefing",
+              "description": "Return a deterministic demo briefing answer for a query.",
+              "parameters": {
+                "properties": {
+                  "query": {
+                    "title": "Query",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "title": "search_briefingArguments",
+                "type": "object"
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '3037'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"candidate\": \"The trace keeps ENTRY > AGENT > STEP hierarchy with tools under the active step.\", \"reference\": \"ENTRY > AGENT > STEP hierarchy with tools under the active step\", \"rubric\": \"exact_keyword_overlap\"}",
+                      "name": "mcp_demo_grade_candidate"
+                    },
+                    "id": "call_38b6056b198d4861b097c1",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1777207860,
+          "id": "chatcmpl-dc5c606f-f2d3-906a-b69a-f8363c9753d4",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 64,
+            "prompt_tokens": 838,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 902
+          }
+        }
+    headers:
+      content-length:
+      - '702'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:51:01 GMT
+      req-arrive-time:
+      - '1777207860808'
+      req-cost-time:
+      - '781'
+      resp-start-time:
+      - '1777207861589'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '780'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:51 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "请务必调用 mcp_demo_grade_candidate 工具做评估。reference 传 ENTRY > AGENT > STEP hierarchy with tools under the active step。candidate 传 The trace keeps ENTRY > AGENT > STEP hierarchy with tools under the active step.。rubric 传 exact_keyword_overlap。拿到结果后，只回复 verdict 字段，不要解释。"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_38b6056b198d4861b097c1",
+                "type": "function",
+                "function": {
+                  "name": "mcp_demo_grade_candidate",
+                  "arguments": "{\"candidate\":\"The trace keeps ENTRY > AGENT > STEP hierarchy with tools under the active step.\",\"reference\":\"ENTRY > AGENT > STEP hierarchy with tools under the active step\",\"rubric\":\"exact_keyword_overlap\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"result\": \"{\\n  \\\"verdict\\\": \\\"PASS\\\"\\n}\", \"structuredContent\": {\"verdict\": \"PASS\"}}",
+            "tool_call_id": "call_38b6056b198d4861b097c1"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_get_current_time",
+              "description": "Return the current time in ISO-8601 format for the requested timezone.",
+              "parameters": {
+                "properties": {
+                  "timezone": {
+                    "default": "UTC",
+                    "title": "Timezone",
+                    "type": "string"
+                  }
+                },
+                "title": "get_current_timeArguments",
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_get_prompt",
+              "description": "Get a prompt by name from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the prompt to retrieve"
+                  },
+                  "arguments": {
+                    "type": "object",
+                    "description": "Optional arguments to pass to the prompt"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_grade_candidate",
+              "description": "Grade a candidate answer using a deterministic keyword overlap check.",
+              "parameters": {
+                "properties": {
+                  "reference": {
+                    "title": "Reference",
+                    "type": "string"
+                  },
+                  "candidate": {
+                    "title": "Candidate",
+                    "type": "string"
+                  },
+                  "rubric": {
+                    "default": "exact_keyword_overlap",
+                    "title": "Rubric",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "reference",
+                  "candidate"
+                ],
+                "title": "grade_candidateArguments",
+                "type": "object"
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_list_prompts",
+              "description": "List available prompts from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_list_resources",
+              "description": "List available resources from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {}
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_read_resource",
+              "description": "Read a resource by URI from MCP server 'demo'",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "uri": {
+                    "type": "string",
+                    "description": "URI of the resource to read"
+                  }
+                },
+                "required": [
+                  "uri"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "mcp_demo_search_briefing",
+              "description": "Return a deterministic demo briefing answer for a query.",
+              "parameters": {
+                "properties": {
+                  "query": {
+                    "title": "Query",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "title": "search_briefingArguments",
+                "type": "object"
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '3601'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "message": {
+                "content": "PASS",
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1777207861,
+          "id": "chatcmpl-9bd3a7d8-11ba-9c6f-b8fb-712c3bdf1a06",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 1,
+            "prompt_tokens": 942,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 943
+          }
+        }
+    headers:
+      content-length:
+      - '333'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:51:01 GMT
+      req-arrive-time:
+      - '1777207861718'
+      req-cost-time:
+      - '190'
+      resp-start-time:
+      - '1777207861908'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '190'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -19,6 +19,13 @@ import json as json_utils
 import pytest
 from dashscope import AioGeneration, Generation
 
+from opentelemetry.instrumentation.dashscope.utils import (
+    _create_invocation_from_generation,
+)
+from opentelemetry.instrumentation.dashscope.utils.common import (
+    DASHSCOPE_SERVER_ADDRESS,
+    DASHSCOPE_SERVER_PORT,
+)
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAIAttributes,
 )
@@ -30,6 +37,13 @@ def _safe_getattr(obj, attr, default=None):
         return getattr(obj, attr, default)
     except KeyError:
         return default
+
+
+def test_create_invocation_from_generation_uses_dashscope_server_constants():
+    invocation = _create_invocation_from_generation({"model": "qwen-turbo"})
+
+    assert invocation.server_address == DASHSCOPE_SERVER_ADDRESS
+    assert invocation.server_port == DASHSCOPE_SERVER_PORT
 
 
 def _assert_generation_span_attributes(
@@ -653,6 +667,72 @@ def test_generation_call_with_content_capture(
     )
 
     print("✓ Generation.call (with content capture) completed successfully")
+
+
+@pytest.mark.vcr()
+def test_generation_call_message_result_without_tool_calls_content_capture(
+    instrument_with_content, span_exporter
+):
+    """Test message-format text responses that omit the tool_calls field."""
+
+    messages = [
+        {
+            "role": "user",
+            "content": "Reply with exactly: dashscope plain message",
+        }
+    ]
+    response = Generation.call(
+        model="qwen-turbo",
+        messages=messages,
+        result_format="message",
+    )
+
+    assert response is not None
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1, f"Expected 1 span, got {len(spans)}"
+
+    span = spans[0]
+    output = _safe_getattr(response, "output", None)
+    choices = _safe_getattr(output, "choices", None) if output else None
+    finish_reason = None
+    if choices:
+        finish_reason = _safe_getattr(choices[0], "finish_reason", None)
+    if not finish_reason and output:
+        finish_reason = _safe_getattr(output, "finish_reason", None)
+
+    usage = _safe_getattr(response, "usage", None)
+    _assert_generation_span_attributes(
+        span,
+        request_model="qwen-turbo",
+        response_id=_safe_getattr(response, "request_id", None),
+        response_model=_safe_getattr(response, "model", None),
+        input_tokens=_safe_getattr(usage, "input_tokens", None)
+        if usage
+        else None,
+        output_tokens=_safe_getattr(usage, "output_tokens", None)
+        if usage
+        else None,
+        finish_reasons=[finish_reason] if finish_reason else None,
+        expect_input_messages=True,
+        expect_output_messages=True,
+    )
+
+    output_messages = span.attributes[GenAIAttributes.GEN_AI_OUTPUT_MESSAGES]
+    if isinstance(output_messages, str):
+        output_messages = json_utils.loads(output_messages)
+
+    assert len(output_messages) == 1
+    assert output_messages[0]["role"] == "assistant"
+    assert output_messages[0]["finish_reason"] == "stop"
+    assert output_messages[0]["parts"][0]["type"] == "text"
+    assert (
+        output_messages[0]["parts"][0]["content"] == "dashscope plain message"
+    )
+
+    print(
+        "✓ Generation.call (message result without tool_calls, content capture) completed successfully"
+    )
 
 
 @pytest.mark.vcr()

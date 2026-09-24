@@ -28,18 +28,16 @@ import logging
 from typing import Optional, Union
 
 from opentelemetry.trace import Span
-from opentelemetry.util.genai._extended_common import (
-    EntryInvocation,
-    ReactStepInvocation,
-)
-from opentelemetry.util.genai._extended_memory.memory_types import (
+from opentelemetry.util.genai.extended_memory.memory_types import (
     MemoryInvocation,
 )
 from opentelemetry.util.genai.extended_types import (
     CreateAgentInvocation,
     EmbeddingInvocation,
+    EntryInvocation,
     ExecuteToolInvocation,
     InvokeAgentInvocation,
+    ReactStepInvocation,
     RerankInvocation,
     RetrievalInvocation,
 )

@@ -25,8 +25,8 @@ This test suite validates the _FlowKickoffAsyncWrapper functionality including:
 import os
 
 # Set environment variables for content capture
-os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai"
-os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "span_only"
+os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai_latest_experimental"
+os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "SPAN_ONLY"
 
 # Forcefully enable experimental mode in OpenTelemetry's internal mapping
 try:
@@ -42,15 +42,25 @@ try:
 except (ImportError, AttributeError):
     pass
 
+import asyncio
 import json
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from opentelemetry.instrumentation.crewai import (
-    GenAIHookHelper,
+    _AgentExecuteTaskWrapper,
+    _CrewKickoffAsyncWrapper,
+    _CrewKickoffWrapper,
     _FlowKickoffAsyncWrapper,
+    _FlowKickoffWrapper,
+    _TaskExecuteSyncWrapper,
+    _ToolUseWrapper,
 )
-from opentelemetry.instrumentation.crewai.utils import gen_ai_json_dumps
+from opentelemetry.instrumentation.crewai.utils import (
+    extract_tool_inputs,
+    gen_ai_json_dumps,
+)
 from opentelemetry.sdk.trace import TracerProvider
 
 # Use SDK tracer for testing
@@ -59,6 +69,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 
 
 class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
@@ -72,11 +83,11 @@ class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
         self.tracer_provider.add_span_processor(
             SimpleSpanProcessor(self.memory_exporter)
         )
-        self.tracer = self.tracer_provider.get_tracer(__name__)
-
         # Create wrapper instance
-        self.helper = GenAIHookHelper()
-        self.wrapper = _FlowKickoffAsyncWrapper(self.tracer, self.helper)
+        self.handler = ExtendedTelemetryHandler(
+            tracer_provider=self.tracer_provider
+        )
+        self.wrapper = _FlowKickoffAsyncWrapper(self.handler)
 
     def tearDown(self):
         """Cleanup test resources."""
@@ -84,9 +95,8 @@ class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
 
     def test_wrapper_init(self):
         """Test wrapper initialization."""
-        wrapper = _FlowKickoffAsyncWrapper(self.tracer, self.helper)
-        self.assertEqual(wrapper._tracer, self.tracer)
-        self.assertEqual(wrapper._helper, self.helper)
+        wrapper = _FlowKickoffAsyncWrapper(self.handler)
+        self.assertEqual(wrapper._handler, self.handler)
 
     async def test_basic_flow_kickoff(self):
         """
@@ -118,11 +128,13 @@ class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(spans), 1)
 
         span = spans[0]
-        self.assertEqual(span.name, "test_flow")
+        self.assertEqual(span.name, "enter_ai_application_system")
+        self.assertEqual(span.attributes.get("gen_ai.operation.name"), "enter")
         self.assertEqual(
-            span.attributes.get("gen_ai.operation.name"), "crew.kickoff"
+            span.attributes.get("gen_ai.crewai.operation"), "flow.kickoff"
         )
-        self.assertEqual(span.attributes.get("gen_ai.system"), "crewai")
+        self.assertEqual(span.attributes.get("gen_ai.agent.name"), "test_flow")
+        self.assertEqual(span.attributes.get("gen_ai.provider.name"), "crewai")
 
         output_messages_json = span.attributes.get("gen_ai.output.messages")
         self.assertIsNotNone(output_messages_json)
@@ -153,9 +165,10 @@ class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(spans), 1)
 
         span = spans[0]
-        self.assertEqual(span.name, "flow.kickoff")
+        self.assertEqual(span.name, "enter_ai_application_system")
+        self.assertEqual(span.attributes.get("gen_ai.operation.name"), "enter")
         self.assertEqual(
-            span.attributes.get("gen_ai.operation.name"), "crew.kickoff"
+            span.attributes.get("gen_ai.crewai.operation"), "flow.kickoff"
         )
 
     async def test_flow_kickoff_with_inputs(self):
@@ -245,8 +258,8 @@ class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(spans), 1)
 
         span = spans[0]
-        self.assertEqual(span.name, "error_flow")
-        self.assertEqual(span.attributes.get("gen_ai.system"), "crewai")
+        self.assertEqual(span.name, "enter_ai_application_system")
+        self.assertEqual(span.attributes.get("gen_ai.provider.name"), "crewai")
 
         # Verify exception was recorded in events
         self.assertGreater(len(span.events), 0)
@@ -275,9 +288,10 @@ class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(spans), 1)
 
         span = spans[0]
-        self.assertEqual(span.name, "flow.kickoff")
+        self.assertEqual(span.name, "enter_ai_application_system")
+        self.assertEqual(span.attributes.get("gen_ai.operation.name"), "enter")
         self.assertEqual(
-            span.attributes.get("gen_ai.operation.name"), "crew.kickoff"
+            span.attributes.get("gen_ai.crewai.operation"), "flow.kickoff"
         )
 
     async def test_flow_kickoff_with_complex_result(self):
@@ -370,6 +384,443 @@ class TestFlowKickoffAsyncWrapper(unittest.IsolatedAsyncioTestCase):
 
         span = spans[0]
         self.assertEqual(span.kind, SpanKind.INTERNAL)
+
+
+class TestCrewKickoffWrapper(unittest.TestCase):
+    """Test _CrewKickoffWrapper class."""
+
+    def setUp(self):
+        """Setup test resources."""
+        self.memory_exporter = InMemorySpanExporter()
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
+            SimpleSpanProcessor(self.memory_exporter)
+        )
+        self.handler = ExtendedTelemetryHandler(
+            tracer_provider=self.tracer_provider
+        )
+        self.wrapper = _CrewKickoffWrapper(self.handler)
+
+    def tearDown(self):
+        """Cleanup test resources."""
+        self.memory_exporter.clear()
+
+    def test_crew_kickoff_records_token_usage(self):
+        """Test Crew.kickoff maps CrewAI token_usage onto the entry span."""
+        result = SimpleNamespace(
+            raw="final crew result",
+            token_usage=SimpleNamespace(
+                prompt_tokens=12,
+                completion_tokens=7,
+                total_tokens=19,
+                successful_requests=1,
+            ),
+        )
+        mock_wrapped = MagicMock(return_value=result)
+        crew = SimpleNamespace(
+            name="usage_crew",
+            process=SimpleNamespace(value="sequential"),
+            tasks=[object()],
+            agents=[object()],
+        )
+
+        returned = self.wrapper(
+            mock_wrapped,
+            crew,
+            (),
+            {"inputs": {"session_id": "sess-1", "user_id": "user-1"}},
+        )
+
+        self.assertIs(returned, result)
+        mock_wrapped.assert_called_once_with(
+            inputs={"session_id": "sess-1", "user_id": "user-1"}
+        )
+
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        span = spans[0]
+
+        self.assertEqual(span.name, "enter_ai_application_system")
+        self.assertEqual(span.attributes["gen_ai.operation.name"], "enter")
+        self.assertEqual(
+            span.attributes["gen_ai.crewai.operation"], "crew.kickoff"
+        )
+        self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 12)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 7)
+        self.assertEqual(span.attributes["gen_ai.usage.total_tokens"], 19)
+        self.assertEqual(
+            span.attributes["gen_ai.crewai.usage.successful_requests"], 1
+        )
+        self.assertEqual(span.status.status_code, StatusCode.OK)
+
+    def test_crew_kickoff_uses_next_nonzero_token_usage(self):
+        """Test token usage falls back when the first candidate is empty."""
+        result = SimpleNamespace(
+            raw="final crew result",
+            token_usage=SimpleNamespace(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            ),
+        )
+        crew = SimpleNamespace(
+            name="usage_crew",
+            process=SimpleNamespace(value="sequential"),
+            tasks=[object()],
+            agents=[object()],
+            token_usage=SimpleNamespace(
+                prompt_tokens=21,
+                completion_tokens=9,
+                total_tokens=30,
+            ),
+        )
+
+        self.wrapper(MagicMock(return_value=result), crew, (), {})
+
+        span = self.memory_exporter.get_finished_spans()[0]
+        self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 21)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 9)
+        self.assertEqual(span.attributes["gen_ai.usage.total_tokens"], 30)
+
+    def test_crew_kickoff_records_zero_token_usage(self):
+        """Test zero token usage is preserved when no nonzero candidate exists."""
+        result = SimpleNamespace(
+            raw="final crew result",
+            token_usage=SimpleNamespace(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+                successful_requests=1,
+            ),
+        )
+        crew = SimpleNamespace(name="usage_crew", tasks=[], agents=[])
+
+        self.wrapper(MagicMock(return_value=result), crew, (), {})
+
+        span = self.memory_exporter.get_finished_spans()[0]
+        self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 0)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 0)
+        self.assertEqual(span.attributes["gen_ai.usage.total_tokens"], 0)
+        self.assertEqual(
+            span.attributes["gen_ai.crewai.usage.successful_requests"], 1
+        )
+
+    def test_streaming_crew_kickoff_defers_to_inner_execution(self):
+        """Test stream=True kickoff traces CrewAI's inner real execution."""
+        crew = SimpleNamespace(
+            name="streaming_crew",
+            stream=True,
+            tasks=[],
+            agents=[],
+        )
+
+        def wrapped_stream(*args, **kwargs):
+            crew.stream = False
+            return self.wrapper(
+                MagicMock(return_value="inner result"), crew, args, kwargs
+            )
+
+        result = self.wrapper(wrapped_stream, crew, (), {})
+
+        self.assertEqual(result, "inner result")
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(
+            spans[0].attributes["gen_ai.crewai.operation"], "crew.kickoff"
+        )
+
+    def test_success_post_processing_failure_does_not_escape(self):
+        """Test telemetry post-processing failures do not fail user calls."""
+        crew = SimpleNamespace(name="safe_crew", tasks=[], agents=[])
+
+        with patch(
+            "opentelemetry.instrumentation.crewai.to_output_messages",
+            side_effect=RuntimeError("post boom"),
+        ):
+            result = self.wrapper(MagicMock(return_value="ok"), crew, (), {})
+
+        self.assertEqual(result, "ok")
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertNotEqual(spans[0].status.status_code, StatusCode.ERROR)
+
+    def test_entry_invocation_build_failure_preserves_user_call(self):
+        """Test invocation construction failures do not block user code."""
+        wrapped = MagicMock(return_value="ok")
+        crew = SimpleNamespace(name="safe_crew", tasks=[], agents=[])
+
+        with patch(
+            "opentelemetry.instrumentation.crewai.create_entry_invocation",
+            side_effect=RuntimeError("build boom"),
+        ):
+            result = self.wrapper(wrapped, crew, (), {})
+
+        self.assertEqual(result, "ok")
+        wrapped.assert_called_once_with()
+        self.assertEqual(len(self.memory_exporter.get_finished_spans()), 0)
+
+
+class TestEntryNestingGuards(unittest.IsolatedAsyncioTestCase):
+    """Test nested CrewAI entry wrappers emit only one entry span."""
+
+    def setUp(self):
+        self.memory_exporter = InMemorySpanExporter()
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
+            SimpleSpanProcessor(self.memory_exporter)
+        )
+        self.handler = ExtendedTelemetryHandler(
+            tracer_provider=self.tracer_provider
+        )
+
+    async def test_crew_kickoff_async_does_not_double_wrap_sync_kickoff(self):
+        """Test kickoff_async -> kickoff produces one entry span."""
+        sync_wrapper = _CrewKickoffWrapper(self.handler)
+        async_wrapper = _CrewKickoffAsyncWrapper(self.handler)
+
+        async def wrapped_async(*args, **kwargs):
+            return sync_wrapper(
+                MagicMock(return_value="inner result"),
+                SimpleNamespace(name="inner_crew", stream=False),
+                args,
+                kwargs,
+            )
+
+        result = await async_wrapper(
+            wrapped_async,
+            SimpleNamespace(name="outer_crew", stream=False),
+            (),
+            {"inputs": {"session_id": "nested-session"}},
+        )
+
+        self.assertEqual(result, "inner result")
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(
+            spans[0].attributes["gen_ai.agent.name"], "outer_crew"
+        )
+        self.assertEqual(
+            spans[0].attributes["gen_ai.crewai.operation"], "crew.kickoff"
+        )
+
+    def test_flow_kickoff_sync_does_not_double_wrap_async_kickoff(self):
+        """Test Flow.kickoff -> kickoff_async produces one entry span."""
+        sync_wrapper = _FlowKickoffWrapper(self.handler)
+        async_wrapper = _FlowKickoffAsyncWrapper(self.handler)
+
+        def wrapped_sync(*args, **kwargs):
+            async def run_inner():
+                return await async_wrapper(
+                    AsyncMock(return_value="flow result"),
+                    SimpleNamespace(name="inner_flow", stream=False),
+                    args,
+                    kwargs,
+                )
+
+            return asyncio.run(run_inner())
+
+        result = sync_wrapper(
+            wrapped_sync,
+            SimpleNamespace(name="outer_flow", stream=False),
+            (),
+            {"inputs": {"session_id": "flow-session"}},
+        )
+
+        self.assertEqual(result, "flow result")
+        spans = self.memory_exporter.get_finished_spans()
+        self.assertEqual(len(spans), 1)
+        self.assertEqual(
+            spans[0].attributes["gen_ai.agent.name"], "outer_flow"
+        )
+        self.assertEqual(
+            spans[0].attributes["gen_ai.crewai.operation"], "flow.kickoff"
+        )
+
+
+class TestTaskAndToolWrappers(unittest.TestCase):
+    """Test task and tool wrapper compatibility behavior."""
+
+    def setUp(self):
+        self.memory_exporter = InMemorySpanExporter()
+        self.tracer_provider = TracerProvider()
+        self.tracer_provider.add_span_processor(
+            SimpleSpanProcessor(self.memory_exporter)
+        )
+        self.handler = ExtendedTelemetryHandler(
+            tracer_provider=self.tracer_provider
+        )
+
+    def test_task_execute_uses_positional_agent_role_as_agent_name(self):
+        """Test Task.execute_sync(agent=...) uses the runtime agent role."""
+        wrapper = _TaskExecuteSyncWrapper(self.handler)
+        token_process = SimpleNamespace(
+            get_summary=MagicMock(
+                return_value=SimpleNamespace(
+                    prompt_tokens=17,
+                    completion_tokens=5,
+                    total_tokens=22,
+                    successful_requests=1,
+                )
+            )
+        )
+        agent = SimpleNamespace(role="Runtime Agent", llm="qwen-turbo")
+        agent._token_process = token_process
+        task = SimpleNamespace(
+            description="Write a short summary.",
+            expected_output="A short summary.",
+            agent=None,
+        )
+
+        wrapper(MagicMock(return_value="done"), task, (agent,), {})
+
+        span = self.memory_exporter.get_finished_spans()[0]
+        self.assertEqual(span.attributes["gen_ai.agent.name"], "Runtime Agent")
+        self.assertEqual(
+            span.attributes["gen_ai.crewai.operation"], "task.execute"
+        )
+        self.assertEqual(span.attributes["gen_ai.usage.input_tokens"], 17)
+        self.assertEqual(span.attributes["gen_ai.usage.output_tokens"], 5)
+        self.assertEqual(span.attributes["gen_ai.usage.total_tokens"], 22)
+
+    def test_agent_execute_preserves_user_call_when_handler_start_fails(self):
+        """Test instrumentation failures do not block user code."""
+        handler = SimpleNamespace(
+            start_invoke_agent=MagicMock(side_effect=RuntimeError("boom")),
+            stop_invoke_agent=MagicMock(),
+            fail_invoke_agent=MagicMock(),
+        )
+        wrapper = _AgentExecuteTaskWrapper(handler)
+        wrapped = MagicMock(return_value="agent result")
+        agent = SimpleNamespace(role="Runtime Agent", goal="Help", tools=[])
+        task = SimpleNamespace(description="Write a short summary.")
+
+        result = wrapper(wrapped, agent, (task,), {})
+
+        self.assertEqual(result, "agent result")
+        wrapped.assert_called_once_with(task)
+        handler.stop_invoke_agent.assert_not_called()
+        handler.fail_invoke_agent.assert_not_called()
+
+    def test_agent_execute_skips_inside_task_span(self):
+        """Test task execution does not create a duplicate agent span."""
+        task_wrapper = _TaskExecuteSyncWrapper(self.handler)
+        agent_wrapper = _AgentExecuteTaskWrapper(self.handler)
+        agent = SimpleNamespace(role="Runtime Agent", llm="qwen-turbo")
+        task = SimpleNamespace(
+            description="Write a short summary.",
+            expected_output="A short summary.",
+            agent=agent,
+        )
+
+        def wrapped_task(*args, **kwargs):
+            return agent_wrapper(
+                MagicMock(return_value="agent result"),
+                agent,
+                (task,),
+                {},
+            )
+
+        result = task_wrapper(wrapped_task, task, (agent,), {})
+
+        self.assertEqual(result, "agent result")
+        spans = self.memory_exporter.get_finished_spans()
+        task_spans = [
+            span
+            for span in spans
+            if span.attributes.get("gen_ai.crewai.operation") == "task.execute"
+        ]
+        agent_spans = [
+            span
+            for span in spans
+            if span.attributes.get("gen_ai.crewai.operation")
+            == "agent.execute"
+        ]
+        self.assertEqual(len(task_spans), 1)
+        self.assertEqual(len(agent_spans), 0)
+
+    def test_content_capture_disabled_drops_sensitive_task_content(self):
+        """Test content-like fields honor util-genai capture controls."""
+        wrapper = _TaskExecuteSyncWrapper(self.handler)
+        agent = SimpleNamespace(role="Runtime Agent", llm="qwen-turbo")
+        task = SimpleNamespace(
+            description="PII: customer id 123",
+            expected_output="PII: private answer",
+            agent=agent,
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"
+            },
+        ):
+            wrapper(MagicMock(return_value="PII: result"), task, (agent,), {})
+
+        span = self.memory_exporter.get_finished_spans()[0]
+        self.assertNotIn("gen_ai.input.messages", span.attributes)
+        self.assertNotIn("gen_ai.output.messages", span.attributes)
+        self.assertNotIn("gen_ai.agent.description", span.attributes)
+        self.assertNotIn("gen_ai.crewai.task.description", span.attributes)
+        self.assertNotIn("gen_ai.crewai.task.expected_output", span.attributes)
+
+    def test_tool_wrapper_marks_parsing_attempt_error(self):
+        """Test parsing-attempt overflow records a failed tool span."""
+        wrapper = _ToolUseWrapper(self.handler)
+        tool = SimpleNamespace(
+            name="failing_tool", description="A deterministic failing tool."
+        )
+        tool_usage = SimpleNamespace(_run_attempts=3, _max_parsing_attempts=2)
+
+        result = wrapper(
+            MagicMock(return_value="partial result"),
+            tool_usage,
+            (tool, SimpleNamespace(arguments={"x": "y"})),
+            {},
+        )
+
+        self.assertEqual(result, "partial result")
+        span = self.memory_exporter.get_finished_spans()[0]
+        self.assertEqual(span.status.status_code.name, "ERROR")
+        self.assertEqual(
+            span.attributes["gen_ai.crewai.operation"], "tool.execute"
+        )
+        self.assertIn(
+            "failing_tool", span.events[0].attributes["exception.message"]
+        )
+
+    def test_tool_wrapper_reads_crewai_use_signature_arguments(self):
+        """Test ToolUsage._use(tool_string, tool, calling) captures arguments."""
+        wrapper = _ToolUseWrapper(self.handler)
+        tool = SimpleNamespace(
+            name="word_count", description="A deterministic tool."
+        )
+        calling = SimpleNamespace(
+            id="call-1",
+            tool_name="word_count",
+            arguments={"text": "CrewAI telemetry"},
+        )
+
+        wrapper(
+            MagicMock(return_value="word_count=2"),
+            SimpleNamespace(),
+            ("word_count({})", tool, calling),
+            {},
+        )
+
+        span = self.memory_exporter.get_finished_spans()[0]
+        self.assertEqual(span.attributes["gen_ai.tool.name"], "word_count")
+        self.assertIn(
+            "CrewAI telemetry",
+            span.attributes["gen_ai.tool.call.arguments"],
+        )
+
+    def test_extract_tool_inputs_keeps_json_string_arguments(self):
+        """Test legacy helper keeps JSON-stringified tool arguments."""
+        messages = extract_tool_inputs("tool_name", {"location": "Hangzhou"})
+
+        tool_call = messages[0].parts[0]
+        self.assertEqual(tool_call.name, "tool_name")
+        self.assertEqual(tool_call.arguments, '{"location":"Hangzhou"}')
 
 
 class TestGenAiJsonDumps(unittest.TestCase):

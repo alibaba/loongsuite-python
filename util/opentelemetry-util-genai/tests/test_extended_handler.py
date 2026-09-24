@@ -26,10 +26,6 @@ from opentelemetry import baggage as baggage_api
 from opentelemetry import context as context_api
 from opentelemetry import trace
 from opentelemetry.baggage import get_all as get_all_baggage
-from opentelemetry.instrumentation._semconv import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
-)
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (  # pylint: disable=no-name-in-module
     InMemoryLogRecordExporter,
@@ -50,28 +46,16 @@ from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.trace.status import StatusCode
-from opentelemetry.util.genai._extended_common import (
-    EntryInvocation,
-    ReactStepInvocation,
-)
-from opentelemetry.util.genai._extended_semconv.gen_ai_extended_attributes import (
-    GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
-    GEN_AI_REACT_FINISH_REASON,
-    GEN_AI_REACT_ROUND,
-    GEN_AI_RERANK_DOCUMENTS_COUNT,
-    GEN_AI_RETRIEVAL_DOCUMENTS,
-    GEN_AI_RETRIEVAL_QUERY_TEXT,
-    GEN_AI_SESSION_ID,
-    GEN_AI_SPAN_KIND,
-    GEN_AI_TOOL_CALL_ARGUMENTS,
-    GEN_AI_TOOL_CALL_RESULT,
-    GEN_AI_USAGE_TOTAL_TOKENS,
-    GEN_AI_USER_ID,
-    GenAiSpanKindValues,
+from opentelemetry.util.genai._configuration import (
+    OTEL_SEMCONV_STABILITY_OPT_IN,
+    is_experimental_mode,
 )
 from opentelemetry.util.genai._multimodal_processing import (
     MultimodalProcessingMixin,
     _MultimodalAsyncTask,
+)
+from opentelemetry.util.genai._multimodal_upload.config import (  # pylint: disable=no-name-in-module
+    update_multimodal_runtime_config,
 )
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
@@ -81,11 +65,32 @@ from opentelemetry.util.genai.extended_handler import (
     ExtendedTelemetryHandler,
     get_extended_telemetry_handler,
 )
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
+    GEN_AI_EMBEDDINGS_DIMENSION_COUNT,
+    GEN_AI_REACT_FINISH_REASON,
+    GEN_AI_REACT_ROUND,
+    GEN_AI_RERANK_DOCUMENTS_COUNT,
+    GEN_AI_RETRIEVAL_DOCUMENTS,
+    GEN_AI_RETRIEVAL_QUERY_TEXT,
+    GEN_AI_SESSION_ID,
+    GEN_AI_SKILL_DESCRIPTION,
+    GEN_AI_SKILL_ID,
+    GEN_AI_SKILL_NAME,
+    GEN_AI_SKILL_VERSION,
+    GEN_AI_SPAN_KIND,
+    GEN_AI_TOOL_CALL_ARGUMENTS,
+    GEN_AI_TOOL_CALL_RESULT,
+    GEN_AI_USAGE_TOTAL_TOKENS,
+    GEN_AI_USER_ID,
+    GenAiSpanKindValues,
+)
 from opentelemetry.util.genai.extended_types import (
     CreateAgentInvocation,
     EmbeddingInvocation,
+    EntryInvocation,
     ExecuteToolInvocation,
     InvokeAgentInvocation,
+    ReactStepInvocation,
     RerankInvocation,
     RetrievalDocument,
     RetrievalInvocation,
@@ -101,6 +106,12 @@ from opentelemetry.util.genai.types import (
     Text,
     Uri,
 )
+
+from ._multimodal_upload.multimodal_test_helpers import (
+    reset_multimodal_runtime_state_for_test,
+)
+
+_AGENT_NAME_BAGGAGE_KEY = "gen_ai.agent.name"
 
 
 def patch_env_vars(
@@ -122,8 +133,8 @@ def patch_env_vars(
         @patch.dict(os.environ, env_vars)
         def wrapper(*args, **kwargs):
             # Reset state.
-            _OpenTelemetrySemanticConventionStability._initialized = False
-            _OpenTelemetrySemanticConventionStability._initialize()
+            is_experimental_mode.cache_clear()
+            is_experimental_mode()
             return test_case(*args, **kwargs)
 
         return wrapper
@@ -469,6 +480,82 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
             },
         )
 
+    def test_execute_tool_writes_skill_attributes(self):
+        with self.telemetry_handler.execute_tool() as invocation:
+            invocation.tool_name = "read_file"
+            invocation.skill_name = "news"
+            invocation.skill_id = "workspace:default:news"
+            invocation.skill_description = "Latest news"
+            invocation.skill_version = "1.0"
+
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+        _assert_span_attributes(
+            span_attrs,
+            {
+                GenAI.GEN_AI_OPERATION_NAME: "execute_tool",
+                GenAI.GEN_AI_TOOL_NAME: "read_file",
+                GEN_AI_SKILL_NAME: "news",
+                GEN_AI_SKILL_ID: "workspace:default:news",
+                GEN_AI_SKILL_DESCRIPTION: "Latest news",
+                GEN_AI_SKILL_VERSION: "1.0",
+            },
+        )
+
+    def test_execute_tool_skips_empty_skill_attributes(self):
+        with self.telemetry_handler.execute_tool() as invocation:
+            invocation.tool_name = "read_file"
+
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+
+        self.assertNotIn(GEN_AI_SKILL_NAME, span_attrs)
+        self.assertNotIn(GEN_AI_SKILL_ID, span_attrs)
+        self.assertNotIn(GEN_AI_SKILL_DESCRIPTION, span_attrs)
+        self.assertNotIn(GEN_AI_SKILL_VERSION, span_attrs)
+
+    def test_execute_tool_skips_blank_skill_attributes(self):
+        with self.telemetry_handler.execute_tool() as invocation:
+            invocation.tool_name = "read_file"
+            invocation.skill_name = ""
+            invocation.skill_id = "   "
+            invocation.skill_description = "\t"
+            invocation.skill_version = "\n"
+
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+
+        self.assertNotIn(GEN_AI_SKILL_NAME, span_attrs)
+        self.assertNotIn(GEN_AI_SKILL_ID, span_attrs)
+        self.assertNotIn(GEN_AI_SKILL_DESCRIPTION, span_attrs)
+        self.assertNotIn(GEN_AI_SKILL_VERSION, span_attrs)
+
+    def test_execute_tool_skill_fields_override_custom_attributes(self):
+        with self.telemetry_handler.execute_tool() as invocation:
+            invocation.tool_name = "read_file"
+            invocation.skill_name = "news"
+            invocation.skill_id = "workspace:default:news"
+            invocation.skill_description = "Latest news"
+            invocation.skill_version = "1.0"
+            invocation.attributes = {
+                GEN_AI_SKILL_NAME: "custom-name",
+                GEN_AI_SKILL_ID: "custom-id",
+                GEN_AI_SKILL_DESCRIPTION: "custom-description",
+                GEN_AI_SKILL_VERSION: "custom-version",
+            }
+
+        span = _get_single_span(self.span_exporter)
+        span_attrs = _get_span_attributes(span)
+        _assert_span_attributes(
+            span_attrs,
+            {
+                GEN_AI_SKILL_NAME: "news",
+                GEN_AI_SKILL_ID: "workspace:default:news",
+                GEN_AI_SKILL_DESCRIPTION: "Latest news",
+                GEN_AI_SKILL_VERSION: "1.0",
+            },
+        )
+
     # ==================== Invoke Agent Tests ====================
 
     def test_invoke_agent_start_and_stop_creates_span(self):
@@ -553,6 +640,128 @@ class TestExtendedTelemetryHandler(unittest.TestCase):  # pylint: disable=too-ma
             },
         )
         # Note: total_tokens is not set when only input_tokens is available
+
+    def test_invoke_agent_propagates_agent_name_baggage(self):
+        invocation = InvokeAgentInvocation(
+            provider="test-provider",
+            agent_name="BaggageAgent",
+        )
+
+        self.telemetry_handler.start_invoke_agent(invocation)
+        try:
+            current_baggage = get_all_baggage()
+            self.assertEqual(
+                current_baggage.get(_AGENT_NAME_BAGGAGE_KEY),
+                "BaggageAgent",
+            )
+        finally:
+            self.telemetry_handler.stop_invoke_agent(invocation)
+
+        restored_baggage = get_all_baggage()
+        self.assertNotIn(_AGENT_NAME_BAGGAGE_KEY, restored_baggage)
+
+    def test_nested_invoke_agent_baggage_overrides_and_restores(self):
+        parent_invocation = InvokeAgentInvocation(
+            provider="test-provider",
+            agent_name="ParentAgent",
+        )
+        child_invocation = InvokeAgentInvocation(
+            provider="test-provider",
+            agent_name="ChildAgent",
+        )
+
+        self.telemetry_handler.start_invoke_agent(parent_invocation)
+        try:
+            self.assertEqual(
+                get_all_baggage().get(_AGENT_NAME_BAGGAGE_KEY),
+                "ParentAgent",
+            )
+
+            self.telemetry_handler.start_invoke_agent(child_invocation)
+            try:
+                self.assertEqual(
+                    get_all_baggage().get(_AGENT_NAME_BAGGAGE_KEY),
+                    "ChildAgent",
+                )
+            finally:
+                self.telemetry_handler.stop_invoke_agent(child_invocation)
+
+            self.assertEqual(
+                get_all_baggage().get(_AGENT_NAME_BAGGAGE_KEY),
+                "ParentAgent",
+            )
+        finally:
+            self.telemetry_handler.stop_invoke_agent(parent_invocation)
+
+        restored_baggage = get_all_baggage()
+        self.assertNotIn(_AGENT_NAME_BAGGAGE_KEY, restored_baggage)
+
+    def test_agent_context_colors_llm_and_tool_spans(self):
+        agent_invocation = InvokeAgentInvocation(
+            provider="test-provider",
+            agent_name="PlannerAgent",
+        )
+
+        self.telemetry_handler.start_invoke_agent(agent_invocation)
+        try:
+            llm_invocation = LLMInvocation(
+                provider="openai",
+                request_model="gpt-4o-mini",
+            )
+            self.telemetry_handler.start_llm(llm_invocation)
+            self.telemetry_handler.stop_llm(llm_invocation)
+
+            tool_invocation = ExecuteToolInvocation(tool_name="search")
+            self.telemetry_handler.start_execute_tool(tool_invocation)
+            self.telemetry_handler.stop_execute_tool(tool_invocation)
+        finally:
+            self.telemetry_handler.stop_invoke_agent(agent_invocation)
+
+        spans = self.span_exporter.get_finished_spans()
+        llm_span = next(
+            span for span in spans if span.name == "chat gpt-4o-mini"
+        )
+        tool_span = next(
+            span for span in spans if span.name == "execute_tool search"
+        )
+        self.assertEqual(
+            llm_span.attributes.get(GenAI.GEN_AI_AGENT_NAME),
+            "PlannerAgent",
+        )
+        self.assertEqual(
+            tool_span.attributes.get(GenAI.GEN_AI_AGENT_NAME),
+            "PlannerAgent",
+        )
+
+    def test_explicit_agent_parent_context_colors_llm_span(self):
+        agent_invocation = InvokeAgentInvocation(
+            provider="test-provider",
+            agent_name="ExplicitParentAgent",
+        )
+
+        self.telemetry_handler.start_invoke_agent(agent_invocation)
+        try:
+            parent_context = context_api.get_current()
+            llm_invocation = LLMInvocation(
+                provider="openai",
+                request_model="gpt-4o-mini",
+            )
+            self.telemetry_handler.start_llm(
+                llm_invocation,
+                context=parent_context,
+            )
+            self.telemetry_handler.stop_llm(llm_invocation)
+        finally:
+            self.telemetry_handler.stop_invoke_agent(agent_invocation)
+
+        spans = self.span_exporter.get_finished_spans()
+        llm_span = next(
+            span for span in spans if span.name == "chat gpt-4o-mini"
+        )
+        self.assertEqual(
+            llm_span.attributes.get(GenAI.GEN_AI_AGENT_NAME),
+            "ExplicitParentAgent",
+        )
 
     def test_invoke_agent_error_handling(self):
         class AgentInvocationError(RuntimeError):
@@ -1383,10 +1592,12 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         # Reset class-level state before each test
         MultimodalProcessingMixin._async_queue = None
         MultimodalProcessingMixin._async_worker = None
+        reset_multimodal_runtime_state_for_test()
 
     def tearDown(self):
         MultimodalProcessingMixin._async_queue = None
         MultimodalProcessingMixin._async_worker = None
+        reset_multimodal_runtime_state_for_test()
 
     @staticmethod
     def _create_mock_handler(enabled=True):
@@ -1431,6 +1642,8 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
 
     def test_quick_has_multimodal_orthogonal_cases(self):
         """Test _quick_has_multimodal with all multimodal types and edge cases."""
+        # Detection respects upload_mode; enable both sides for this case matrix.
+        update_multimodal_runtime_config(upload_mode="both")
         mixin = MultimodalProcessingMixin
 
         # No multimodal: Text only
@@ -1583,8 +1796,9 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         os.environ,
         {"OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE": "none"},
     )
-    def test_init_multimodal_disabled_when_mode_none(self):
-        """Test _init_multimodal with mode=none."""
+    def test_init_multimodal_mode_none_gated_at_process_time(self):
+        """_init_multimodal stays enabled; upload_mode=none gates at process time."""
+        reset_multimodal_runtime_state_for_test()
 
         class Handler(MultimodalProcessingMixin):
             def _get_uploader_and_pre_uploader(self):
@@ -1592,31 +1806,97 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
 
         handler = Handler()
         handler._init_multimodal()
-        self.assertFalse(handler._multimodal_enabled)
+        self.assertTrue(handler._multimodal_enabled)
+
+        inv = self._create_invocation_with_multimodal(with_context=True)
+        self.assertFalse(
+            handler.process_multimodal_stop(inv, method="stop_llm")  # pylint: disable=unexpected-keyword-arg
+        )
 
     @patch_env_vars(
         "gen_ai_latest_experimental",
         content_capturing="SPAN_ONLY",
         OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE="both",
     )
-    def test_init_multimodal_enabled_or_disabled_by_uploader(self):
-        """Test _init_multimodal enabled when uploader available, disabled when None."""
+    def test_init_multimodal_always_enabled(self):
+        """_init_multimodal always enables; uploader availability is resolved later."""
+        reset_multimodal_runtime_state_for_test()
 
         class HandlerWithUploader(MultimodalProcessingMixin):
+            def __init__(self):
+                self._logger = MagicMock()
+
             def _get_uploader_and_pre_uploader(self):
                 return MagicMock(), MagicMock()
+
+            def _record_llm_metrics(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
 
         h1 = HandlerWithUploader()
         h1._init_multimodal()
         self.assertTrue(h1._multimodal_enabled)
 
         class HandlerWithoutUploader(MultimodalProcessingMixin):
+            def __init__(self):
+                self._logger = MagicMock()
+
             def _get_uploader_and_pre_uploader(self):
                 return None, None
 
+            def _record_llm_metrics(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
         h2 = HandlerWithoutUploader()
         h2._init_multimodal()
-        self.assertFalse(h2._multimodal_enabled)
+        self.assertTrue(h2._multimodal_enabled)
+
+        # Runtime entry is not gated by uploader availability.
+        inv = self._create_invocation_with_multimodal(with_context=True)
+        self.assertTrue(h1._should_async_process(inv))
+        self.assertTrue(h2._should_async_process(inv))
+
+        # Runtime async path: with uploader pair → upload; without → skip
+        # upload but still finish the span.
+        mock_span = MagicMock()
+        mock_span._start_time = 1000000000
+        async_inv = LLMInvocation(request_model="gpt-4")
+        async_inv.span = mock_span
+        async_inv.input_messages = inv.input_messages
+
+        with patch.object(h1, "_upload_and_set_metadata") as mock_upload:
+            with patch(
+                "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
+            ):
+                with patch(
+                    "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+                ):
+                    h1._async_stop_llm(
+                        _MultimodalAsyncTask(
+                            invocation=async_inv,
+                            method="stop_llm",
+                            handler=h1,
+                        )
+                    )
+                    mock_upload.assert_called_once()
+                    mock_span.end.assert_called_once()
+
+        mock_span.reset_mock()
+        with patch.object(h2, "_upload_and_set_metadata") as mock_upload2:
+            with patch(
+                "opentelemetry.util.genai._multimodal_processing._apply_llm_finish_attributes"
+            ):
+                with patch(
+                    "opentelemetry.util.genai._multimodal_processing._maybe_emit_llm_event"
+                ):
+                    h2._async_stop_llm(
+                        _MultimodalAsyncTask(
+                            invocation=async_inv,
+                            method="stop_llm",
+                            handler=h2,
+                        )
+                    )
+                    mock_upload2.assert_not_called()
+                    mock_span.end.assert_called_once()
 
     # ==================== process_multimodal_stop/fail Tests ====================
 
@@ -1669,6 +1949,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
     )
     def test_process_multimodal_fallback_on_queue_issues(self):
         """Test process_multimodal_stop/fail uses fallback when queue is None or full."""
+        reset_multimodal_runtime_state_for_test()
         handler = self._create_mock_handler()
         inv = self._create_invocation_with_multimodal(with_context=True)
         error = Error(message="err", type=RuntimeError)
@@ -1713,6 +1994,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
     )
     def test_process_multimodal_enqueues_task(self):
         """Test process_multimodal_stop/fail enqueues tasks correctly."""
+        reset_multimodal_runtime_state_for_test()
         handler = self._create_mock_handler()
         error = Error(message="err", type=RuntimeError)
 
@@ -2149,7 +2431,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         inv = LLMInvocation(request_model="gpt-4")
 
         handler._separate_and_upload(
-            mock_span, inv, mock_uploader, mock_pre_uploader
+            mock_span, inv, mock_uploader, mock_pre_uploader, None
         )
         mock_pre_uploader.pre_upload.assert_called_once()
         self.assertEqual(mock_uploader.upload.call_count, 2)
@@ -2158,7 +2440,7 @@ class TestMultimodalProcessingMixin(  # pylint: disable=too-many-public-methods
         mock_span2 = MagicMock()
         mock_span2.get_span_context.side_effect = RuntimeError("err")
         handler._separate_and_upload(
-            mock_span2, inv, mock_uploader, mock_pre_uploader
+            mock_span2, inv, mock_uploader, mock_pre_uploader, None
         )  # Should not raise
 
 

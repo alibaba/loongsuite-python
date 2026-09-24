@@ -1,6 +1,6 @@
-# OpenTelemetry AgentScope Instrumentation
+# LoongSuite AgentScope Instrumentation
 
-OpenTelemetry instrumentation for [AgentScope](https://github.com/agentscope-ai/agentscope) framework.
+LoongSuite instrumentation for [AgentScope](https://github.com/agentscope-ai/agentscope) framework.
 
 ## Features
 
@@ -13,16 +13,14 @@ OpenTelemetry instrumentation for [AgentScope](https://github.com/agentscope-ai/
 ## Installation
 
 ```bash
-pip install opentelemetry-distro opentelemetry-exporter-otlp
-opentelemetry-bootstrap -a install
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
 
+# Step 2 (Option C): install this instrumentation from PyPI
+pip install loongsuite-instrumentation-agentscope
+
+# Optional app dependency
 pip install agentscope
-
-# Install this instrumentation
-pip install ./instrumentation-loongsuite/loongsuite-instrumentation-agentscope
-
-# Note: This instrumentation uses ExtendedTelemetryHandler from opentelemetry-util-genai
-pip install ./util/opentelemetry-util-genai
 ```
 
 ## Usage
@@ -30,7 +28,7 @@ pip install ./util/opentelemetry-util-genai
 ### Auto-instrumentation
 
 ```bash
-opentelemetry-instrument \
+loongsuite-instrument \
     --traces_exporter console \
     --metrics_exporter console \
     python your_agentscope_app.py
@@ -62,7 +60,7 @@ export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=<trace_endpoint>
 export OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=<metrics_endpoint>
 
-opentelemetry-instrument python your_app.py
+loongsuite-instrument python your_app.py
 ```
 
 ### Content Capture
@@ -94,6 +92,34 @@ export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT
 - **Tools**: Toolkit.call_tool_function
 - **Formatters**: TruncatedFormatterBase.format
 
+### Skill metadata on tool spans
+
+When a tool execution reads the top-level `SKILL.md` of a skill already
+registered in `toolkit.skills`, AgentScope enriches that `execute_tool` span
+with:
+
+- `gen_ai.skill.name`
+- `gen_ai.skill.id`
+- `gen_ai.skill.description`
+- `gen_ai.skill.version`
+
+AgentScope v2 exposes skill loading through its built-in `Skill` viewer tool.
+The v2 middleware records the requested `skill` argument as
+`gen_ai.skill.name` and `gen_ai.skill.id`; when QwenPaw or AgentScope exposes
+the registered skill directory, it also resolves the available description,
+workspace-scoped id, and version metadata.
+
+The matching is intentionally conservative:
+
+- only registered skills can match
+- only the top-level `SKILL.md` counts as a skill load
+- reads under other paths such as `scripts/` or `references/` do not emit
+  `gen_ai.skill.*`
+
+For CoPaw-style workspace layouts, `gen_ai.skill.version` is resolved from
+`SKILL.md` frontmatter first and falls back to workspace `skill.json`
+`metadata.version_text` when needed.
+
 ## Concurrency (agents)
 
 ReAct step tracing stores temporary state on the agent instance for the
@@ -113,7 +139,7 @@ Export telemetry data to:
 
 ## Examples
 
-See the [main README](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md) for complete usage examples.
+See the [main README](https://github.com/alibaba/loongsuite-python/blob/main/README.md) for complete usage examples.
 
 ## License
 

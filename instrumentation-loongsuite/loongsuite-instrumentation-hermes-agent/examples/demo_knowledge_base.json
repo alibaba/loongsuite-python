@@ -1,0 +1,8 @@
+{
+  "briefings": [
+    {
+      "query": "apollo telemetry",
+      "answer": "Apollo telemetry keeps ENTRY > AGENT > STEP hierarchy with tools under the active step."
+    }
+  ]
+}

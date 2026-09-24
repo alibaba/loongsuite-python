@@ -2,8 +2,7 @@ pytest==7.4.4
 pytest-asyncio>=0.21.0
 fsspec==2025.9.0
 httpx>=0.18.0
-ossfs>=2021.8.0
+ossfs>=2021.8.0; platform_python_implementation != "PyPy"
 respx>=0.20.0
 numpy>=1.19.0
 soundfile>=0.10.0
--e opentelemetry-instrumentation

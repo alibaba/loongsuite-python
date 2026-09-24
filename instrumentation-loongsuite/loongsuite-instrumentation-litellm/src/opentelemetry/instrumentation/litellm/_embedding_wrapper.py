@@ -16,18 +16,17 @@
 Embedding wrapper for LiteLLM instrumentation.
 """
 
-import logging
 import os
 from typing import Callable
 
 from opentelemetry import context
 from opentelemetry.context import _SUPPRESS_INSTRUMENTATION_KEY
 from opentelemetry.instrumentation.litellm._utils import (
+    apply_litellm_embedding_response_to_invocation,
     create_embedding_invocation_from_litellm,
+    normalize_litellm_embedding_kwargs,
 )
 from opentelemetry.util.genai.types import Error
-
-logger = logging.getLogger(__name__)
 
 
 def _is_instrumentation_enabled() -> bool:
@@ -53,8 +52,10 @@ class EmbeddingWrapper:
         if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return self.original_func(*args, **kwargs)
 
-        # Create invocation object
-        invocation = create_embedding_invocation_from_litellm(**kwargs)
+        request_kwargs = normalize_litellm_embedding_kwargs(
+            self.original_func, args, kwargs
+        )
+        invocation = create_embedding_invocation_from_litellm(**request_kwargs)
 
         # Start Embedding invocation
         self._handler.start_embedding(invocation)
@@ -63,43 +64,9 @@ class EmbeddingWrapper:
             # Call original function
             response = self.original_func(*args, **kwargs)
 
-            # Extract response metadata
-            if hasattr(response, "model"):
-                invocation.response_model_name = response.model
-
-            # Extract token usage if available
-            if hasattr(response, "usage") and response.usage:
-                invocation.input_tokens = getattr(
-                    response.usage, "prompt_tokens", None
-                )
-                invocation.output_tokens = getattr(
-                    response.usage, "total_tokens", None
-                )
-
-            # Extract embedding dimension count
-            if (
-                hasattr(response, "data")
-                and response.data
-                and len(response.data) > 0
-            ):
-                try:
-                    first_embedding = response.data[0]
-                    # Handle dict response
-                    if (
-                        isinstance(first_embedding, dict)
-                        and "embedding" in first_embedding
-                    ):
-                        embedding_vector = first_embedding["embedding"]
-                        if isinstance(embedding_vector, list):
-                            invocation.dimension_count = len(embedding_vector)
-                    # Handle object response
-                    elif hasattr(first_embedding, "embedding"):
-                        embedding_vector = first_embedding.embedding
-                        if isinstance(embedding_vector, list):
-                            invocation.dimension_count = len(embedding_vector)
-                except (IndexError, AttributeError, KeyError, TypeError):
-                    # If we can't extract dimension, just skip it
-                    pass
+            apply_litellm_embedding_response_to_invocation(
+                invocation, response
+            )
 
             # End Embedding invocation successfully
             self._handler.stop_embedding(invocation)
@@ -131,8 +98,10 @@ class AsyncEmbeddingWrapper:
         if context.get_value(_SUPPRESS_INSTRUMENTATION_KEY):
             return await self.original_func(*args, **kwargs)
 
-        # Create invocation object
-        invocation = create_embedding_invocation_from_litellm(**kwargs)
+        request_kwargs = normalize_litellm_embedding_kwargs(
+            self.original_func, args, kwargs
+        )
+        invocation = create_embedding_invocation_from_litellm(**request_kwargs)
 
         # Start Embedding invocation
         self._handler.start_embedding(invocation)
@@ -141,43 +110,9 @@ class AsyncEmbeddingWrapper:
             # Call original function
             response = await self.original_func(*args, **kwargs)
 
-            # Extract response metadata
-            if hasattr(response, "model"):
-                invocation.response_model_name = response.model
-
-            # Extract token usage if available
-            if hasattr(response, "usage") and response.usage:
-                invocation.input_tokens = getattr(
-                    response.usage, "prompt_tokens", None
-                )
-                invocation.output_tokens = getattr(
-                    response.usage, "total_tokens", None
-                )
-
-            # Extract embedding dimension count
-            if (
-                hasattr(response, "data")
-                and response.data
-                and len(response.data) > 0
-            ):
-                try:
-                    first_embedding = response.data[0]
-                    # Handle dict response
-                    if (
-                        isinstance(first_embedding, dict)
-                        and "embedding" in first_embedding
-                    ):
-                        embedding_vector = first_embedding["embedding"]
-                        if isinstance(embedding_vector, list):
-                            invocation.dimension_count = len(embedding_vector)
-                    # Handle object response
-                    elif hasattr(first_embedding, "embedding"):
-                        embedding_vector = first_embedding.embedding
-                        if isinstance(embedding_vector, list):
-                            invocation.dimension_count = len(embedding_vector)
-                except (IndexError, AttributeError, KeyError, TypeError):
-                    # If we can't extract dimension, just skip it
-                    pass
+            apply_litellm_embedding_response_to_invocation(
+                invocation, response
+            )
 
             # End Embedding invocation successfully
             self._handler.stop_embedding(invocation)

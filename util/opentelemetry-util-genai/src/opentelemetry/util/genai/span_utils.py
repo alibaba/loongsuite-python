@@ -31,12 +31,14 @@ from opentelemetry.trace import (
 )
 from opentelemetry.trace.propagation import set_span_in_context
 from opentelemetry.trace.status import Status, StatusCode
-from opentelemetry.util.genai._extended_semconv import (
+from opentelemetry.util.genai.extended_semconv import (
     gen_ai_extended_attributes as GenAIExtended,  # LoongSuite Extension
 )
-from opentelemetry.util.genai._extended_semconv.gen_ai_extended_attributes import (  # pylint: disable=no-name-in-module
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (  # pylint: disable=no-name-in-module
     GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN,  # LoongSuite Extension
     GEN_AI_SPAN_KIND,  # LoongSuite Extension
+    GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,  # LoongSuite Extension
+    GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,  # LoongSuite Extension
     GEN_AI_USAGE_TOTAL_TOKENS,  # LoongSuite Extension
     GenAiSpanKindValues,  # LoongSuite Extension
 )
@@ -69,6 +71,10 @@ def _get_llm_common_attributes(
     optional_attrs = (
         (GenAI.GEN_AI_REQUEST_MODEL, invocation.request_model),
         (GenAI.GEN_AI_PROVIDER_NAME, invocation.provider),
+        (
+            GenAI.GEN_AI_CONVERSATION_ID,
+            invocation.conversation_id,
+        ),  # LoongSuite Extension
         (server_attributes.SERVER_ADDRESS, invocation.server_address),
         (server_attributes.SERVER_PORT, invocation.server_port),
     )
@@ -319,8 +325,20 @@ def _get_llm_request_attributes(
 ) -> dict[str, Any]:
     """Get GenAI request semantic convention attributes."""
     optional_attrs = (
+        (
+            GenAI.GEN_AI_OUTPUT_TYPE,
+            invocation.output_type,
+        ),  # LoongSuite Extension
+        (
+            GenAI.GEN_AI_REQUEST_CHOICE_COUNT,
+            invocation.choice_count
+            if invocation.choice_count is not None
+            and invocation.choice_count != 1
+            else None,
+        ),  # LoongSuite Extension
         (GenAI.GEN_AI_REQUEST_TEMPERATURE, invocation.temperature),
         (GenAI.GEN_AI_REQUEST_TOP_P, invocation.top_p),
+        (GenAI.GEN_AI_REQUEST_TOP_K, invocation.top_k),  # LoongSuite Extension
         (GenAI.GEN_AI_REQUEST_FREQUENCY_PENALTY, invocation.frequency_penalty),
         (GenAI.GEN_AI_REQUEST_PRESENCE_PENALTY, invocation.presence_penalty),
         (GenAI.GEN_AI_REQUEST_MAX_TOKENS, invocation.max_tokens),
@@ -361,6 +379,14 @@ def _get_llm_response_attributes(
         (GenAI.GEN_AI_RESPONSE_ID, invocation.response_id),
         (GenAI.GEN_AI_USAGE_INPUT_TOKENS, invocation.input_tokens),
         (GenAI.GEN_AI_USAGE_OUTPUT_TOKENS, invocation.output_tokens),
+        (
+            GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS,  # LoongSuite Extension
+            invocation.usage_cache_creation_input_tokens,
+        ),
+        (
+            GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS,  # LoongSuite Extension
+            invocation.usage_cache_read_input_tokens,
+        ),
     )
 
     result = {key: value for key, value in optional_attrs if value is not None}

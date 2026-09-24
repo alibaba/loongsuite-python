@@ -21,6 +21,9 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+DASHSCOPE_SERVER_ADDRESS = "dashscope.aliyuncs.com"
+DASHSCOPE_SERVER_PORT = 443
+
 
 def _get_parameter(
     kwargs: dict, param_name: str, parameters: Optional[dict] = None
@@ -85,6 +88,48 @@ def _extract_usage(response: Any) -> tuple[Optional[int], Optional[int]]:
         logger.debug(
             "Failed to extract usage information from response: %s", e
         )
+        return None, None
+
+
+def _extract_cache_tokens(
+    response: Any,
+) -> tuple[Optional[int], Optional[int]]:
+    """Extract cache token usage from DashScope response.
+
+    Args:
+        response: DashScope response object
+
+    Returns:
+        Tuple of (cache_creation_input_tokens, cache_read_input_tokens)
+    """
+    if not response:
+        return None, None
+
+    try:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return None, None
+
+        # DashScope may report cache tokens in various fields
+        cache_creation = getattr(
+            usage, "cache_creation_input_tokens", None
+        ) or getattr(usage, "cache_creation_tokens", None)
+        cache_read = (
+            getattr(usage, "cache_read_input_tokens", None)
+            or getattr(usage, "cache_read_tokens", None)
+            or getattr(usage, "prompt_cache_hit_tokens", None)
+        )
+
+        # Also check prompt_tokens_details (OpenAI-compatible format)
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_details and cache_read is None:
+            cache_read = getattr(prompt_details, "cached_tokens", None)
+
+        return (
+            cache_creation if cache_creation and cache_creation > 0 else None,
+            cache_read if cache_read and cache_read > 0 else None,
+        )
+    except (KeyError, AttributeError):
         return None, None
 
 

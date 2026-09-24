@@ -1,0 +1,108 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Thursday, April 16, 2026 03:38 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "请只回复：重试成功"
+          }
+        ],
+        "model": "qwen-turbo"
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '734'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.24.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.24.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.14.0
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "message": {
+                "content": "重试成功",
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1776325082,
+          "id": "chatcmpl-aa061844-34e5-9d99-9226-5d3ffc0da94d",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 3,
+            "prompt_tokens": 145,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 148
+          }
+        }
+    headers:
+      content-length:
+      - '341'
+      content-type:
+      - application/json
+      date:
+      - Thu, 16 Apr 2026 07:38:02 GMT
+      req-arrive-time:
+      - '1776325082699'
+      req-cost-time:
+      - '230'
+      resp-start-time:
+      - '1776325082929'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '230'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+version: 1

@@ -1,6 +1,7 @@
 {
   "skip_packages": [
-    "opentelemetry-instrumentation-langchain"
+    "opentelemetry-instrumentation-langchain",
+    "opentelemetry-instrumentation-claude-agent-sdk"
   ],
   "description": "Build configuration file, defines packages to skip during build",
   "notes": [

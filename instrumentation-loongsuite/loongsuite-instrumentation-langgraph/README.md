@@ -1,10 +1,14 @@
-# LongSuite LangGraph Instrumentation
+# LongSuLoongSuiteite LangGraph Instrumentation
 
-OpenTelemetry instrumentation for [LangGraph](https://github.com/langchain-ai/langgraph).
+LoongSuite instrumentation for [LangGraph](https://github.com/langchain-ai/langgraph).
 
 ## Installation
 
 ```bash
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
+
+# Step 2 (Option C): install this instrumentation from PyPI
 pip install loongsuite-instrumentation-langgraph
 ```
 

@@ -1,0 +1,94 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen-max",
+        "parameters": {
+          "result_format": "message",
+          "seed": 935360180
+        },
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "What is 2+2? Answer with just the number."
+            }
+          ]
+        }
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '183'
+      Content-Type:
+      - application/json
+      authorization:
+      - Bearer test_dashscope_api_key
+      user-agent:
+      - dashscope/1.25.2; python/3.12.10; platform/macOS-15.1.1-arm64-arm-64bit; processor/arm;
+        incremental_to_full/0
+    method: POST
+    uri: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  response:
+    body:
+      string: |-
+        {
+          "output": {
+            "choices": [
+              {
+                "finish_reason": "stop",
+                "message": {
+                  "content": "4",
+                  "role": "assistant"
+                }
+              }
+            ]
+          },
+          "usage": {
+            "input_tokens": 21,
+            "output_tokens": 1,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 22
+          },
+          "request_id": "c5f380ae-1f7e-423b-803a-9d38fe7f448c"
+        }
+    headers:
+      content-length:
+      - '254'
+      content-type:
+      - application/json
+      date:
+      - Fri, 20 Mar 2026 02:31:41 GMT
+      req-arrive-time:
+      - '1773973901239'
+      req-cost-time:
+      - '679'
+      resp-start-time:
+      - '1773973901919'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'true'
+      x-dashscope-timeout:
+      - '298'
+      x-envoy-upstream-service-time:
+      - '673'
+      x-request-id:
+      - c5f380ae-1f7e-423b-803a-9d38fe7f448c
+    status:
+      code: 200
+      message: OK
+version: 1

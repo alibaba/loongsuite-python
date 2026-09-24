@@ -18,9 +18,9 @@ from typing import Any, Mapping
 from unittest.mock import patch
 
 from opentelemetry import trace
-from opentelemetry.instrumentation._semconv import (
+from opentelemetry.util.genai._configuration import (
     OTEL_SEMCONV_STABILITY_OPT_IN,
-    _OpenTelemetrySemanticConventionStability,
+    is_experimental_mode,
 )
 
 # Backward compatibility for InMemoryLogExporter -> InMemoryLogRecordExporter rename
@@ -55,8 +55,15 @@ from opentelemetry.semconv.attributes import (
     server_attributes as ServerAttributes,
 )
 from opentelemetry.trace.status import StatusCode
-from opentelemetry.util.genai._extended_memory import MemoryInvocation
-from opentelemetry.util.genai._extended_semconv.gen_ai_memory_attributes import (
+from opentelemetry.util.genai.environment_variables import (
+    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
+)
+from opentelemetry.util.genai.extended_handler import (
+    get_extended_telemetry_handler,
+)
+from opentelemetry.util.genai.extended_memory import MemoryInvocation
+from opentelemetry.util.genai.extended_semconv.gen_ai_memory_attributes import (
     GEN_AI_MEMORY_AGENT_ID,
     GEN_AI_MEMORY_APP_ID,
     GEN_AI_MEMORY_ID,
@@ -72,13 +79,6 @@ from opentelemetry.util.genai._extended_semconv.gen_ai_memory_attributes import 
     GEN_AI_MEMORY_THRESHOLD,
     GEN_AI_MEMORY_TOP_K,
     GEN_AI_MEMORY_USER_ID,
-)
-from opentelemetry.util.genai.environment_variables import (
-    OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
-    OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
-)
-from opentelemetry.util.genai.extended_handler import (
-    get_extended_telemetry_handler,
 )
 
 
@@ -97,8 +97,8 @@ def patch_env_vars(stability_mode, content_capturing=None, emit_event=None):
         @patch.dict(os.environ, env_vars)
         def wrapper(*args, **kwargs):
             # Reset state.
-            _OpenTelemetrySemanticConventionStability._initialized = False
-            _OpenTelemetrySemanticConventionStability._initialize()
+            is_experimental_mode.cache_clear()
+            is_experimental_mode()
             return test_case(*args, **kwargs)
 
         return wrapper

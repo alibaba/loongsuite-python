@@ -23,7 +23,7 @@ The installation source is determined by package name prefix:
 - loongsuite-* -> GitHub Release tar.gz
 - opentelemetry-* -> PyPI
 
-loongsuite-util-genai is installed from PyPI as a base dependency.
+loongsuite-otel-util-genai is installed from PyPI as a base dependency.
 """
 
 import argparse
@@ -49,12 +49,12 @@ from packaging.specifiers import SpecifierSet
 logger = logging.getLogger(__name__)
 
 # Base dependency packages installed from PyPI
-# loongsuite-util-genai is published to PyPI and required by GenAI instrumentations
+# loongsuite-otel-util-genai is published to PyPI and required by GenAI instrumentations
 BASE_DEPENDENCIES_PYPI = {
     "opentelemetry-api",
     "opentelemetry-sdk",
     "opentelemetry-instrumentation",
-    "loongsuite-util-genai",
+    "loongsuite-otel-util-genai",
     "opentelemetry-semantic-conventions",
 }
 
@@ -1122,7 +1122,7 @@ def uninstall_loongsuite_packages(
 
 
 def get_latest_release_url(
-    repo: str = "alibaba/loongsuite-python-agent",
+    repo: str = "alibaba/loongsuite-python",
 ) -> str:
     """Get latest release tar.gz URL from GitHub API"""
     api_url = f"https://api.github.com/repos/{repo}/releases/latest"
@@ -1137,7 +1137,7 @@ def get_latest_release_url(
 
         # If no asset found, try to build URL from tag
         tag = data.get("tag_name", "").lstrip("v")
-        return f"https://github.com/{repo}/releases/download/{data.get('tag_name')}/loongsuite-python-agent-{tag}.tar.gz"
+        return f"https://github.com/{repo}/releases/download/{data.get('tag_name')}/loongsuite-python-{tag}.tar.gz"
     except Exception as e:
         logger.error(f"Failed to fetch latest release: {e}")
         raise
@@ -1263,7 +1263,7 @@ def main():
         if args.tar:
             tar_path = args.tar
         elif args.version:
-            tar_path = f"https://github.com/alibaba/loongsuite-python-agent/releases/download/v{args.version}/loongsuite-python-agent-{args.version}.tar.gz"
+            tar_path = f"https://github.com/alibaba/loongsuite-python/releases/download/v{args.version}/loongsuite-python-{args.version}.tar.gz"
         elif args.latest:
             tar_path = get_latest_release_url()
         else:

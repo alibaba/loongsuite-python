@@ -45,6 +45,22 @@ DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_MODEL = "dashscope/qwen-plus"
 
 
+def _metric_data_points(metrics_data, metric_name: str):
+    """Return all data points for a named metric."""
+    if not metrics_data:
+        return []
+
+    data_points = []
+    for resource_metrics in metrics_data.resource_metrics:
+        for scope_metrics in resource_metrics.scope_metrics:
+            for metric in scope_metrics.metrics:
+                if metric.name == metric_name and hasattr(
+                    metric.data, "data_points"
+                ):
+                    data_points.extend(metric.data.data_points)
+    return data_points
+
+
 # Simple tool functions for testing
 # Use fixed return values to ensure VCR cassette matching
 def get_current_time() -> str:
@@ -162,6 +178,7 @@ class TestGoogleAdkSDKIntegration:
         # Verify chat span attributes
         chat_span = chat_spans[0]
         assert chat_span.attributes.get("gen_ai.operation.name") == "chat"
+        assert chat_span.attributes.get("gen_ai.span.kind") == "LLM"
         assert chat_span.attributes.get("gen_ai.provider.name") is not None
         assert chat_span.attributes.get("gen_ai.request.model") is not None
         assert chat_span.name.startswith("chat ")
@@ -221,6 +238,7 @@ class TestGoogleAdkSDKIntegration:
             agent_span.attributes.get("gen_ai.operation.name")
             == "invoke_agent"
         )
+        assert agent_span.attributes.get("gen_ai.span.kind") == "AGENT"
         assert (
             agent_span.attributes.get("gen_ai.provider.name") == "google_adk"
         )
@@ -269,61 +287,14 @@ class TestGoogleAdkSDKIntegration:
         metrics = metric_reader.get_metrics_data()
 
         # Should have operation duration metrics
-        # Note: Metrics may be recorded asynchronously, so we check if any metrics exist
         assert metrics is not None, "Should have metrics data"
-
-    @pytest.mark.asyncio
-    @pytest.mark.vcr()
-    async def test_error_handling_creates_error_spans(
-        self, instrument, span_exporter, runner, session_service
-    ):
-        """
-        Test that errors are properly handled and recorded in spans.
-
-        This test may need to be adjusted based on how errors are triggered.
-        """
-        # Create session
-        session = await session_service.create_session(
-            app_name="test_app",
-            user_id="test_user",
-            session_id="test_session_7",
+        duration_points = _metric_data_points(
+            metrics, "gen_ai.client.operation.duration"
         )
-
-        # Create user message
-        user_message = types.Content(
-            role="user", parts=[types.Part(text="Hello")]
+        assert duration_points, (
+            "Should have gen_ai.client.operation.duration data points"
         )
-
-        # Clear spans before test
-        span_exporter.clear()
-
-        # Run conversation (should succeed)
-        events = []
-        try:
-            async for event in runner.run_async(
-                user_id="test_user",
-                session_id=session.id,
-                new_message=user_message,
-            ):
-                events.append(event)
-        except Exception:
-            # If error occurs, verify it's recorded
-            await asyncio.sleep(0.5)
-            spans = span_exporter.get_finished_spans()
-
-            # Check if any span has error status
-            error_spans = [
-                span
-                for span in spans
-                if span.status.status_code.value == 2  # ERROR status
-            ]
-
-            # If errors occurred, they should be recorded
-            if error_spans:
-                error_span = error_spans[0]
-                assert "error.type" in error_span.attributes
-
-        # For now, just verify spans are created
-        await asyncio.sleep(0.5)
-        spans = span_exporter.get_finished_spans()
-        assert len(spans) >= 1, "Should have at least one span"
+        assert any(
+            dict(point.attributes).get("gen_ai.operation.name") == "chat"
+            for point in duration_points
+        ), "Should record operation duration for chat"

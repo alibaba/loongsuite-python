@@ -19,4 +19,5 @@ repos:
     hooks:
       - id: rstcheck
         additional_dependencies: ['rstcheck[sphinx]']
+        exclude: ^_template/
         args: ["--report-level", "warning"]

@@ -1,0 +1,244 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen-max",
+        "parameters": {
+          "result_format": "message",
+          "incremental_output": true,
+          "seed": 700291534,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "calculator_react_test",
+                "description": "Evaluate a simple arithmetic expression and return the numeric result.",
+                "parameters": [
+                  {
+                    "name": "expression",
+                    "type": "string",
+                    "description": "The arithmetic expression to evaluate, e.g. '3 * 7'.",
+                    "required": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "What is 6 multiplied by 7?"
+            }
+          ]
+        }
+      }
+    headers:
+      Accept:
+      - text/event-stream
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '512'
+      Content-Type:
+      - application/json
+      X-Accel-Buffering:
+      - 'no'
+      X-DashScope-SSE:
+      - enable
+      authorization:
+      - Bearer test_dashscope_api_key
+      user-agent:
+      - dashscope/1.25.2; python/3.12.10; platform/macOS-15.1.1-arm64-arm-64bit; processor/arm;
+        incremental_to_full/0
+    method: POST
+    uri: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  response:
+    body:
+      string: |+
+        id:1
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"","tool_calls":[{"index":0,"id":"call_3f06405749c34b749ac694","type":"function","function":{"name":"calculator_react_test","arguments":"{\"expression\":"}}],"role":"assistant"},"index":0,"finish_reason":"null"}]},"usage":{"total_tokens":278,"output_tokens":16,"input_tokens":262,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"9e265eb0-eee3-4b65-87ce-9ebb6cae2d0c"}
+
+        id:2
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"","tool_calls":[{"index":0,"id":"","type":"function","function":{"arguments":" \"6 * 7\"}"}}],"role":"assistant"},"index":0,"finish_reason":"null"}]},"usage":{"total_tokens":284,"output_tokens":22,"input_tokens":262,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"9e265eb0-eee3-4b65-87ce-9ebb6cae2d0c"}
+
+        id:3
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"","tool_calls":[{"index":0,"id":"","type":"function","function":{}}],"role":"assistant"},"index":0,"finish_reason":"tool_calls"}]},"usage":{"total_tokens":284,"output_tokens":22,"input_tokens":262,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"9e265eb0-eee3-4b65-87ce-9ebb6cae2d0c"}
+
+    headers:
+      content-type:
+      - text/event-stream;charset=UTF-8
+      date:
+      - Fri, 20 Mar 2026 02:22:39 GMT
+      req-arrive-time:
+      - '1773973359070'
+      req-cost-time:
+      - '850'
+      resp-start-time:
+      - '1773973359920'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'false'
+      x-dashscope-timeout:
+      - '298'
+      x-envoy-upstream-service-time:
+      - '842'
+      x-request-id:
+      - 9e265eb0-eee3-4b65-87ce-9ebb6cae2d0c
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "model": "qwen-max",
+        "parameters": {
+          "result_format": "message",
+          "incremental_output": true,
+          "seed": 40957755,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "calculator_react_test",
+                "description": "Evaluate a simple arithmetic expression and return the numeric result.",
+                "parameters": [
+                  {
+                    "name": "expression",
+                    "type": "string",
+                    "description": "The arithmetic expression to evaluate, e.g. '3 * 7'.",
+                    "required": true
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "What is 6 multiplied by 7?"
+            },
+            {
+              "role": "assistant",
+              "tool_calls": [
+                {
+                  "id": "call_3f06405749c34b749ac694",
+                  "type": "function",
+                  "function": {
+                    "name": "calculator_react_test",
+                    "arguments": "{\"expression\": \"6 * 7\"}"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "content": "42",
+              "name": "calculator_react_test",
+              "extra": {
+                "function_id": "call_3f06405749c34b749ac694"
+              },
+              "id": "call_3f06405749c34b749ac694"
+            }
+          ]
+        }
+      }
+    headers:
+      Accept:
+      - text/event-stream
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '862'
+      Content-Type:
+      - application/json
+      X-Accel-Buffering:
+      - 'no'
+      X-DashScope-SSE:
+      - enable
+      authorization:
+      - Bearer test_dashscope_api_key
+      user-agent:
+      - dashscope/1.25.2; python/3.12.10; platform/macOS-15.1.1-arm64-arm-64bit; processor/arm;
+        incremental_to_full/0
+    method: POST
+    uri: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  response:
+    body:
+      string: |+
+        id:1
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"The result of","role":"assistant"},"index":0,"finish_reason":"null"}]},"usage":{"total_tokens":299,"output_tokens":4,"input_tokens":295,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"144bde91-158f-46e9-ac9c-49249e330cbc"}
+
+        id:2
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":" 6 multiplied","role":"assistant"},"index":0,"finish_reason":"null"}]},"usage":{"total_tokens":302,"output_tokens":7,"input_tokens":295,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"144bde91-158f-46e9-ac9c-49249e330cbc"}
+
+        id:3
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":" by 7","role":"assistant"},"index":0,"finish_reason":"null"}]},"usage":{"total_tokens":305,"output_tokens":10,"input_tokens":295,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"144bde91-158f-46e9-ac9c-49249e330cbc"}
+
+        id:4
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":" is 42.","role":"assistant"},"index":0,"finish_reason":"null"}]},"usage":{"total_tokens":310,"output_tokens":15,"input_tokens":295,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"144bde91-158f-46e9-ac9c-49249e330cbc"}
+
+        id:5
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"","role":"assistant"},"index":0,"finish_reason":"stop"}]},"usage":{"total_tokens":310,"output_tokens":15,"input_tokens":295,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"144bde91-158f-46e9-ac9c-49249e330cbc"}
+
+    headers:
+      content-type:
+      - text/event-stream;charset=UTF-8
+      date:
+      - Fri, 20 Mar 2026 02:22:41 GMT
+      req-arrive-time:
+      - '1773973360868'
+      req-cost-time:
+      - '447'
+      resp-start-time:
+      - '1773973361315'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'false'
+      x-dashscope-timeout:
+      - '298'
+      x-envoy-upstream-service-time:
+      - '439'
+      x-request-id:
+      - 144bde91-158f-46e9-ac9c-49249e330cbc
+    status:
+      code: 200
+      message: OK
+version: 1

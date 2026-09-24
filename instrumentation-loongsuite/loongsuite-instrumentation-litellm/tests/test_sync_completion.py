@@ -193,16 +193,24 @@ class TestSyncCompletion(TestBase):
         self.assertEqual(len(spans), 1)
         span = spans[0]
 
-        # Verify all messages captured in sequence
+        # Verify system instructions are separated from input messages.
         self.assertIn("gen_ai.input.messages", span.attributes)
         input_messages = json.loads(
             span.attributes.get("gen_ai.input.messages")
         )
-        self.assertEqual(len(input_messages), 4)
-        self.assertEqual(input_messages[0]["role"], "system")
-        self.assertEqual(input_messages[1]["role"], "user")
-        self.assertEqual(input_messages[2]["role"], "assistant")
-        self.assertEqual(input_messages[3]["role"], "user")
+        self.assertEqual(len(input_messages), 3)
+        self.assertEqual(input_messages[0]["role"], "user")
+        self.assertEqual(input_messages[1]["role"], "assistant")
+        self.assertEqual(input_messages[2]["role"], "user")
+
+        self.assertIn("gen_ai.system_instructions", span.attributes)
+        system_instructions = json.loads(
+            span.attributes.get("gen_ai.system_instructions")
+        )
+        self.assertEqual(
+            system_instructions[0]["content"],
+            "You are a helpful assistant that provides concise answers.",
+        )
 
         output_messages = json.loads(
             span.attributes.get("gen_ai.output.messages")

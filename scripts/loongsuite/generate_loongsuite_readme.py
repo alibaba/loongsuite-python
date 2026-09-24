@@ -51,6 +51,11 @@ def main(base_instrumentation_path):
                 pyproject = tomli.load(f)
 
             project = pyproject.get("project", {})
+            readme_config = (
+                pyproject.get("tool", {})
+                .get("loongsuite", {})
+                .get("readme", {})
+            )
             optional_deps = project.get("optional-dependencies", {})
             instruments = optional_deps.get("instruments", [])
             instruments_any = optional_deps.get("instruments-any", [])
@@ -59,8 +64,10 @@ def main(base_instrumentation_path):
             # e.g., "loongsuite-instrumentation-agentscope" -> "agentscope"
             name = instrumentation.replace(_prefix, "")
 
-            instruments_all = ()
-            if not instruments and not instruments_any:
+            instruments_display = readme_config.get("supported-packages", [])
+            if instruments_display:
+                instruments_all = tuple(instruments_display)
+            elif not instruments and not instruments_any:
                 instruments_all = (name,)
             else:
                 instruments_all = tuple(instruments + instruments_any)
@@ -72,8 +79,9 @@ def main(base_instrumentation_path):
 
             metric_column = "Yes" if supports_metrics else "No"
 
+            supported_packages = "; ".join(instruments_all)
             table.append(
-                f"| [{instrumentation}](./{instrumentation}) | {','.join(instruments_all)} | {metric_column} | {semconv_status}"
+                f"| [{instrumentation}](./{instrumentation}) | {supported_packages} | {metric_column} | {semconv_status}"
             )
         except Exception as e:
             logger.warning(f"Failed to process {instrumentation}: {e}")

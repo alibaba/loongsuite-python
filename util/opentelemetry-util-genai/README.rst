@@ -60,3 +60,12 @@ References
 ----------
 
 * `OpenTelemetry Project <https://opentelemetry.io/>`_
+
+Standalone runtime
+------------------
+
+GenAI utilities do not require ``opentelemetry-instrumentation``. Configure
+``OTEL_SEMCONV_STABILITY_OPT_IN`` before SDK or instrumentor startup; the GenAI
+opt-in is cached on first use. Changing it after startup is unsupported.
+Internal HTTP suppression shares the OpenTelemetry Context suppression key
+with HTTP instrumentors and restores the previous context when the scope exits.

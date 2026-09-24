@@ -103,6 +103,8 @@ def test_upload_oss_binary_env():
             "OSS credentials not set in environment; source export_env.sh to run this test."
         )
 
+    pytest.importorskip("ossfs")
+
     bucket = storage_base_path.split("://", 1)[1].split("/", 1)[0]
 
     storage_options: Dict[str, str] = {

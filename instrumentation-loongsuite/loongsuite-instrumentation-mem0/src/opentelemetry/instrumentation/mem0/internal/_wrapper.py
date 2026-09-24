@@ -55,8 +55,8 @@ from opentelemetry.trace import (
     Tracer,
     get_current_span,
 )
-from opentelemetry.util.genai._extended_memory import MemoryInvocation
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
+from opentelemetry.util.genai.extended_memory import MemoryInvocation
 from opentelemetry.util.genai.types import Error
 
 logger = logging.getLogger(__name__)

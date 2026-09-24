@@ -1,0 +1,104 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Thursday, April 16, 2026 03:37 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "请数到3，每个数字之间加空格。"
+          }
+        ],
+        "model": "qwen-turbo",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '804'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.24.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.24.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.14.0
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '120.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","created":1776325076,"object":"chat.completion.chunk","usage":null,"choices":[{"logprobs":null,"index":0,"delta":{"content":"","role":"assistant"}}]}
+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","choices":[{"delta":{"content":"1","role":null},"index":0}],"created":1776325076,"object":"chat.completion.chunk","usage":null}
+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","choices":[{"delta":{"content":" ","role":null},"index":0}],"created":1776325076,"object":"chat.completion.chunk","usage":null}
+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","choices":[{"delta":{"content":"2","role":null},"index":0}],"created":1776325076,"object":"chat.completion.chunk","usage":null}
+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","choices":[{"delta":{"content":" ","role":null},"index":0}],"created":1776325076,"object":"chat.completion.chunk","usage":null}
+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","choices":[{"delta":{"content":"3","role":null},"index":0}],"created":1776325076,"object":"chat.completion.chunk","usage":null}
+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","choices":[{"delta":{"content":"","role":null},"index":0,"finish_reason":"stop"}],"created":1776325076,"object":"chat.completion.chunk","usage":null}
+
+        data: {"model":"qwen-turbo","id":"chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b","choices":[],"created":1776325076,"object":"chat.completion.chunk","usage":{"total_tokens":155,"completion_tokens":5,"prompt_tokens":150,"prompt_tokens_details":{"cached_tokens":0}}}
+
+        data: [DONE]
+
+    headers:
+      content-type:
+      - text/event-stream;charset=utf-8
+      date:
+      - Thu, 16 Apr 2026 07:37:56 GMT
+      req-arrive-time:
+      - '1776325076332'
+      req-cost-time:
+      - '234'
+      resp-start-time:
+      - '1776325076566'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '234'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+version: 1

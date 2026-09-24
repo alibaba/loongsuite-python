@@ -1,23 +1,21 @@
-# OpenTelemetry MCP Instrumentation
+# LoongSuite MCP Instrumentation
 
 MCP Python Agent provides observability for MCP client and MCP server.  
 This document provides examples of usage and results in the MCP instrumentation.  
-For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installing MCP Instrumentation
 
 ```shell
-# Open Telemetry
-pip install opentelemetry-distro opentelemetry-exporter-otlp
-opentelemetry-bootstrap -a install
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
 
-# mcp
+# Step 2 (Option A): install instrumentations from LoongSuite release
+loongsuite-bootstrap -a install --latest
+# for specific version: loongsuite-bootstrap -a install --version X.Y.Z
+
+# MCP dependency
 pip install mcp==1.13.1
-
-# MCPInstrumentor
-git clone https://github.com/alibaba/loongsuite-python-agent.git
-cd loongsuite-python-agent
-pip install ./instrumentation-loongsuite/loongsuite-instrumentation-mcp
 ```
 
 ## Collect Data
@@ -29,18 +27,7 @@ Here's a simple demonstration of MCP instrumentation. The demo uses:
 
 ### Running the Demo
 
-#### Option 1: Using OpenTelemetry
-
-```bash
-export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
-
-opentelemetry-instrument \
---traces_exporter console \
---service_name demo-mcp-client \
-python examples/simple_client.py
-```
-
-#### Option 2: Using Loongsuite
+#### Recommended: Using LoongSuite
 
 ```bash
 export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true

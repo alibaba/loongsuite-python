@@ -1,14 +1,16 @@
-# OpenTelemerty Dify Instrumentation
+# LoongSuite Dify Instrumentation
 
-Dify Python Agent provides observability for Dify applications. This document provides examples of usage and results in the Dify instrumentation. For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python-agent/blob/main/README.md).
+Dify Python Agent provides observability for Dify applications. This document provides examples of usage and results in the Dify instrumentation. For details on usage and installation of LoongSuite and Jaeger, please refer to [LoongSuite Documentation](https://github.com/alibaba/loongsuite-python/blob/main/README.md).
 
 ## Installing Dify Instrumentation
 
 ```shell
-# DifyInstrumentor
-git clone https://github.com/alibaba/loongsuite-python-agent.git
-cd loongsuite-python-agent
-pip install ./instrumentation-loongsuite/loongsuite-instrumentation-dify
+# Step 1: install LoongSuite distro
+pip install loongsuite-distro
+
+# Step 2 (Option A): install instrumentations from LoongSuite release
+loongsuite-bootstrap -a install --latest
+# for specific version: loongsuite-bootstrap -a install --version X.Y.Z
 ```
 
 ## RUN Dify
@@ -26,16 +28,7 @@ OTEL_EXPORTER_OTLP_PROTOCOL = http/protobuf
 OTEL_SERVICE_NAME = <service_name>
 ```
 
-### Option 1: Modify Entry Source Code
-
-Modify the project's entry file (`api/app.py`) and add the LoongSuite initialization logic at the beginning of the file:
-
-```python
-# Import OpenTelemetry auto instrumentation module
-from opentelemetry.instrumentation.auto_instrumentation import sitecustomize
-```
-
-### Option 2: Starting with loongsuite-instrument
+### Recommended: Start with loongsuite-instrument
 
 Modify the project's startup script (`entrypoint.sh`) to use loongsuite-instrument for application startup. Example:
 

@@ -12,6 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# ********************************
+# WARNING: NOT HERMETIC !!!!!!!!!!
+# ********************************
+#
+# This "requirements.txt" is installed in conjunction
+# with multiple other dependencies in the top-level "tox-loongsuite.ini"
+# file. In particular, please see:
+#
+#   claude-agent-sdk-latest: {[testenv]test_deps}
+#   claude-agent-sdk-latest: -r {toxinidir}/instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk/tests/requirements.latest.txt
+#
+# This provides additional dependencies, namely:
+#
+#   opentelemetry-api
+#   opentelemetry-sdk
+#   opentelemetry-semantic-conventions
+#
+# ... with a "dev" version based on the latest distribution.
+
 # This variant of the requirements aims to test the system using
 # the newest supported version of external dependencies.
 

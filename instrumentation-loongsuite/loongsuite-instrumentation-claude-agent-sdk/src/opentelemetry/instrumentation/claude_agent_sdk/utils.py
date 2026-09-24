@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from opentelemetry.semconv._incubating.attributes.gen_ai_attributes import (
     GenAiProviderNameValues,
 )
-from opentelemetry.util.genai._extended_semconv.gen_ai_extended_attributes import (
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GenAiExtendedProviderNameValues,
 )
 from opentelemetry.util.genai.types import Text, ToolCall

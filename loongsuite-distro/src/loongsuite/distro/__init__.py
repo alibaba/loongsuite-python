@@ -15,6 +15,8 @@
 import os
 from typing import Any
 
+from loongsuite.distro.resource import LoongSuiteResourceDetector
+
 from opentelemetry.environment_variables import (
     OTEL_LOGS_EXPORTER,
     OTEL_METRICS_EXPORTER,
@@ -28,7 +30,22 @@ from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_PROTOCOL
 class LoongSuiteConfigurator(_OTelSDKConfigurator):
     """
     LoongSuite configurator, inherits from OpenTelemetry SDK configurator.
+
+    Augments the resource with LoongSuite specific attributes (``host.ip`` as a
+    string array, ``service.instance.id``, and
+    ``gen_ai.instrumentation.sdk.name``) before delegating to the OpenTelemetry
+    SDK configurator.
     """
+
+    def _configure(self, **kwargs: Any) -> None:
+        resource_attributes = dict(
+            kwargs.pop("resource_attributes", None) or {}
+        )
+        # Use setdefault so user-provided values take precedence over detector.
+        detected = LoongSuiteResourceDetector().detect().attributes
+        for k, v in detected.items():
+            resource_attributes.setdefault(k, v)
+        super()._configure(resource_attributes=resource_attributes, **kwargs)
 
 
 class LoongSuiteDistro(BaseDistro):

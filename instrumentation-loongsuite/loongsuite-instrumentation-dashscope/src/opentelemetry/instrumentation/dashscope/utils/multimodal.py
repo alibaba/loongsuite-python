@@ -351,12 +351,32 @@ def _extract_multimodal_output_messages(response: Any) -> List[OutputMessage]:
                                             type="text",
                                         )
                                     )
+                                # Image content
+                                elif "image" in item:
+                                    parts.append(
+                                        Uri(
+                                            uri=item["image"],
+                                            modality="image",
+                                            mime_type=None,
+                                            type="uri",
+                                        )
+                                    )
                                 # Audio content (when modalities includes "audio")
                                 elif "audio" in item:
                                     parts.append(
                                         Uri(
                                             uri=item["audio"],
                                             modality="audio",
+                                            mime_type=None,
+                                            type="uri",
+                                        )
+                                    )
+                                # Video content
+                                elif "video" in item:
+                                    parts.append(
+                                        Uri(
+                                            uri=item["video"],
+                                            modality="video",
                                             mime_type=None,
                                             type="uri",
                                         )

@@ -1,0 +1,105 @@
+interactions:
+- request:
+    body: |-
+      {
+        "model": "qwen-max",
+        "parameters": {
+          "result_format": "message",
+          "incremental_output": true,
+          "seed": 289569634
+        },
+        "input": {
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello, what is 1+1?"
+            }
+          ]
+        }
+      }
+    headers:
+      Accept:
+      - text/event-stream
+      Accept-Encoding:
+      - gzip, deflate, br
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '189'
+      Content-Type:
+      - application/json
+      X-Accel-Buffering:
+      - 'no'
+      X-DashScope-SSE:
+      - enable
+      authorization:
+      - Bearer test_dashscope_api_key
+      user-agent:
+      - dashscope/1.25.2; python/3.12.10; platform/macOS-15.1.1-arm64-arm-64bit; processor/arm;
+        incremental_to_full/0
+    method: POST
+    uri: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
+  response:
+    body:
+      string: |+
+        id:1
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"Hello","role":"assistant"},"finish_reason":"null"}]},"usage":{"total_tokens":18,"output_tokens":1,"input_tokens":17,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"f0a08fc8-84cd-4884-a742-f8f94d014c2a"}
+
+        id:2
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"! ","role":"assistant"},"finish_reason":"null"}]},"usage":{"total_tokens":20,"output_tokens":3,"input_tokens":17,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"f0a08fc8-84cd-4884-a742-f8f94d014c2a"}
+
+        id:3
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"1+1","role":"assistant"},"finish_reason":"null"}]},"usage":{"total_tokens":23,"output_tokens":6,"input_tokens":17,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"f0a08fc8-84cd-4884-a742-f8f94d014c2a"}
+
+        id:4
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":" equals 2","role":"assistant"},"finish_reason":"null"}]},"usage":{"total_tokens":26,"output_tokens":9,"input_tokens":17,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"f0a08fc8-84cd-4884-a742-f8f94d014c2a"}
+
+        id:5
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":".","role":"assistant"},"finish_reason":"null"}]},"usage":{"total_tokens":27,"output_tokens":10,"input_tokens":17,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"f0a08fc8-84cd-4884-a742-f8f94d014c2a"}
+
+        id:6
+        event:result
+        :HTTP_STATUS/200
+        data:{"output":{"choices":[{"message":{"content":"","role":"assistant"},"finish_reason":"stop"}]},"usage":{"total_tokens":27,"output_tokens":10,"input_tokens":17,"prompt_tokens_details":{"cached_tokens":0}},"request_id":"f0a08fc8-84cd-4884-a742-f8f94d014c2a"}
+
+    headers:
+      content-type:
+      - text/event-stream;charset=UTF-8
+      date:
+      - Thu, 19 Mar 2026 08:14:35 GMT
+      req-arrive-time:
+      - '1773908075696'
+      req-cost-time:
+      - '235'
+      resp-start-time:
+      - '1773908075932'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers
+      x-dashscope-call-gateway:
+      - 'true'
+      x-dashscope-finished:
+      - 'false'
+      x-dashscope-timeout:
+      - '298'
+      x-envoy-upstream-service-time:
+      - '228'
+      x-request-id:
+      - f0a08fc8-84cd-4884-a742-f8f94d014c2a
+    status:
+      code: 200
+      message: OK
+version: 1

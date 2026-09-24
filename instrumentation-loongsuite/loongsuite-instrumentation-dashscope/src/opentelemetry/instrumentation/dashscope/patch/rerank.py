@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from opentelemetry.util.genai._extended_semconv.gen_ai_extended_attributes import (
+from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (
     GenAiExtendedProviderNameValues as GenAI,
 )
 from opentelemetry.util.genai.extended_types import RerankInvocation

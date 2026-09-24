@@ -1,0 +1,3747 @@
+interactions:
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:50 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "这是一个必须展示规划过程的多步任务。你必须先调用 todo 工具创建 3 个任务：p1=读取文件，p2=提取 CHECKPOINT 行，p3=输出最终答案。创建时只能让 p1 处于 in_progress。随后必须调用 read_file 读取文件 /tmp/loongsuite-hermes-agent-tests/planning_input.txt。拿到内容后，再次调用 todo 把 p1/p2/p3 更新为 completed。最后只回复文件中以 CHECKPOINT= 开头的整行，不要解释，也不要输出 todo 内容。"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "patch",
+              "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing.\n\nReplace mode (default): find a unique string and replace it.\nPatch mode: apply V4A multi-file patches for bulk changes.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "patch"
+                    ],
+                    "description": "Edit mode: 'replace' for targeted find-and-replace, 'patch' for V4A multi-file patches",
+                    "default": "replace"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "File path to edit (required for 'replace' mode)"
+                  },
+                  "old_string": {
+                    "type": "string",
+                    "description": "Text to find in the file (required for 'replace' mode). Must be unique in the file unless replace_all=true. Include enough surrounding context to ensure uniqueness."
+                  },
+                  "new_string": {
+                    "type": "string",
+                    "description": "Replacement text (required for 'replace' mode). Can be empty string to delete the matched text."
+                  },
+                  "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                    "default": false
+                  },
+                  "patch": {
+                    "type": "string",
+                    "description": "V4A format patch content (required for 'patch' mode). Format:\n*** Begin Patch\n*** Update File: path/to/file\n@@ context hint @@\n context line\n-removed line\n+added line\n*** End Patch"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Suggests similar filenames if not found. Use offset and limit for large files. Reads exceeding ~100K characters are rejected; use offset and limit to read specific sections of large files. NOTE: Cannot read images or binary files — use vision_analyze for images.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to read (absolute, relative, or ~/path)"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed, default: 1)",
+                    "default": 1,
+                    "minimum": 1
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: 500, max: 2000)",
+                    "default": 500,
+                    "maximum": 2000
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "search_files",
+              "description": "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. Ripgrep-backed, faster than shell equivalents.\n\nContent search (target='content'): Regex search inside files. Output modes: full matches with line numbers, file paths only, or match counts.\n\nFile search (target='files'): Find files by glob pattern (e.g., '*.py', '*config*'). Also use this instead of ls — results sorted by modification time.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern for content search, or glob pattern (e.g., '*.py') for file search"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files"
+                    ],
+                    "description": "'content' searches inside file contents, 'files' searches for files by name",
+                    "default": "content"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (default: current working directory)",
+                    "default": "."
+                  },
+                  "file_glob": {
+                    "type": "string",
+                    "description": "Filter files by pattern in grep mode (e.g., '*.py' to only search Python files)"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 50)",
+                    "default": 50
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Skip first N results for pagination (default: 0)",
+                    "default": 0
+                  },
+                  "output_mode": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files_only",
+                      "count"
+                    ],
+                    "description": "Output format for grep mode: 'content' shows matching lines with line numbers, 'files_only' lists file paths, 'count' shows match counts per file",
+                    "default": "content"
+                  },
+                  "context": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after each match (grep mode only)",
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "todo",
+              "description": "Manage your task list for the current session. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current list.\n\nWriting:\n- Provide 'todos' array to create/update items\n- merge=false (default): replace the entire list with a fresh plan\n- merge=true: update existing items by id, add any new ones\n\nEach item: {id: string, content: string, status: pending|in_progress|completed|cancelled}\nList order is priority. Only ONE item in_progress at a time.\nMark items completed immediately when done. If something fails, cancel it and add a revised item.\n\nAlways returns the full current list.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "todos": {
+                    "type": "array",
+                    "description": "Task items to write. Omit to read current list.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Unique item identifier"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Task description"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "in_progress",
+                            "completed",
+                            "cancelled"
+                          ],
+                          "description": "Current status"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "content",
+                        "status"
+                      ]
+                    }
+                  },
+                  "merge": {
+                    "type": "boolean",
+                    "description": "true: update existing items by id, add new ones. false (default): replace the entire list.",
+                    "default": false
+                  }
+                },
+                "required": []
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write content to a file, completely replacing existing content. Use this instead of echo/cat heredoc in terminal. Creates parent directories automatically. OVERWRITES the entire file — use 'patch' for targeted edits.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to write (will be created if it doesn't exist, overwritten if it does)"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Complete content to write to the file"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '7201'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"in_progress\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"pending\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"merge\": false}",
+                      "name": "todo"
+                    },
+                    "id": "call_aac2ecd08072487bbd9e60",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1777207846,
+          "id": "chatcmpl-0e38c6e8-c338-9043-8a6f-d11761136961",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 87,
+            "prompt_tokens": 1896,
+            "prompt_tokens_details": {
+              "cached_tokens": 1888
+            },
+            "total_tokens": 1983
+          }
+        }
+    headers:
+      content-length:
+      - '735'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:50:47 GMT
+      req-arrive-time:
+      - '1777207846422'
+      req-cost-time:
+      - '1093'
+      resp-start-time:
+      - '1777207847516'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '1092'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.33.1
+      authorization:
+      - Bearer test_dashscope_api_key
+    method: GET
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/models
+  response:
+    body:
+      string: |-
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "kimi/kimi-k2.6",
+              "object": "model",
+              "created": 1777202818,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-v4-flash",
+              "object": "model",
+              "created": 1777029693,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "object": "model",
+              "created": 1777029654,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-2.0-pro-2026-04-22",
+              "object": "model",
+              "created": 1776952745,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-plus-2026-04-20",
+              "object": "model",
+              "created": 1776917634,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.6-27b",
+              "object": "model",
+              "created": 1776917600,
+              "owned_by": "system"
+            },
+            {
+              "id": "kimi-k2.6",
+              "object": "model",
+              "created": 1776784071,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.6-max-preview",
+              "object": "model",
+              "created": 1776763456,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.6-35b-a3b",
+              "object": "model",
+              "created": 1776396634,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.6-flash-2026-04-16",
+              "object": "model",
+              "created": 1776396609,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.6-flash",
+              "object": "model",
+              "created": 1776396583,
+              "owned_by": "system"
+            },
+            {
+              "id": "glm-5.1",
+              "object": "model",
+              "created": 1776956873,
+              "owned_by": "system"
+            },
+            {
+              "id": "vanchin/deepseek-v3.1-terminus",
+              "object": "model",
+              "created": 1776146860,
+              "owned_by": "system"
+            },
+            {
+              "id": "vanchin/deepseek-v3",
+              "object": "model",
+              "created": 1776146846,
+              "owned_by": "system"
+            },
+            {
+              "id": "vanchin/deepseek-r1",
+              "object": "model",
+              "created": 1776146832,
+              "owned_by": "system"
+            },
+            {
+              "id": "vanchin/deepseek-ocr",
+              "object": "model",
+              "created": 1776146821,
+              "owned_by": "system"
+            },
+            {
+              "id": "vanchin/deepseek-v3.2-think",
+              "object": "model",
+              "created": 1776146808,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-plus-realtime-2026-03-15",
+              "object": "model",
+              "created": 1776421800,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-plus-realtime",
+              "object": "model",
+              "created": 1776345931,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-plus-2026-03-15",
+              "object": "model",
+              "created": 1776945354,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-plus",
+              "object": "model",
+              "created": 1776421786,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-flash-realtime-2026-03-15",
+              "object": "model",
+              "created": 1776345899,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-flash-realtime",
+              "object": "model",
+              "created": 1776345863,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-flash-2026-03-15",
+              "object": "model",
+              "created": 1776945383,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-omni-flash",
+              "object": "model",
+              "created": 1776945369,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.6-plus-2026-04-02",
+              "object": "model",
+              "created": 1775211947,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.6-plus",
+              "object": "model",
+              "created": 1775728219,
+              "owned_by": "system"
+            },
+            {
+              "id": "wan2.7-image-pro",
+              "object": "model",
+              "created": 1775023646,
+              "owned_by": "system"
+            },
+            {
+              "id": "wan2.7-image",
+              "object": "model",
+              "created": 1775023558,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax/MiniMax-M2.7",
+              "object": "model",
+              "created": 1774016827,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax/speech-2.8-hd",
+              "object": "model",
+              "created": 1774008837,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax/speech-2.8-turbo",
+              "object": "model",
+              "created": 1774008732,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax/speech-02-turbo",
+              "object": "model",
+              "created": 1774009003,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax/speech-02-hd",
+              "object": "model",
+              "created": 1774008599,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-deep-research-2025-12-15",
+              "object": "model",
+              "created": 1773912697,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-2.0-2026-03-03",
+              "object": "model",
+              "created": 1772537799,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-2.0-pro",
+              "object": "model",
+              "created": 1772537784,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-2.0-pro-2026-03-03",
+              "object": "model",
+              "created": 1772537768,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-2.0",
+              "object": "model",
+              "created": 1772537751,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-asr-flash-2026-02-10",
+              "object": "model",
+              "created": 1772530125,
+              "owned_by": "system"
+            },
+            {
+              "id": "glm-5",
+              "object": "model",
+              "created": 1775024801,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-flash-character-2026-02-26",
+              "object": "model",
+              "created": 1772265971,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax-M2.5",
+              "object": "model",
+              "created": 1773633333,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-flash-2026-02-23",
+              "object": "model",
+              "created": 1773807130,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-flash",
+              "object": "model",
+              "created": 1773807117,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-122b-a10b",
+              "object": "model",
+              "created": 1773807315,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-35b-a3b",
+              "object": "model",
+              "created": 1773807285,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-27b",
+              "object": "model",
+              "created": 1773807301,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-coder-next",
+              "object": "model",
+              "created": 1772433350,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-397b-a17b",
+              "object": "model",
+              "created": 1775728395,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-plus-2026-02-15",
+              "object": "model",
+              "created": 1773807168,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3.5-plus",
+              "object": "model",
+              "created": 1775728284,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-asr-flash-realtime-2026-02-10",
+              "object": "model",
+              "created": 1772269661,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax/MiniMax-M2.1",
+              "object": "model",
+              "created": 1770949497,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax/MiniMax-M2.5",
+              "object": "model",
+              "created": 1770949482,
+              "owned_by": "system"
+            },
+            {
+              "id": "kimi/kimi-k2.5",
+              "object": "model",
+              "created": 1770949447,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-vd-2026-01-26",
+              "object": "model",
+              "created": 1770722674,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-instruct-flash-2026-01-26",
+              "object": "model",
+              "created": 1770722014,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-instruct-flash",
+              "object": "model",
+              "created": 1770721937,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-vc-2026-01-22",
+              "object": "model",
+              "created": 1770721798,
+              "owned_by": "system"
+            },
+            {
+              "id": "glm-4.7",
+              "object": "model",
+              "created": 1773633347,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-max",
+              "object": "model",
+              "created": 1773667211,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-instruct-flash-realtime-2026-01-22",
+              "object": "model",
+              "created": 1770173367,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-instruct-flash-realtime",
+              "object": "model",
+              "created": 1770173313,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-vd-realtime-2026-01-15",
+              "object": "model",
+              "created": 1770013381,
+              "owned_by": "system"
+            },
+            {
+              "id": "kimi-k2.5",
+              "object": "model",
+              "created": 1773633504,
+              "owned_by": "system"
+            },
+            {
+              "id": "tongyi-xiaomi-analysis-flash",
+              "object": "model",
+              "created": 1770706811,
+              "owned_by": "system"
+            },
+            {
+              "id": "tongyi-xiaomi-analysis-pro",
+              "object": "model",
+              "created": 1770706854,
+              "owned_by": "system"
+            },
+            {
+              "id": "siliconflow/deepseek-v3.2",
+              "object": "model",
+              "created": 1769611475,
+              "owned_by": "system"
+            },
+            {
+              "id": "siliconflow/deepseek-v3.1-terminus",
+              "object": "model",
+              "created": 1769611465,
+              "owned_by": "system"
+            },
+            {
+              "id": "siliconflow/deepseek-v3-0324",
+              "object": "model",
+              "created": 1769611458,
+              "owned_by": "system"
+            },
+            {
+              "id": "siliconflow/deepseek-r1-0528",
+              "object": "model",
+              "created": 1769611447,
+              "owned_by": "system"
+            },
+            {
+              "id": "MiniMax-M2.1",
+              "object": "model",
+              "created": 1773633360,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-vl-flash-2026-01-22",
+              "object": "model",
+              "created": 1769440113,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-max-2026-01-23",
+              "object": "model",
+              "created": 1770807529,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-vc-realtime-2026-01-15",
+              "object": "model",
+              "created": 1768647278,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-edit-max-2026-01-16",
+              "object": "model",
+              "created": 1768570986,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-edit-max",
+              "object": "model",
+              "created": 1768570977,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-plus-2026-01-09",
+              "object": "model",
+              "created": 1767930106,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-flash-character",
+              "object": "model",
+              "created": 1775802140,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-max-2025-12-30",
+              "object": "model",
+              "created": 1767090925,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-max",
+              "object": "model",
+              "created": 1767090910,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-flash",
+              "object": "model",
+              "created": 1772373359,
+              "owned_by": "system"
+            },
+            {
+              "id": "z-image-turbo",
+              "object": "model",
+              "created": 1766111685,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-vl-plus-2025-12-19",
+              "object": "model",
+              "created": 1766050605,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-vd-realtime-2025-12-16",
+              "object": "model",
+              "created": 1765861332,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-edit-plus-2025-12-15",
+              "object": "model",
+              "created": 1765811043,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-v3.2",
+              "object": "model",
+              "created": 1772280158,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-omni-flash-2025-12-01",
+              "object": "model",
+              "created": 1768533356,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-omni-flash-realtime-2025-12-01",
+              "object": "model",
+              "created": 1768533369,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-livetranslate-flash-2025-12-01",
+              "object": "model",
+              "created": 1764737030,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-livetranslate-flash",
+              "object": "model",
+              "created": 1764836565,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus-2025-12-01",
+              "object": "model",
+              "created": 1764588482,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-vc-realtime-2025-11-27",
+              "object": "model",
+              "created": 1764126161,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-flash-2025-11-27",
+              "object": "model",
+              "created": 1764125897,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-flash-realtime-2025-11-27",
+              "object": "model",
+              "created": 1764125637,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus-2025-11-05",
+              "object": "model",
+              "created": 1764071954,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-mt-lite",
+              "object": "model",
+              "created": 1763619345,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-ocr-2025-11-20",
+              "object": "model",
+              "created": 1763606696,
+              "owned_by": "system"
+            },
+            {
+              "id": "kimi-k2-thinking",
+              "object": "model",
+              "created": 1773633560,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-mt-flash",
+              "object": "model",
+              "created": 1762432503,
+              "owned_by": "system"
+            },
+            {
+              "id": "gui-plus",
+              "object": "model",
+              "created": 1762330077,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-edit-plus-2025-10-30",
+              "object": "model",
+              "created": 1761808837,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-image-edit-plus",
+              "object": "model",
+              "created": 1763973984,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-deep-search-planning",
+              "object": "model",
+              "created": 1761806022,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-asr-flash-realtime-2025-10-27",
+              "object": "model",
+              "created": 1763022126,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-asr-flash-realtime",
+              "object": "model",
+              "created": 1763022111,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-vl-flash",
+              "object": "model",
+              "created": 1770132128,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-vl-flash-2025-10-15",
+              "object": "model",
+              "created": 1775619426,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-flash",
+              "object": "model",
+              "created": 1767618014,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-flash-2025-09-18",
+              "object": "model",
+              "created": 1763022187,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-flash-realtime-2025-09-18",
+              "object": "model",
+              "created": 1763022209,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-tts-flash-realtime",
+              "object": "model",
+              "created": 1767618029,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-omni-flash-realtime",
+              "object": "model",
+              "created": 1768533342,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-omni-flash",
+              "object": "model",
+              "created": 1768533390,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-omni-flash-2025-09-15",
+              "object": "model",
+              "created": 1761550514,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-omni-flash-realtime-2025-09-15",
+              "object": "model",
+              "created": 1761550561,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-s2s-flash-realtime-2025-09-22",
+              "object": "model",
+              "created": 1763022163,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-livetranslate-flash-realtime",
+              "object": "model",
+              "created": 1763022138,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-livetranslate-flash-realtime-2025-09-22",
+              "object": "model",
+              "created": 1763022151,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-14b-instruct-1m",
+              "object": "model",
+              "created": 1760422035,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-7b-instruct-1m",
+              "object": "model",
+              "created": 1760422022,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max-2025-01-25",
+              "object": "model",
+              "created": 1760421986,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-turbo-2024-11-01",
+              "object": "model",
+              "created": 1760421757,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus-2025-01-25",
+              "object": "model",
+              "created": 1760421714,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwq-plus-2025-03-05",
+              "object": "model",
+              "created": 1766039797,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwq-plus",
+              "object": "model",
+              "created": 1766039779,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-vl-32b-instruct",
+              "object": "model",
+              "created": 1760421573,
+              "owned_by": "system"
+            },
+            {
+              "id": "qvq-max",
+              "object": "model",
+              "created": 1760421485,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-omni-turbo",
+              "object": "model",
+              "created": 1768533402,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-turbo-2025-04-28",
+              "object": "model",
+              "created": 1760413797,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus-2025-04-28",
+              "object": "model",
+              "created": 1760413775,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-max-2025-04-08",
+              "object": "model",
+              "created": 1760413715,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-plus-2025-01-25",
+              "object": "model",
+              "created": 1760413697,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-plus-latest",
+              "object": "model",
+              "created": 1760687819,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-max-latest",
+              "object": "model",
+              "created": 1768878339,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-plus-2025-05-07",
+              "object": "model",
+              "created": 1760413614,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-turbo-2025-07-15",
+              "object": "model",
+              "created": 1760413499,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-235b-a22b-instruct-2507",
+              "object": "model",
+              "created": 1761536552,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-235b-a22b-thinking-2507",
+              "object": "model",
+              "created": 1761536566,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-30b-a3b-thinking-2507",
+              "object": "model",
+              "created": 1760413385,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-30b-a3b-instruct-2507",
+              "object": "model",
+              "created": 1761298493,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-coder-flash",
+              "object": "model",
+              "created": 1770130782,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-coder-plus-2025-09-23",
+              "object": "model",
+              "created": 1764776933,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-max-2025-09-23",
+              "object": "model",
+              "created": 1772111362,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-vl-plus",
+              "object": "model",
+              "created": 1771912337,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-vl-plus-2025-09-23",
+              "object": "model",
+              "created": 1772111546,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus-2025-09-11",
+              "object": "model",
+              "created": 1757644887,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-next-80b-a3b-thinking",
+              "object": "model",
+              "created": 1760688504,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-next-80b-a3b-instruct",
+              "object": "model",
+              "created": 1769669351,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-max-preview",
+              "object": "model",
+              "created": 1768287967,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-v3.1",
+              "object": "model",
+              "created": 1772433558,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-plus-2025-08-15",
+              "object": "model",
+              "created": 1755567702,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-coder-plus",
+              "object": "model",
+              "created": 1772196763,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-coder-plus-2025-07-22",
+              "object": "model",
+              "created": 1755694896,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus-2025-07-14",
+              "object": "model",
+              "created": 1761298562,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-coder-480b-a35b-instruct",
+              "object": "model",
+              "created": 1760688365,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-mt-turbo",
+              "object": "model",
+              "created": 1761731026,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-mt-plus",
+              "object": "model",
+              "created": 1761731052,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-tts-2025-05-22",
+              "object": "model",
+              "created": 1763022059,
+              "owned_by": "system"
+            },
+            {
+              "id": "qvq-plus",
+              "object": "model",
+              "created": 1753955066,
+              "owned_by": "system"
+            },
+            {
+              "id": "qvq-plus-2025-05-15",
+              "object": "model",
+              "created": 1753955051,
+              "owned_by": "system"
+            },
+            {
+              "id": "qvq-max-2025-05-15",
+              "object": "model",
+              "created": 1753955124,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-4b",
+              "object": "model",
+              "created": 1760688025,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-32b",
+              "object": "model",
+              "created": 1766731772,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-30b-a3b",
+              "object": "model",
+              "created": 1767089194,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-235b-a22b",
+              "object": "model",
+              "created": 1753955239,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-14b",
+              "object": "model",
+              "created": 1760688012,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-1.7b",
+              "object": "model",
+              "created": 1760687985,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-0.6b",
+              "object": "model",
+              "created": 1760687998,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen3-8b",
+              "object": "model",
+              "created": 1758608409,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-max-2025-04-02",
+              "object": "model",
+              "created": 1753955443,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-v3",
+              "object": "model",
+              "created": 1760689908,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-r1-distill-llama-70b",
+              "object": "model",
+              "created": 1757401865,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-r1-distill-qwen-32b",
+              "object": "model",
+              "created": 1753955700,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-r1-distill-qwen-14b",
+              "object": "model",
+              "created": 1753955711,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-r1-distill-llama-8b",
+              "object": "model",
+              "created": 1753955686,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-r1-distill-qwen-1.5b",
+              "object": "model",
+              "created": 1753955733,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-r1-distill-qwen-7b",
+              "object": "model",
+              "created": 1753955722,
+              "owned_by": "system"
+            },
+            {
+              "id": "deepseek-r1",
+              "object": "model",
+              "created": 1760689898,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen1.5-7b-chat",
+              "object": "model",
+              "created": 1774946396,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-ocr-latest",
+              "object": "model",
+              "created": 1763696092,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-ocr",
+              "object": "model",
+              "created": 1753956252,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-coder-plus-1106",
+              "object": "model",
+              "created": 1753956290,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-coder-plus",
+              "object": "model",
+              "created": 1753956280,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-coder-plus-latest",
+              "object": "model",
+              "created": 1753956310,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-coder-14b-instruct",
+              "object": "model",
+              "created": 1753956329,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-coder-32b-instruct",
+              "object": "model",
+              "created": 1753956340,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-32b-instruct",
+              "object": "model",
+              "created": 1754012737,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max-latest",
+              "object": "model",
+              "created": 1768877433,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-turbo-0919",
+              "object": "model",
+              "created": 1770119917,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-math-turbo-0919",
+              "object": "model",
+              "created": 1754012893,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-coder-turbo-latest",
+              "object": "model",
+              "created": 1754012852,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-math-72b-instruct",
+              "object": "model",
+              "created": 1754012807,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-7b-instruct",
+              "object": "model",
+              "created": 1754012786,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-14b-instruct",
+              "object": "model",
+              "created": 1754012728,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-0.5b-instruct",
+              "object": "model",
+              "created": 1757402120,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-math-plus",
+              "object": "model",
+              "created": 1754012997,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max-0919",
+              "object": "model",
+              "created": 1754012914,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-math-turbo-latest",
+              "object": "model",
+              "created": 1754012904,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-math-turbo",
+              "object": "model",
+              "created": 1754012882,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-math-plus-latest",
+              "object": "model",
+              "created": 1754012872,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-math-plus-0919",
+              "object": "model",
+              "created": 1754012861,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-coder-turbo-0919",
+              "object": "model",
+              "created": 1754012842,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-coder-turbo",
+              "object": "model",
+              "created": 1754012830,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-math-7b-instruct",
+              "object": "model",
+              "created": 1754012818,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-coder-7b-instruct",
+              "object": "model",
+              "created": 1754012797,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-72b-instruct",
+              "object": "model",
+              "created": 1754012775,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-1.5b-instruct",
+              "object": "model",
+              "created": 1757402614,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-math-1.5b-instruct",
+              "object": "model",
+              "created": 1774948594,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-turbo-latest",
+              "object": "model",
+              "created": 1768877934,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus-latest",
+              "object": "model",
+              "created": 1766979548,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2.5-3b-instruct",
+              "object": "model",
+              "created": 1726638000,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2-1.5b-instruct",
+              "object": "model",
+              "created": 1774946282,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2-57b-a14b-instruct",
+              "object": "model",
+              "created": 1774945927,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2-7b-instruct",
+              "object": "model",
+              "created": 1774946249,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen2-0.5b-instruct",
+              "object": "model",
+              "created": 1774946317,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-long",
+              "object": "model",
+              "created": 1760687436,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-max",
+              "object": "model",
+              "created": 1770728326,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-vl-plus",
+              "object": "model",
+              "created": 1760687385,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max-0428",
+              "object": "model",
+              "created": 1714978712,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen1.5-110b-chat",
+              "object": "model",
+              "created": 1774946124,
+              "owned_by": "system"
+            },
+            {
+              "id": "codeqwen1.5-7b-chat",
+              "object": "model",
+              "created": 1714377102,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen1.5-0.5b-chat",
+              "object": "model",
+              "created": 1774946470,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-7b-chat",
+              "object": "model",
+              "created": 1714377102,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-1.8b-chat",
+              "object": "model",
+              "created": 1714377102,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-1.8b-longcontext-chat",
+              "object": "model",
+              "created": 1714377102,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-72b-chat",
+              "object": "model",
+              "created": 1714377102,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-14b-chat",
+              "object": "model",
+              "created": 1714377102,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen1.5-1.8b-chat",
+              "object": "model",
+              "created": 1774946434,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen1.5-72b-chat",
+              "object": "model",
+              "created": 1774946160,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max-longcontext",
+              "object": "model",
+              "created": 1714377101,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max-1201",
+              "object": "model",
+              "created": 1714377101,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen1.5-32b-chat",
+              "object": "model",
+              "created": 1774946200,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen1.5-14b-chat",
+              "object": "model",
+              "created": 1774946349,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max",
+              "object": "model",
+              "created": 1772370840,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-max-0107",
+              "object": "model",
+              "created": 1714377100,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-plus",
+              "object": "model",
+              "created": 1771912454,
+              "owned_by": "system"
+            },
+            {
+              "id": "qwen-turbo",
+              "object": "model",
+              "created": 1768877836,
+              "owned_by": "system"
+            }
+          ],
+          "first_id": "model-id-0",
+          "last_id": "model-id-238",
+          "has_more": false
+        }
+    headers:
+      content-length:
+      - '21239'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:50:47 GMT
+      req-arrive-time:
+      - '1777207847757'
+      req-cost-time:
+      - '37'
+      resp-start-time:
+      - '1777207847795'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-envoy-upstream-service-time:
+      - '37'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:50 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "这是一个必须展示规划过程的多步任务。你必须先调用 todo 工具创建 3 个任务：p1=读取文件，p2=提取 CHECKPOINT 行，p3=输出最终答案。创建时只能让 p1 处于 in_progress。随后必须调用 read_file 读取文件 /tmp/loongsuite-hermes-agent-tests/planning_input.txt。拿到内容后，再次调用 todo 把 p1/p2/p3 更新为 completed。最后只回复文件中以 CHECKPOINT= 开头的整行，不要解释，也不要输出 todo 内容。"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_aac2ecd08072487bbd9e60",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":false,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"in_progress\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"pending\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"in_progress\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"pending\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 2, \"in_progress\": 1, \"completed\": 0, \"cancelled\": 0}}",
+            "tool_call_id": "call_aac2ecd08072487bbd9e60"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "patch",
+              "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing.\n\nReplace mode (default): find a unique string and replace it.\nPatch mode: apply V4A multi-file patches for bulk changes.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "patch"
+                    ],
+                    "description": "Edit mode: 'replace' for targeted find-and-replace, 'patch' for V4A multi-file patches",
+                    "default": "replace"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "File path to edit (required for 'replace' mode)"
+                  },
+                  "old_string": {
+                    "type": "string",
+                    "description": "Text to find in the file (required for 'replace' mode). Must be unique in the file unless replace_all=true. Include enough surrounding context to ensure uniqueness."
+                  },
+                  "new_string": {
+                    "type": "string",
+                    "description": "Replacement text (required for 'replace' mode). Can be empty string to delete the matched text."
+                  },
+                  "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                    "default": false
+                  },
+                  "patch": {
+                    "type": "string",
+                    "description": "V4A format patch content (required for 'patch' mode). Format:\n*** Begin Patch\n*** Update File: path/to/file\n@@ context hint @@\n context line\n-removed line\n+added line\n*** End Patch"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Suggests similar filenames if not found. Use offset and limit for large files. Reads exceeding ~100K characters are rejected; use offset and limit to read specific sections of large files. NOTE: Cannot read images or binary files — use vision_analyze for images.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to read (absolute, relative, or ~/path)"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed, default: 1)",
+                    "default": 1,
+                    "minimum": 1
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: 500, max: 2000)",
+                    "default": 500,
+                    "maximum": 2000
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "search_files",
+              "description": "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. Ripgrep-backed, faster than shell equivalents.\n\nContent search (target='content'): Regex search inside files. Output modes: full matches with line numbers, file paths only, or match counts.\n\nFile search (target='files'): Find files by glob pattern (e.g., '*.py', '*config*'). Also use this instead of ls — results sorted by modification time.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern for content search, or glob pattern (e.g., '*.py') for file search"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files"
+                    ],
+                    "description": "'content' searches inside file contents, 'files' searches for files by name",
+                    "default": "content"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (default: current working directory)",
+                    "default": "."
+                  },
+                  "file_glob": {
+                    "type": "string",
+                    "description": "Filter files by pattern in grep mode (e.g., '*.py' to only search Python files)"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 50)",
+                    "default": 50
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Skip first N results for pagination (default: 0)",
+                    "default": 0
+                  },
+                  "output_mode": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files_only",
+                      "count"
+                    ],
+                    "description": "Output format for grep mode: 'content' shows matching lines with line numbers, 'files_only' lists file paths, 'count' shows match counts per file",
+                    "default": "content"
+                  },
+                  "context": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after each match (grep mode only)",
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "todo",
+              "description": "Manage your task list for the current session. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current list.\n\nWriting:\n- Provide 'todos' array to create/update items\n- merge=false (default): replace the entire list with a fresh plan\n- merge=true: update existing items by id, add any new ones\n\nEach item: {id: string, content: string, status: pending|in_progress|completed|cancelled}\nList order is priority. Only ONE item in_progress at a time.\nMark items completed immediately when done. If something fails, cancel it and add a revised item.\n\nAlways returns the full current list.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "todos": {
+                    "type": "array",
+                    "description": "Task items to write. Omit to read current list.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Unique item identifier"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Task description"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "in_progress",
+                            "completed",
+                            "cancelled"
+                          ],
+                          "description": "Current status"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "content",
+                        "status"
+                      ]
+                    }
+                  },
+                  "merge": {
+                    "type": "boolean",
+                    "description": "true: update existing items by id, add new ones. false (default): replace the entire list.",
+                    "default": false
+                  }
+                },
+                "required": []
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write content to a file, completely replacing existing content. Use this instead of echo/cat heredoc in terminal. Creates parent directories automatically. OVERWRITES the entire file — use 'patch' for targeted edits.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to write (will be created if it doesn't exist, overwritten if it does)"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Complete content to write to the file"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '8080'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"path\": \"/tmp/loongsuite-hermes-agent-tests/planning_input.txt\"}",
+                      "name": "read_file"
+                    },
+                    "id": "call_2836afb62fca412f83ac13",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1777207848,
+          "id": "chatcmpl-b2778bbd-fcf6-9b35-b616-703aa6a05195",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 32,
+            "prompt_tokens": 2101,
+            "prompt_tokens_details": {
+              "cached_tokens": 1888
+            },
+            "total_tokens": 2133
+          }
+        }
+    headers:
+      content-length:
+      - '537'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:50:48 GMT
+      req-arrive-time:
+      - '1777207847970'
+      req-cost-time:
+      - '698'
+      resp-start-time:
+      - '1777207848669'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '620'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:50 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "这是一个必须展示规划过程的多步任务。你必须先调用 todo 工具创建 3 个任务：p1=读取文件，p2=提取 CHECKPOINT 行，p3=输出最终答案。创建时只能让 p1 处于 in_progress。随后必须调用 read_file 读取文件 /tmp/loongsuite-hermes-agent-tests/planning_input.txt。拿到内容后，再次调用 todo 把 p1/p2/p3 更新为 completed。最后只回复文件中以 CHECKPOINT= 开头的整行，不要解释，也不要输出 todo 内容。"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_aac2ecd08072487bbd9e60",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":false,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"in_progress\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"pending\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"in_progress\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"pending\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 2, \"in_progress\": 1, \"completed\": 0, \"cancelled\": 0}}",
+            "tool_call_id": "call_aac2ecd08072487bbd9e60"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_2836afb62fca412f83ac13",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"/tmp/loongsuite-hermes-agent-tests/planning_input.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"content\": \"     1|title=otelgui demo\\n     2|CHECKPOINT=planning_trace_ok\\n     3|payload=otelgui_e2e_ok\\n     4|\", \"total_lines\": 3, \"file_size\": 71, \"truncated\": false, \"is_binary\": false, \"is_image\": false}",
+            "tool_call_id": "call_2836afb62fca412f83ac13"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "patch",
+              "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing.\n\nReplace mode (default): find a unique string and replace it.\nPatch mode: apply V4A multi-file patches for bulk changes.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "patch"
+                    ],
+                    "description": "Edit mode: 'replace' for targeted find-and-replace, 'patch' for V4A multi-file patches",
+                    "default": "replace"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "File path to edit (required for 'replace' mode)"
+                  },
+                  "old_string": {
+                    "type": "string",
+                    "description": "Text to find in the file (required for 'replace' mode). Must be unique in the file unless replace_all=true. Include enough surrounding context to ensure uniqueness."
+                  },
+                  "new_string": {
+                    "type": "string",
+                    "description": "Replacement text (required for 'replace' mode). Can be empty string to delete the matched text."
+                  },
+                  "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                    "default": false
+                  },
+                  "patch": {
+                    "type": "string",
+                    "description": "V4A format patch content (required for 'patch' mode). Format:\n*** Begin Patch\n*** Update File: path/to/file\n@@ context hint @@\n context line\n-removed line\n+added line\n*** End Patch"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Suggests similar filenames if not found. Use offset and limit for large files. Reads exceeding ~100K characters are rejected; use offset and limit to read specific sections of large files. NOTE: Cannot read images or binary files — use vision_analyze for images.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to read (absolute, relative, or ~/path)"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed, default: 1)",
+                    "default": 1,
+                    "minimum": 1
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: 500, max: 2000)",
+                    "default": 500,
+                    "maximum": 2000
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "search_files",
+              "description": "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. Ripgrep-backed, faster than shell equivalents.\n\nContent search (target='content'): Regex search inside files. Output modes: full matches with line numbers, file paths only, or match counts.\n\nFile search (target='files'): Find files by glob pattern (e.g., '*.py', '*config*'). Also use this instead of ls — results sorted by modification time.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern for content search, or glob pattern (e.g., '*.py') for file search"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files"
+                    ],
+                    "description": "'content' searches inside file contents, 'files' searches for files by name",
+                    "default": "content"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (default: current working directory)",
+                    "default": "."
+                  },
+                  "file_glob": {
+                    "type": "string",
+                    "description": "Filter files by pattern in grep mode (e.g., '*.py' to only search Python files)"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 50)",
+                    "default": 50
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Skip first N results for pagination (default: 0)",
+                    "default": 0
+                  },
+                  "output_mode": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files_only",
+                      "count"
+                    ],
+                    "description": "Output format for grep mode: 'content' shows matching lines with line numbers, 'files_only' lists file paths, 'count' shows match counts per file",
+                    "default": "content"
+                  },
+                  "context": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after each match (grep mode only)",
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "todo",
+              "description": "Manage your task list for the current session. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current list.\n\nWriting:\n- Provide 'todos' array to create/update items\n- merge=false (default): replace the entire list with a fresh plan\n- merge=true: update existing items by id, add any new ones\n\nEach item: {id: string, content: string, status: pending|in_progress|completed|cancelled}\nList order is priority. Only ONE item in_progress at a time.\nMark items completed immediately when done. If something fails, cancel it and add a revised item.\n\nAlways returns the full current list.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "todos": {
+                    "type": "array",
+                    "description": "Task items to write. Omit to read current list.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Unique item identifier"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Task description"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "in_progress",
+                            "completed",
+                            "cancelled"
+                          ],
+                          "description": "Current status"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "content",
+                        "status"
+                      ]
+                    }
+                  },
+                  "merge": {
+                    "type": "boolean",
+                    "description": "true: update existing items by id, add new ones. false (default): replace the entire list.",
+                    "default": false
+                  }
+                },
+                "required": []
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write content to a file, completely replacing existing content. Use this instead of echo/cat heredoc in terminal. Creates parent directories automatically. OVERWRITES the entire file — use 'patch' for targeted edits.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to write (will be created if it doesn't exist, overwritten if it does)"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Complete content to write to the file"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '8601'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"merge\": true, \"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"completed\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"in_progress\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}]}",
+                      "name": "todo"
+                    },
+                    "id": "call_bb3d799c464742e0aaf0ec",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1777207850,
+          "id": "chatcmpl-ea06fa23-78e9-9c2d-89a2-42985f2cb19e",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 88,
+            "prompt_tokens": 2223,
+            "prompt_tokens_details": {
+              "cached_tokens": 1904
+            },
+            "total_tokens": 2311
+          }
+        }
+    headers:
+      content-length:
+      - '736'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:50:51 GMT
+      req-arrive-time:
+      - '1777207850472'
+      req-cost-time:
+      - '1152'
+      resp-start-time:
+      - '1777207851624'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '1151'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:50 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "这是一个必须展示规划过程的多步任务。你必须先调用 todo 工具创建 3 个任务：p1=读取文件，p2=提取 CHECKPOINT 行，p3=输出最终答案。创建时只能让 p1 处于 in_progress。随后必须调用 read_file 读取文件 /tmp/loongsuite-hermes-agent-tests/planning_input.txt。拿到内容后，再次调用 todo 把 p1/p2/p3 更新为 completed。最后只回复文件中以 CHECKPOINT= 开头的整行，不要解释，也不要输出 todo 内容。"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_aac2ecd08072487bbd9e60",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":false,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"in_progress\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"pending\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"in_progress\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"pending\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 2, \"in_progress\": 1, \"completed\": 0, \"cancelled\": 0}}",
+            "tool_call_id": "call_aac2ecd08072487bbd9e60"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_2836afb62fca412f83ac13",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"/tmp/loongsuite-hermes-agent-tests/planning_input.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"content\": \"     1|title=otelgui demo\\n     2|CHECKPOINT=planning_trace_ok\\n     3|payload=otelgui_e2e_ok\\n     4|\", \"total_lines\": 3, \"file_size\": 71, \"truncated\": false, \"is_binary\": false, \"is_image\": false}",
+            "tool_call_id": "call_2836afb62fca412f83ac13"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_bb3d799c464742e0aaf0ec",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":true,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"completed\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"in_progress\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"completed\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"in_progress\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 1, \"in_progress\": 1, \"completed\": 1, \"cancelled\": 0}}",
+            "tool_call_id": "call_bb3d799c464742e0aaf0ec"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "patch",
+              "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing.\n\nReplace mode (default): find a unique string and replace it.\nPatch mode: apply V4A multi-file patches for bulk changes.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "patch"
+                    ],
+                    "description": "Edit mode: 'replace' for targeted find-and-replace, 'patch' for V4A multi-file patches",
+                    "default": "replace"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "File path to edit (required for 'replace' mode)"
+                  },
+                  "old_string": {
+                    "type": "string",
+                    "description": "Text to find in the file (required for 'replace' mode). Must be unique in the file unless replace_all=true. Include enough surrounding context to ensure uniqueness."
+                  },
+                  "new_string": {
+                    "type": "string",
+                    "description": "Replacement text (required for 'replace' mode). Can be empty string to delete the matched text."
+                  },
+                  "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                    "default": false
+                  },
+                  "patch": {
+                    "type": "string",
+                    "description": "V4A format patch content (required for 'patch' mode). Format:\n*** Begin Patch\n*** Update File: path/to/file\n@@ context hint @@\n context line\n-removed line\n+added line\n*** End Patch"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Suggests similar filenames if not found. Use offset and limit for large files. Reads exceeding ~100K characters are rejected; use offset and limit to read specific sections of large files. NOTE: Cannot read images or binary files — use vision_analyze for images.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to read (absolute, relative, or ~/path)"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed, default: 1)",
+                    "default": 1,
+                    "minimum": 1
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: 500, max: 2000)",
+                    "default": 500,
+                    "maximum": 2000
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "search_files",
+              "description": "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. Ripgrep-backed, faster than shell equivalents.\n\nContent search (target='content'): Regex search inside files. Output modes: full matches with line numbers, file paths only, or match counts.\n\nFile search (target='files'): Find files by glob pattern (e.g., '*.py', '*config*'). Also use this instead of ls — results sorted by modification time.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern for content search, or glob pattern (e.g., '*.py') for file search"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files"
+                    ],
+                    "description": "'content' searches inside file contents, 'files' searches for files by name",
+                    "default": "content"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (default: current working directory)",
+                    "default": "."
+                  },
+                  "file_glob": {
+                    "type": "string",
+                    "description": "Filter files by pattern in grep mode (e.g., '*.py' to only search Python files)"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 50)",
+                    "default": 50
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Skip first N results for pagination (default: 0)",
+                    "default": 0
+                  },
+                  "output_mode": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files_only",
+                      "count"
+                    ],
+                    "description": "Output format for grep mode: 'content' shows matching lines with line numbers, 'files_only' lists file paths, 'count' shows match counts per file",
+                    "default": "content"
+                  },
+                  "context": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after each match (grep mode only)",
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "todo",
+              "description": "Manage your task list for the current session. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current list.\n\nWriting:\n- Provide 'todos' array to create/update items\n- merge=false (default): replace the entire list with a fresh plan\n- merge=true: update existing items by id, add any new ones\n\nEach item: {id: string, content: string, status: pending|in_progress|completed|cancelled}\nList order is priority. Only ONE item in_progress at a time.\nMark items completed immediately when done. If something fails, cancel it and add a revised item.\n\nAlways returns the full current list.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "todos": {
+                    "type": "array",
+                    "description": "Task items to write. Omit to read current list.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Unique item identifier"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Task description"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "in_progress",
+                            "completed",
+                            "cancelled"
+                          ],
+                          "description": "Current status"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "content",
+                        "status"
+                      ]
+                    }
+                  },
+                  "merge": {
+                    "type": "boolean",
+                    "description": "true: update existing items by id, add new ones. false (default): replace the entire list.",
+                    "default": false
+                  }
+                },
+                "required": []
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write content to a file, completely replacing existing content. Use this instead of echo/cat heredoc in terminal. Creates parent directories automatically. OVERWRITES the entire file — use 'patch' for targeted edits.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to write (will be created if it doesn't exist, overwritten if it does)"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Complete content to write to the file"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '9483'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"merge\": true, \"todos\": [{\"content\": \"读取文件\", \"id\": \"p1\", \"status\": \"completed\"}, {\"content\": \"提取 CHECKPOINT 行\", \"id\": \"p2\", \"status\": \"completed\"}, {\"content\": \"输出最终答案\", \"id\": \"p3\", \"status\": \"in_progress\"}]}",
+                      "name": "todo"
+                    },
+                    "id": "call_e3f0c9e87358487882c226",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1777207851,
+          "id": "chatcmpl-e1a1525d-8951-9c25-b098-a4c76694d5f2",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 88,
+            "prompt_tokens": 2428,
+            "prompt_tokens_details": {
+              "cached_tokens": 1904
+            },
+            "total_tokens": 2516
+          }
+        }
+    headers:
+      content-length:
+      - '738'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:50:52 GMT
+      req-arrive-time:
+      - '1777207851742'
+      req-cost-time:
+      - '1077'
+      resp-start-time:
+      - '1777207852819'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '1075'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:50 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "这是一个必须展示规划过程的多步任务。你必须先调用 todo 工具创建 3 个任务：p1=读取文件，p2=提取 CHECKPOINT 行，p3=输出最终答案。创建时只能让 p1 处于 in_progress。随后必须调用 read_file 读取文件 /tmp/loongsuite-hermes-agent-tests/planning_input.txt。拿到内容后，再次调用 todo 把 p1/p2/p3 更新为 completed。最后只回复文件中以 CHECKPOINT= 开头的整行，不要解释，也不要输出 todo 内容。"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_aac2ecd08072487bbd9e60",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":false,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"in_progress\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"pending\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"in_progress\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"pending\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 2, \"in_progress\": 1, \"completed\": 0, \"cancelled\": 0}}",
+            "tool_call_id": "call_aac2ecd08072487bbd9e60"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_2836afb62fca412f83ac13",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"/tmp/loongsuite-hermes-agent-tests/planning_input.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"content\": \"     1|title=otelgui demo\\n     2|CHECKPOINT=planning_trace_ok\\n     3|payload=otelgui_e2e_ok\\n     4|\", \"total_lines\": 3, \"file_size\": 71, \"truncated\": false, \"is_binary\": false, \"is_image\": false}",
+            "tool_call_id": "call_2836afb62fca412f83ac13"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_bb3d799c464742e0aaf0ec",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":true,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"completed\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"in_progress\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"completed\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"in_progress\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 1, \"in_progress\": 1, \"completed\": 1, \"cancelled\": 0}}",
+            "tool_call_id": "call_bb3d799c464742e0aaf0ec"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_e3f0c9e87358487882c226",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":true,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"completed\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"completed\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"in_progress\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"completed\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"completed\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"in_progress\"}], \"summary\": {\"total\": 3, \"pending\": 0, \"in_progress\": 1, \"completed\": 2, \"cancelled\": 0}}",
+            "tool_call_id": "call_e3f0c9e87358487882c226"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "patch",
+              "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing.\n\nReplace mode (default): find a unique string and replace it.\nPatch mode: apply V4A multi-file patches for bulk changes.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "patch"
+                    ],
+                    "description": "Edit mode: 'replace' for targeted find-and-replace, 'patch' for V4A multi-file patches",
+                    "default": "replace"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "File path to edit (required for 'replace' mode)"
+                  },
+                  "old_string": {
+                    "type": "string",
+                    "description": "Text to find in the file (required for 'replace' mode). Must be unique in the file unless replace_all=true. Include enough surrounding context to ensure uniqueness."
+                  },
+                  "new_string": {
+                    "type": "string",
+                    "description": "Replacement text (required for 'replace' mode). Can be empty string to delete the matched text."
+                  },
+                  "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                    "default": false
+                  },
+                  "patch": {
+                    "type": "string",
+                    "description": "V4A format patch content (required for 'patch' mode). Format:\n*** Begin Patch\n*** Update File: path/to/file\n@@ context hint @@\n context line\n-removed line\n+added line\n*** End Patch"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Suggests similar filenames if not found. Use offset and limit for large files. Reads exceeding ~100K characters are rejected; use offset and limit to read specific sections of large files. NOTE: Cannot read images or binary files — use vision_analyze for images.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to read (absolute, relative, or ~/path)"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed, default: 1)",
+                    "default": 1,
+                    "minimum": 1
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: 500, max: 2000)",
+                    "default": 500,
+                    "maximum": 2000
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "search_files",
+              "description": "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. Ripgrep-backed, faster than shell equivalents.\n\nContent search (target='content'): Regex search inside files. Output modes: full matches with line numbers, file paths only, or match counts.\n\nFile search (target='files'): Find files by glob pattern (e.g., '*.py', '*config*'). Also use this instead of ls — results sorted by modification time.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern for content search, or glob pattern (e.g., '*.py') for file search"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files"
+                    ],
+                    "description": "'content' searches inside file contents, 'files' searches for files by name",
+                    "default": "content"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (default: current working directory)",
+                    "default": "."
+                  },
+                  "file_glob": {
+                    "type": "string",
+                    "description": "Filter files by pattern in grep mode (e.g., '*.py' to only search Python files)"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 50)",
+                    "default": 50
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Skip first N results for pagination (default: 0)",
+                    "default": 0
+                  },
+                  "output_mode": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files_only",
+                      "count"
+                    ],
+                    "description": "Output format for grep mode: 'content' shows matching lines with line numbers, 'files_only' lists file paths, 'count' shows match counts per file",
+                    "default": "content"
+                  },
+                  "context": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after each match (grep mode only)",
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "todo",
+              "description": "Manage your task list for the current session. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current list.\n\nWriting:\n- Provide 'todos' array to create/update items\n- merge=false (default): replace the entire list with a fresh plan\n- merge=true: update existing items by id, add any new ones\n\nEach item: {id: string, content: string, status: pending|in_progress|completed|cancelled}\nList order is priority. Only ONE item in_progress at a time.\nMark items completed immediately when done. If something fails, cancel it and add a revised item.\n\nAlways returns the full current list.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "todos": {
+                    "type": "array",
+                    "description": "Task items to write. Omit to read current list.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Unique item identifier"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Task description"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "in_progress",
+                            "completed",
+                            "cancelled"
+                          ],
+                          "description": "Current status"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "content",
+                        "status"
+                      ]
+                    }
+                  },
+                  "merge": {
+                    "type": "boolean",
+                    "description": "true: update existing items by id, add new ones. false (default): replace the entire list.",
+                    "default": false
+                  }
+                },
+                "required": []
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write content to a file, completely replacing existing content. Use this instead of echo/cat heredoc in terminal. Creates parent directories automatically. OVERWRITES the entire file — use 'patch' for targeted edits.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to write (will be created if it doesn't exist, overwritten if it does)"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Complete content to write to the file"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '10369'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "tool_calls",
+              "index": 0,
+              "message": {
+                "content": "",
+                "role": "assistant",
+                "tool_calls": [
+                  {
+                    "function": {
+                      "arguments": "{\"merge\": true, \"todos\": [{\"content\": \"读取文件\", \"id\": \"p1\", \"status\": \"completed\"}, {\"content\": \"提取 CHECKPOINT 行\", \"id\": \"p2\", \"status\": \"completed\"}, {\"content\": \"输出最终答案\", \"id\": \"p3\", \"status\": \"completed\"}]}",
+                      "name": "todo"
+                    },
+                    "id": "call_3115e188e0dd43c0968936",
+                    "index": 0,
+                    "type": "function"
+                  }
+                ]
+              }
+            }
+          ],
+          "created": 1777207853,
+          "id": "chatcmpl-07f87527-2a74-9fb7-9721-b2455ce29e42",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 87,
+            "prompt_tokens": 2633,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 2720
+          }
+        }
+    headers:
+      content-length:
+      - '733'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:50:54 GMT
+      req-arrive-time:
+      - '1777207852952'
+      req-cost-time:
+      - '1280'
+      resp-start-time:
+      - '1777207854233'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '1213'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+- request:
+    body: |-
+      {
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.\n\nConversation started: Sunday, April 26, 2026 08:50 PM\nModel: qwen-turbo\nProvider: dashscope"
+          },
+          {
+            "role": "user",
+            "content": "这是一个必须展示规划过程的多步任务。你必须先调用 todo 工具创建 3 个任务：p1=读取文件，p2=提取 CHECKPOINT 行，p3=输出最终答案。创建时只能让 p1 处于 in_progress。随后必须调用 read_file 读取文件 /tmp/loongsuite-hermes-agent-tests/planning_input.txt。拿到内容后，再次调用 todo 把 p1/p2/p3 更新为 completed。最后只回复文件中以 CHECKPOINT= 开头的整行，不要解释，也不要输出 todo 内容。"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_aac2ecd08072487bbd9e60",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":false,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"in_progress\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"pending\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"in_progress\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"pending\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 2, \"in_progress\": 1, \"completed\": 0, \"cancelled\": 0}}",
+            "tool_call_id": "call_aac2ecd08072487bbd9e60"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_2836afb62fca412f83ac13",
+                "type": "function",
+                "function": {
+                  "name": "read_file",
+                  "arguments": "{\"path\":\"/tmp/loongsuite-hermes-agent-tests/planning_input.txt\"}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"content\": \"     1|title=otelgui demo\\n     2|CHECKPOINT=planning_trace_ok\\n     3|payload=otelgui_e2e_ok\\n     4|\", \"total_lines\": 3, \"file_size\": 71, \"truncated\": false, \"is_binary\": false, \"is_image\": false}",
+            "tool_call_id": "call_2836afb62fca412f83ac13"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_bb3d799c464742e0aaf0ec",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":true,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"completed\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"in_progress\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"pending\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"completed\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"in_progress\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"pending\"}], \"summary\": {\"total\": 3, \"pending\": 1, \"in_progress\": 1, \"completed\": 1, \"cancelled\": 0}}",
+            "tool_call_id": "call_bb3d799c464742e0aaf0ec"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_e3f0c9e87358487882c226",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":true,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"completed\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"completed\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"in_progress\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"completed\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"completed\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"in_progress\"}], \"summary\": {\"total\": 3, \"pending\": 0, \"in_progress\": 1, \"completed\": 2, \"cancelled\": 0}}",
+            "tool_call_id": "call_e3f0c9e87358487882c226"
+          },
+          {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+              {
+                "id": "call_3115e188e0dd43c0968936",
+                "type": "function",
+                "function": {
+                  "name": "todo",
+                  "arguments": "{\"merge\":true,\"todos\":[{\"content\":\"\\u8bfb\\u53d6\\u6587\\u4ef6\",\"id\":\"p1\",\"status\":\"completed\"},{\"content\":\"\\u63d0\\u53d6 CHECKPOINT \\u884c\",\"id\":\"p2\",\"status\":\"completed\"},{\"content\":\"\\u8f93\\u51fa\\u6700\\u7ec8\\u7b54\\u6848\",\"id\":\"p3\",\"status\":\"completed\"}]}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "content": "{\"todos\": [{\"id\": \"p1\", \"content\": \"读取文件\", \"status\": \"completed\"}, {\"id\": \"p2\", \"content\": \"提取 CHECKPOINT 行\", \"status\": \"completed\"}, {\"id\": \"p3\", \"content\": \"输出最终答案\", \"status\": \"completed\"}], \"summary\": {\"total\": 3, \"pending\": 0, \"in_progress\": 0, \"completed\": 3, \"cancelled\": 0}}",
+            "tool_call_id": "call_3115e188e0dd43c0968936"
+          }
+        ],
+        "model": "qwen-turbo",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "patch",
+              "description": "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. Uses fuzzy matching (9 strategies) so minor whitespace/indentation differences won't break it. Returns a unified diff. Auto-runs syntax checks after editing.\n\nReplace mode (default): find a unique string and replace it.\nPatch mode: apply V4A multi-file patches for bulk changes.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "replace",
+                      "patch"
+                    ],
+                    "description": "Edit mode: 'replace' for targeted find-and-replace, 'patch' for V4A multi-file patches",
+                    "default": "replace"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "File path to edit (required for 'replace' mode)"
+                  },
+                  "old_string": {
+                    "type": "string",
+                    "description": "Text to find in the file (required for 'replace' mode). Must be unique in the file unless replace_all=true. Include enough surrounding context to ensure uniqueness."
+                  },
+                  "new_string": {
+                    "type": "string",
+                    "description": "Replacement text (required for 'replace' mode). Can be empty string to delete the matched text."
+                  },
+                  "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences instead of requiring a unique match (default: false)",
+                    "default": false
+                  },
+                  "patch": {
+                    "type": "string",
+                    "description": "V4A format patch content (required for 'patch' mode). Format:\n*** Begin Patch\n*** Update File: path/to/file\n@@ context hint @@\n context line\n-removed line\n+added line\n*** End Patch"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "read_file",
+              "description": "Read a text file with line numbers and pagination. Use this instead of cat/head/tail in terminal. Output format: 'LINE_NUM|CONTENT'. Suggests similar filenames if not found. Use offset and limit for large files. Reads exceeding ~100K characters are rejected; use offset and limit to read specific sections of large files. NOTE: Cannot read images or binary files — use vision_analyze for images.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to read (absolute, relative, or ~/path)"
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed, default: 1)",
+                    "default": 1,
+                    "minimum": 1
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to read (default: 500, max: 2000)",
+                    "default": 500,
+                    "maximum": 2000
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "search_files",
+              "description": "Search file contents or find files by name. Use this instead of grep/rg/find/ls in terminal. Ripgrep-backed, faster than shell equivalents.\n\nContent search (target='content'): Regex search inside files. Output modes: full matches with line numbers, file paths only, or match counts.\n\nFile search (target='files'): Find files by glob pattern (e.g., '*.py', '*config*'). Also use this instead of ls — results sorted by modification time.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern for content search, or glob pattern (e.g., '*.py') for file search"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files"
+                    ],
+                    "description": "'content' searches inside file contents, 'files' searches for files by name",
+                    "default": "content"
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (default: current working directory)",
+                    "default": "."
+                  },
+                  "file_glob": {
+                    "type": "string",
+                    "description": "Filter files by pattern in grep mode (e.g., '*.py' to only search Python files)"
+                  },
+                  "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 50)",
+                    "default": 50
+                  },
+                  "offset": {
+                    "type": "integer",
+                    "description": "Skip first N results for pagination (default: 0)",
+                    "default": 0
+                  },
+                  "output_mode": {
+                    "type": "string",
+                    "enum": [
+                      "content",
+                      "files_only",
+                      "count"
+                    ],
+                    "description": "Output format for grep mode: 'content' shows matching lines with line numbers, 'files_only' lists file paths, 'count' shows match counts per file",
+                    "default": "content"
+                  },
+                  "context": {
+                    "type": "integer",
+                    "description": "Number of context lines before and after each match (grep mode only)",
+                    "default": 0
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "todo",
+              "description": "Manage your task list for the current session. Use for complex tasks with 3+ steps or when the user provides multiple tasks. Call with no parameters to read the current list.\n\nWriting:\n- Provide 'todos' array to create/update items\n- merge=false (default): replace the entire list with a fresh plan\n- merge=true: update existing items by id, add any new ones\n\nEach item: {id: string, content: string, status: pending|in_progress|completed|cancelled}\nList order is priority. Only ONE item in_progress at a time.\nMark items completed immediately when done. If something fails, cancel it and add a revised item.\n\nAlways returns the full current list.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "todos": {
+                    "type": "array",
+                    "description": "Task items to write. Omit to read current list.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "description": "Unique item identifier"
+                        },
+                        "content": {
+                          "type": "string",
+                          "description": "Task description"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "in_progress",
+                            "completed",
+                            "cancelled"
+                          ],
+                          "description": "Current status"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "content",
+                        "status"
+                      ]
+                    }
+                  },
+                  "merge": {
+                    "type": "boolean",
+                    "description": "true: update existing items by id, add new ones. false (default): replace the entire list.",
+                    "default": false
+                  }
+                },
+                "required": []
+              }
+            }
+          },
+          {
+            "type": "function",
+            "function": {
+              "name": "write_file",
+              "description": "Write content to a file, completely replacing existing content. Use this instead of echo/cat heredoc in terminal. Creates parent directories automatically. OVERWRITES the entire file — use 'patch' for targeted edits.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "description": "Path to the file to write (will be created if it doesn't exist, overwritten if it does)"
+                  },
+                  "content": {
+                    "type": "string",
+                    "description": "Complete content to write to the file"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '11251'
+      Content-Type:
+      - application/json
+      Host:
+      - dashscope.aliyuncs.com
+      User-Agent:
+      - OpenAI/Python 2.32.0
+      X-Stainless-Arch:
+      - arm64
+      X-Stainless-Async:
+      - 'false'
+      X-Stainless-Lang:
+      - python
+      X-Stainless-OS:
+      - MacOS
+      X-Stainless-Package-Version:
+      - 2.32.0
+      X-Stainless-Runtime:
+      - CPython
+      X-Stainless-Runtime-Version:
+      - 3.11.13
+      authorization:
+      - Bearer test_dashscope_api_key
+      x-stainless-read-timeout:
+      - '1800.0'
+      x-stainless-retry-count:
+      - '0'
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: |-
+        {
+          "choices": [
+            {
+              "finish_reason": "stop",
+              "index": 0,
+              "message": {
+                "content": "CHECKPOINT=planning_trace_ok",
+                "role": "assistant"
+              }
+            }
+          ],
+          "created": 1777207854,
+          "id": "chatcmpl-d70cc132-1136-952c-959e-72a9cfb33f4d",
+          "model": "qwen-turbo",
+          "object": "chat.completion",
+          "usage": {
+            "completion_tokens": 7,
+            "prompt_tokens": 2836,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            },
+            "total_tokens": 2843
+          }
+        }
+    headers:
+      content-length:
+      - '359'
+      content-type:
+      - application/json
+      date:
+      - Sun, 26 Apr 2026 12:50:54 GMT
+      req-arrive-time:
+      - '1777207854373'
+      req-cost-time:
+      - '416'
+      resp-start-time:
+      - '1777207854790'
+      server:
+      - istio-envoy
+      transfer-encoding:
+      - chunked
+      vary:
+      - Origin,Access-Control-Request-Method,Access-Control-Request-Headers, Accept-Encoding
+      x-dashscope-call-gateway:
+      - 'true'
+      x-envoy-upstream-service-time:
+      - '415'
+      x-request-id: test_request_id
+    status:
+      code: 200
+      message: OK
+version: 1
