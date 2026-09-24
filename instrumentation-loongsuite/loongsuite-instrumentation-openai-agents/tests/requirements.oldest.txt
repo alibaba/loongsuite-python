@@ -13,3 +13,9 @@
 # limitations under the License.
 
 openai-agents==0.0.7
+httpx
+pytest
+
+-e opentelemetry-instrumentation
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-openai-agents
