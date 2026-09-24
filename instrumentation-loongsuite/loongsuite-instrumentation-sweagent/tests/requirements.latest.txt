@@ -1,0 +1,12 @@
+# Test requirements (PyPI OpenTelemetry 1.37 / 0.58b0; no git test_deps in tox).
+
+sweagent @ git+https://github.com/SWE-agent/SWE-agent.git@v1.1.0
+pytest
+wrapt
+opentelemetry-api==1.37
+opentelemetry-sdk==1.37
+opentelemetry-instrumentation==0.58b0
+opentelemetry-semantic-conventions==0.58b0
+
+-e instrumentation-loongsuite/loongsuite-instrumentation-sweagent
+-e util/opentelemetry-util-genai
