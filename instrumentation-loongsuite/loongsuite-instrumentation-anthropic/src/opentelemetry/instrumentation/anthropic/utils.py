@@ -88,10 +88,15 @@ def create_anthropic_invocation(
     )
 
     # Request parameters
+    extra_body = kwargs.get("extra_body")
+    if not isinstance(extra_body, dict):
+        extra_body = {}
     invocation.max_tokens = kwargs.get("max_tokens")
-    invocation.temperature = kwargs.get("temperature")
-    invocation.top_p = kwargs.get("top_p")
-    invocation.top_k = kwargs.get("top_k")
+    invocation.temperature = kwargs.get(
+        "temperature", extra_body.get("temperature")
+    )
+    invocation.top_p = kwargs.get("top_p", extra_body.get("top_p"))
+    invocation.top_k = kwargs.get("top_k", extra_body.get("top_k"))
 
     stop_sequences = kwargs.get("stop_sequences")
     if stop_sequences is not None:

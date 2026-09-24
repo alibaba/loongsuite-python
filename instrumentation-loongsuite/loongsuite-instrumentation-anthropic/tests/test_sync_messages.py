@@ -14,6 +14,8 @@
 
 """Tests for sync Messages.create instrumentation."""
 
+import inspect
+
 import pytest
 from anthropic import Anthropic, APIConnectionError, NotFoundError
 
@@ -127,14 +129,25 @@ def test_sync_messages_create_with_all_params(
     model = "claude-sonnet-4-20250514"
     messages = [{"role": "user", "content": "Say hello."}]
 
+    tuning = {"temperature": 0.7, "top_p": 0.9, "top_k": 40}
+    create_parameters = inspect.signature(
+        anthropic_client.messages.create
+    ).parameters
+    request_tuning = {
+        key: value for key, value in tuning.items() if key in create_parameters
+    }
+    removed_tuning = {
+        key: value for key, value in tuning.items() if key not in create_parameters
+    }
+    if removed_tuning:
+        request_tuning["extra_body"] = removed_tuning
+
     anthropic_client.messages.create(
         model=model,
         max_tokens=50,
         messages=messages,
-        temperature=0.7,
-        top_p=0.9,
-        top_k=40,
         stop_sequences=["STOP"],
+        **request_tuning,
     )
 
     spans = span_exporter.get_finished_spans()
