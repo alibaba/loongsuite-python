@@ -18,10 +18,6 @@ from unittest.mock import patch
 
 import pytest
 
-from opentelemetry.util.genai._configuration import (
-    OTEL_SEMCONV_STABILITY_OPT_IN,
-    is_experimental_mode,
-)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -33,6 +29,10 @@ from opentelemetry.semconv._incubating.attributes import (
 from opentelemetry.semconv.attributes import error_attributes
 from opentelemetry.trace import SpanKind
 from opentelemetry.trace.status import StatusCode
+from opentelemetry.util.genai._configuration import (
+    OTEL_SEMCONV_STABILITY_OPT_IN,
+    is_experimental_mode,
+)
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
