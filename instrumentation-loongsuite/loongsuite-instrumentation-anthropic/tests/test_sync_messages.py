@@ -137,7 +137,9 @@ def test_sync_messages_create_with_all_params(
         key: value for key, value in tuning.items() if key in create_parameters
     }
     removed_tuning = {
-        key: value for key, value in tuning.items() if key not in create_parameters
+        key: value
+        for key, value in tuning.items()
+        if key not in create_parameters
     }
     if removed_tuning:
         request_tuning["extra_body"] = removed_tuning

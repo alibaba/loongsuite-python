@@ -154,10 +154,20 @@ def populate_response(
         if hasattr(usage, "output_tokens"):
             invocation.output_tokens = usage.output_tokens
         # Cache token usage (Anthropic-specific)
-        if hasattr(usage, "cache_creation_input_tokens") and usage.cache_creation_input_tokens:
-            invocation.usage_cache_creation_input_tokens = usage.cache_creation_input_tokens
-        if hasattr(usage, "cache_read_input_tokens") and usage.cache_read_input_tokens:
-            invocation.usage_cache_read_input_tokens = usage.cache_read_input_tokens
+        if (
+            hasattr(usage, "cache_creation_input_tokens")
+            and usage.cache_creation_input_tokens
+        ):
+            invocation.usage_cache_creation_input_tokens = (
+                usage.cache_creation_input_tokens
+            )
+        if (
+            hasattr(usage, "cache_read_input_tokens")
+            and usage.cache_read_input_tokens
+        ):
+            invocation.usage_cache_read_input_tokens = (
+                usage.cache_read_input_tokens
+            )
 
     # Output messages (content blocks)
     if capture_content:
@@ -200,8 +210,13 @@ def _convert_messages_to_input(
                             # Extract text from content blocks
                             text_parts = []
                             for sub_block in tool_content:
-                                if isinstance(sub_block, dict) and sub_block.get("type") == "text":
-                                    text_parts.append(sub_block.get("text", ""))
+                                if (
+                                    isinstance(sub_block, dict)
+                                    and sub_block.get("type") == "text"
+                                ):
+                                    text_parts.append(
+                                        sub_block.get("text", "")
+                                    )
                             tool_content = "\n".join(text_parts)
                         parts.append(
                             ToolCallResponse(
