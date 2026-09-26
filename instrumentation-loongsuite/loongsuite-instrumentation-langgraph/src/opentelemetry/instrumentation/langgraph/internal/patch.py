@@ -21,14 +21,12 @@ All wrappers follow the ``wrapt`` convention::
 Three patch targets:
 
 1. ``create_react_agent`` — sets ``_loongsuite_react_agent = True`` on the
-   compiled ``CompiledStateGraph`` so that downstream instrumentation can
-   recognise it as a ReAct agent.
+   compiled ``CompiledStateGraph`` so downstream instrumentation recognises it.
 
 2. ``Pregel.stream`` / ``Pregel.astream`` — injects
-   ``metadata["_loongsuite_react_agent"] = True`` into the ``RunnableConfig``
-   when the graph is a marked ReAct agent.  This metadata flows through
-   LangChain's callback system to ``Run.metadata``, where the
-   ``LoongsuiteTracer`` reads it to create Agent and ReAct Step spans.
+   either the existing ReAct marker or an opt-in harness's framework and
+   decision-node semantics into a copy of ``RunnableConfig``. The metadata
+   then flows through LangChain callbacks to ``Run.metadata``.
 """
 
 from __future__ import annotations
@@ -38,6 +36,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+AGENT_FRAMEWORK_METADATA_KEY = "_loongsuite_agent_framework"
+AGENT_STEP_NODE_METADATA_KEY = "_loongsuite_agent_step_node"
 REACT_AGENT_METADATA_KEY = "_loongsuite_react_agent"
 
 
@@ -70,10 +70,10 @@ def _create_react_agent_wrapper(
 # ---------------------------------------------------------------------------
 
 
-def _inject_react_metadata(config: Any) -> Any:
-    """Return a *new* config dict with ``_loongsuite_react_agent: True``
-    in its ``metadata``.
-    """
+def _copy_config_and_metadata(
+    config: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return copy-on-write config and metadata dictionaries."""
     # Inline import: langchain_core is a transitive dependency of langgraph;
     # importing here avoids module-level coupling.
     from langchain_core.runnables.config import (  # noqa: PLC0415
@@ -82,15 +82,44 @@ def _inject_react_metadata(config: Any) -> Any:
 
     config = ensure_config(config)
     config = {**config}
-    metadata = dict(config.get("metadata") or {})
+    return config, dict(config.get("metadata") or {})
+
+
+def _inject_react_metadata(config: Any) -> Any:
+    """Return a new config carrying the existing prebuilt ReAct marker."""
+    config, metadata = _copy_config_and_metadata(config)
     metadata.setdefault(REACT_AGENT_METADATA_KEY, True)
     config["metadata"] = metadata
     return config
 
 
+def _inject_agent_semantics(config: Any, semantics: tuple[str, str]) -> Any:
+    """Return a new config carrying an opt-in harness's scalar semantics."""
+    config, metadata = _copy_config_and_metadata(config)
+    metadata[AGENT_FRAMEWORK_METADATA_KEY] = semantics[0]
+    metadata[AGENT_STEP_NODE_METADATA_KEY] = semantics[1]
+    config["metadata"] = metadata
+    return config
+
+
+def _get_graph_agent_semantics(graph: Any) -> tuple[str, str] | None:
+    """Read validated opt-in agent semantics from graph attributes."""
+
+    framework = getattr(graph, AGENT_FRAMEWORK_METADATA_KEY, None)
+    step_node = getattr(graph, AGENT_STEP_NODE_METADATA_KEY, None)
+    if not isinstance(framework, str) or not framework.strip():
+        return None
+    if not isinstance(step_node, str) or not step_node.strip():
+        return None
+    return framework.strip(), step_node.strip()
+
+
 def _stream_wrapper(wrapped: Any, instance: Any, args: Any, kwargs: Any):  # type: ignore[return]
     """``wrapt`` wrapper for ``Pregel.stream``."""
-    if getattr(instance, REACT_AGENT_METADATA_KEY, False):
+    semantics = _get_graph_agent_semantics(instance)
+    if semantics is not None:
+        args, kwargs = _rewrite_config(args, kwargs, semantics)
+    elif getattr(instance, REACT_AGENT_METADATA_KEY, False):
         args, kwargs = _rewrite_config(args, kwargs)
     yield from wrapped(*args, **kwargs)
 
@@ -99,20 +128,33 @@ async def _astream_wrapper(
     wrapped: Any, instance: Any, args: Any, kwargs: Any
 ):  # type: ignore[return]
     """``wrapt`` wrapper for ``Pregel.astream``."""
-    if getattr(instance, REACT_AGENT_METADATA_KEY, False):
+    semantics = _get_graph_agent_semantics(instance)
+    if semantics is not None:
+        args, kwargs = _rewrite_config(args, kwargs, semantics)
+    elif getattr(instance, REACT_AGENT_METADATA_KEY, False):
         args, kwargs = _rewrite_config(args, kwargs)
     async for chunk in wrapped(*args, **kwargs):
         yield chunk
 
 
 def _rewrite_config(
-    args: tuple[Any, ...], kwargs: dict[str, Any]
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    semantics: tuple[str, str] | None = None,
 ) -> tuple[tuple[Any, ...], dict[str, Any]]:
     """Extract ``config`` from *args*/*kwargs*, inject metadata, put it back."""
     if len(args) > 1:
-        config = _inject_react_metadata(args[1])
+        config = (
+            _inject_agent_semantics(args[1], semantics)
+            if semantics is not None
+            else _inject_react_metadata(args[1])
+        )
         args = (args[0], config) + args[2:]
     else:
-        config = _inject_react_metadata(kwargs.get("config"))
+        config = (
+            _inject_agent_semantics(kwargs.get("config"), semantics)
+            if semantics is not None
+            else _inject_react_metadata(kwargs.get("config"))
+        )
         kwargs = {**kwargs, "config": config}
     return args, kwargs

@@ -16,6 +16,14 @@
 
 from uuid import uuid4
 
+import pytest
+
+from opentelemetry import baggage, context
+from opentelemetry.instrumentation.langchain.internal._agent_semantics import (
+    AGENT_FRAMEWORK_METADATA_KEY,
+    AGENT_STEP_NODE_METADATA_KEY,
+    DEERFLOW_FRAMEWORK,
+)
 from opentelemetry.instrumentation.langchain.internal._tracer import (
     LoongsuiteTracer,
     _extract_langgraph_input_message,
@@ -162,3 +170,95 @@ def test_agent_context_colors_child_llm_and_tool_spans(
 
     assert llm_span.attributes[GenAI.GEN_AI_AGENT_NAME] == "AgentExecutor"
     assert tool_span.attributes[GenAI.GEN_AI_AGENT_NAME] == "AgentExecutor"
+
+
+def test_deerflow_agent_semantics_sets_framework_attribute(
+    tracer_provider, span_exporter
+):
+    handler = ExtendedTelemetryHandler(tracer_provider=tracer_provider)
+    tracer = LoongsuiteTracer(
+        handler=handler,
+        tracer_provider=tracer_provider,
+    )
+    agent_run = _FakeRun("lead-agent", inputs={"input": "research"})
+    agent_run.metadata = {
+        AGENT_FRAMEWORK_METADATA_KEY: DEERFLOW_FRAMEWORK,
+        AGENT_STEP_NODE_METADATA_KEY: "model",
+    }
+
+    tracer._start_agent(agent_run)
+    agent_run.outputs = {"output": "done"}
+    tracer._on_chain_end(agent_run)
+
+    agent_span = next(
+        span
+        for span in span_exporter.get_finished_spans()
+        if span.attributes.get("gen_ai.span.kind") == "AGENT"
+    )
+    assert agent_span.attributes["gen_ai.framework"] == "deerflow"
+
+
+@pytest.mark.parametrize(
+    ("name", "metadata", "tags", "expected"),
+    [
+        ("research-agent", {}, [], "research-agent"),
+        (
+            "LangGraph",
+            {"agent_name": "configured-agent"},
+            [],
+            "configured-agent",
+        ),
+        (
+            "LangGraph",
+            {"langfuse_trace_name": "metadata-agent"},
+            ["subagent:researcher"],
+            "subagent:researcher",
+        ),
+        (
+            "LangGraph",
+            {"langfuse_trace_name": "metadata-agent"},
+            [],
+            "metadata-agent",
+        ),
+        ("default", {}, [], "lead-agent"),
+    ],
+)
+def test_deerflow_agent_name_resolution(
+    name,
+    metadata,
+    tags,
+    expected,
+    tracer_provider,
+):
+    tracer = LoongsuiteTracer(
+        handler=ExtendedTelemetryHandler(tracer_provider=tracer_provider),
+        tracer_provider=tracer_provider,
+    )
+    run = _FakeRun(name)
+    run.metadata = {
+        AGENT_FRAMEWORK_METADATA_KEY: DEERFLOW_FRAMEWORK,
+        AGENT_STEP_NODE_METADATA_KEY: "model",
+        **metadata,
+    }
+    run.tags = tags
+
+    assert tracer._resolve_agent_name(run) == expected
+
+
+def test_deerflow_agent_name_falls_back_to_entry_baggage(tracer_provider):
+    tracer = LoongsuiteTracer(
+        handler=ExtendedTelemetryHandler(tracer_provider=tracer_provider),
+        tracer_provider=tracer_provider,
+    )
+    run = _FakeRun("LangGraph")
+    run.metadata = {
+        AGENT_FRAMEWORK_METADATA_KEY: DEERFLOW_FRAMEWORK,
+        AGENT_STEP_NODE_METADATA_KEY: "model",
+    }
+    run.tags = []
+    ctx = baggage.set_baggage("gen_ai.agent.name", "embedded-agent")
+    token = context.attach(ctx)
+    try:
+        assert tracer._resolve_agent_name(run) == "embedded-agent"
+    finally:
+        context.detach(token)
