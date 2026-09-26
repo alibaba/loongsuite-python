@@ -47,7 +47,15 @@ from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_EMIT_EVENT,
 )
 from opentelemetry.util.genai.extended_semconv.gen_ai_extended_attributes import (  # pylint: disable=no-name-in-module
+    GEN_AI_CONVERSATION_COMPACTED,
+    GEN_AI_PROMPT_NAME,
+    GEN_AI_PROMPT_VERSION,
+    GEN_AI_REQUEST_REASONING_LEVEL,
+    GEN_AI_REQUEST_STREAM,
+    GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK,
+    GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN,
     GEN_AI_SPAN_KIND,  # LoongSuite Extension
+    GEN_AI_USAGE_REASONING_OUTPUT_TOKENS,
     GEN_AI_USAGE_TOTAL_TOKENS,  # LoongSuite Extension
     GenAiSpanKindValues,  # LoongSuite Extension
 )
@@ -445,6 +453,63 @@ class TestTelemetryHandler(unittest.TestCase):
             attrs[GenAI.GEN_AI_RESPONSE_FINISH_REASONS],
             ("length", "stop"),
         )
+
+    @patch_env_vars(
+        stability_mode="gen_ai_latest_experimental",
+        content_capturing="SPAN_ONLY",
+        emit_event="",
+    )
+    def test_llm_current_semconv_fields_and_separate_stream_times(self):
+        invocation = LLMInvocation(
+            request_model="reasoning-model",
+            provider="test-provider",
+            stream=True,
+            reasoning_level="high",
+            reasoning_output_tokens=13,
+            conversation_compacted=True,
+            prompt_name="support-answer",
+            prompt_version="v2",
+            prompt_variables={"language": "Chinese"},
+        )
+
+        self.telemetry_handler.start_llm(invocation)
+        assert invocation.monotonic_start_s is not None
+        invocation.monotonic_first_chunk_s = (
+            invocation.monotonic_start_s + 0.125
+        )
+        invocation.monotonic_first_token_s = (
+            invocation.monotonic_start_s + 0.25
+        )
+        self.telemetry_handler.stop_llm(invocation)
+
+        attrs = _get_span_attributes(_get_single_span(self.span_exporter))
+        self.assertEqual(attrs[GEN_AI_REQUEST_STREAM], True)
+        self.assertEqual(attrs[GEN_AI_REQUEST_REASONING_LEVEL], "high")
+        self.assertEqual(attrs[GEN_AI_USAGE_REASONING_OUTPUT_TOKENS], 13)
+        self.assertEqual(attrs[GEN_AI_CONVERSATION_COMPACTED], True)
+        self.assertEqual(attrs[GEN_AI_PROMPT_NAME], "support-answer")
+        self.assertEqual(attrs[GEN_AI_PROMPT_VERSION], "v2")
+        self.assertEqual(attrs["gen_ai.prompt.variable.language"], "Chinese")
+        self.assertAlmostEqual(
+            attrs[GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK], 0.125
+        )
+        self.assertEqual(
+            attrs[GEN_AI_RESPONSE_TIME_TO_FIRST_TOKEN], 250_000_000
+        )
+
+    def test_false_stream_and_compacted_flags_are_omitted(self):
+        invocation = LLMInvocation(
+            request_model="nonstream-model",
+            stream=False,
+            conversation_compacted=False,
+        )
+
+        self.telemetry_handler.start_llm(invocation)
+        self.telemetry_handler.stop_llm(invocation)
+
+        attrs = _get_span_attributes(_get_single_span(self.span_exporter))
+        self.assertNotIn(GEN_AI_REQUEST_STREAM, attrs)
+        self.assertNotIn(GEN_AI_CONVERSATION_COMPACTED, attrs)
 
     def test_llm_span_uses_expected_schema_url(self):
         invocation = LLMInvocation(

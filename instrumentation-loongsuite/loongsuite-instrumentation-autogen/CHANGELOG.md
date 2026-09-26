@@ -15,6 +15,8 @@ There are no changelog entries for this release.
 
 ### Fixed
 
+- Capture time to first chunk independently from time to first token, and emit
+  the stream request indicator only when AutoGen enables model streaming.
 - Avoid enriching non-AutoGen spans that use overlapping GenAI operation names.
 
 ## Version 0.7.0 (2026-07-03)

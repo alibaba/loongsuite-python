@@ -27,11 +27,11 @@ from opentelemetry.instrumentation.mem0.config import (
 )
 from opentelemetry.instrumentation.mem0.internal._extractors import (
     GraphOperationAttributeExtractor,
-    MemoryOperationAttributeExtractor,
     RerankerAttributeExtractor,
     VectorOperationAttributeExtractor,
 )
 from opentelemetry.instrumentation.mem0.internal._util import (
+    extract_result_count,
     extract_server_info,
     get_exception_type,
     safe_str,
@@ -57,9 +57,83 @@ from opentelemetry.trace import (
 )
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_memory import MemoryInvocation
+from opentelemetry.util.genai.extended_semconv.gen_ai_memory_attributes import (
+    GenAiMemoryOperationNameValues,
+)
 from opentelemetry.util.genai.types import Error
 
 logger = logging.getLogger(__name__)
+
+
+_MEM0_OPERATION_NAMES = {
+    "add": GenAiMemoryOperationNameValues.UPSERT_MEMORY.value,
+    "update": GenAiMemoryOperationNameValues.UPDATE_MEMORY.value,
+    "batch_update": GenAiMemoryOperationNameValues.UPDATE_MEMORY.value,
+    "search": GenAiMemoryOperationNameValues.SEARCH_MEMORY.value,
+    "get": GenAiMemoryOperationNameValues.SEARCH_MEMORY.value,
+    "get_all": GenAiMemoryOperationNameValues.SEARCH_MEMORY.value,
+    "history": GenAiMemoryOperationNameValues.SEARCH_MEMORY.value,
+    "delete": GenAiMemoryOperationNameValues.DELETE_MEMORY.value,
+    "batch_delete": GenAiMemoryOperationNameValues.DELETE_MEMORY.value,
+    "delete_all": GenAiMemoryOperationNameValues.DELETE_MEMORY.value,
+}
+
+
+def _standard_memory_operation(operation_name: str) -> str:
+    return _MEM0_OPERATION_NAMES.get(operation_name, operation_name)
+
+
+def _memory_record(value: Any) -> Optional[dict[str, Any]]:
+    """Normalize one Mem0 value to the upstream MemoryRecord shape."""
+    if isinstance(value, str):
+        return {"content": value}
+    if not isinstance(value, dict):
+        return None
+
+    content = None
+    for key in ("content", "memory", "text"):
+        if value.get(key) is not None:
+            content = value[key]
+            break
+    if content is None and value.get("role") is not None:
+        content = value.get("content")
+    if content is None:
+        return None
+
+    record: dict[str, Any] = {"content": content}
+    record_id = value.get("id", value.get("memory_id"))
+    if record_id is not None:
+        record["id"] = safe_str(record_id)
+    if isinstance(value.get("metadata"), dict):
+        record["metadata"] = value["metadata"]
+    if value.get("score") is not None:
+        try:
+            record["score"] = float(value["score"])
+        except (TypeError, ValueError):
+            pass
+    return record
+
+
+def _memory_records(value: Any) -> list[dict[str, Any]]:
+    """Normalize Mem0 request/response containers to MemoryRecord objects."""
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        for key in ("results", "memories", "data", "items"):
+            if isinstance(value.get(key), list):
+                value = value[key]
+                break
+        else:
+            value = [value]
+    elif not isinstance(value, (list, tuple)):
+        value = [value]
+
+    records: list[dict[str, Any]] = []
+    for item in value:
+        record = _memory_record(item)
+        if record is not None:
+            records.append(record)
+    return records
 
 
 def _get_field(payload: dict, field_name: str) -> Any:
@@ -76,15 +150,6 @@ def _coerce_optional_int(value: Any) -> Optional[int]:
         if value is None:
             return None
         return int(value)
-    except Exception:
-        return None
-
-
-def _coerce_optional_float(value: Any) -> Optional[float]:
-    try:
-        if value is None:
-            return None
-        return float(value)
     except Exception:
         return None
 
@@ -176,7 +241,6 @@ class MemoryOperationWrapper:
             telemetry_handler: GenAI ExtendedTelemetryHandler from opentelemetry-util-genai.
         """
         self.telemetry_handler = telemetry_handler
-        self.extractor = MemoryOperationAttributeExtractor()
         self._memory_before_hook: MemoryBeforeHook = None
         self._memory_after_hook: MemoryAfterHook = None
 
@@ -235,53 +299,12 @@ class MemoryOperationWrapper:
     def _set_invocation_fields_from_kwargs(
         invocation: MemoryInvocation, normalized_kwargs: dict
     ) -> None:
-        """Populate MemoryInvocation standard fields from normalized kwargs."""
-
-        def _int_or_none(value: Any) -> Optional[int]:
-            try:
-                if value is None:
-                    return None
-                return int(value)
-            except Exception:
-                return None
-
-        def _float_or_none(value: Any) -> Optional[float]:
-            try:
-                if value is None:
-                    return None
-                return float(value)
-            except Exception:
-                return None
-
-        if (user_id := normalized_kwargs.get("user_id")) is not None:
-            invocation.user_id = safe_str(user_id)
-        if (agent_id := normalized_kwargs.get("agent_id")) is not None:
-            invocation.agent_id = safe_str(agent_id)
-        if (run_id := normalized_kwargs.get("run_id")) is not None:
-            invocation.run_id = safe_str(run_id)
-        if (app_id := normalized_kwargs.get("app_id")) is not None:
-            invocation.app_id = safe_str(app_id)
-
+        """Populate stable upstream Memory identifiers from request data."""
+        store_id = normalized_kwargs.get("store_id")
+        if store_id is not None:
+            invocation.store_id = safe_str(store_id)
         if (memory_id := normalized_kwargs.get("memory_id")) is not None:
-            invocation.memory_id = safe_str(memory_id)
-        if (limit := normalized_kwargs.get("limit")) is not None:
-            invocation.limit = _int_or_none(limit)
-        if (page := normalized_kwargs.get("page")) is not None:
-            invocation.page = _int_or_none(page)
-        if (page_size := normalized_kwargs.get("page_size")) is not None:
-            invocation.page_size = _int_or_none(page_size)
-        if (top_k := normalized_kwargs.get("top_k")) is not None:
-            invocation.top_k = _int_or_none(top_k)
-        if (memory_type := normalized_kwargs.get("memory_type")) is not None:
-            invocation.memory_type = safe_str(memory_type)
-        if (threshold := normalized_kwargs.get("threshold")) is not None:
-            invocation.threshold = _float_or_none(threshold)
-        if "rerank" in normalized_kwargs:
-            # rerank can be explicitly False
-            raw_rerank = normalized_kwargs.get("rerank")
-            invocation.rerank = (
-                bool(raw_rerank) if raw_rerank is not None else None
-            )
+            invocation.record_id = safe_str(memory_id)
 
     @staticmethod
     def _apply_custom_extractor_output_to_invocation(
@@ -291,66 +314,30 @@ class MemoryOperationWrapper:
         Apply custom extractor output directly onto MemoryInvocation.
 
         Expected format (no compatibility guarantees):
-        - Any MemoryInvocation field name can be provided directly, e.g.:
-          user_id/agent_id/run_id/app_id/memory_id/limit/page/page_size/top_k/
-          memory_type/threshold/rerank/input_messages/output_messages/
-          server_address/server_port
+        - Standard MemoryInvocation fields can be provided directly.
         - Custom attributes can be provided as:
           - key "attributes": dict[str, Any]
           - or any other leftover keys will be treated as custom attributes
         """
-        if "user_id" in extracted:
-            raw = _get_field(extracted, "user_id")
-            invocation.user_id = safe_str(raw) if raw is not None else None
-        if "agent_id" in extracted:
-            raw = _get_field(extracted, "agent_id")
-            invocation.agent_id = safe_str(raw) if raw is not None else None
-        if "run_id" in extracted:
-            raw = _get_field(extracted, "run_id")
-            invocation.run_id = safe_str(raw) if raw is not None else None
-        if "app_id" in extracted:
-            raw = _get_field(extracted, "app_id")
-            invocation.app_id = safe_str(raw) if raw is not None else None
-        if "memory_id" in extracted:
-            raw = _get_field(extracted, "memory_id")
-            invocation.memory_id = safe_str(raw) if raw is not None else None
-
-        if "limit" in extracted:
-            invocation.limit = _coerce_optional_int(
-                _get_field(extracted, "limit")
+        for field_name in (
+            "provider",
+            "store_id",
+            "record_id",
+            "query_text",
+        ):
+            if field_name in extracted:
+                raw = _get_field(extracted, field_name)
+                setattr(
+                    invocation,
+                    field_name,
+                    safe_str(raw) if raw is not None else None,
+                )
+        if "record_count" in extracted:
+            invocation.record_count = _coerce_optional_int(
+                _get_field(extracted, "record_count")
             )
-        if "page" in extracted:
-            invocation.page = _coerce_optional_int(
-                _get_field(extracted, "page")
-            )
-        if "page_size" in extracted:
-            invocation.page_size = _coerce_optional_int(
-                _get_field(extracted, "page_size")
-            )
-        if "top_k" in extracted:
-            invocation.top_k = _coerce_optional_int(
-                _get_field(extracted, "top_k")
-            )
-
-        if "memory_type" in extracted:
-            raw = _get_field(extracted, "memory_type")
-            invocation.memory_type = safe_str(raw) if raw is not None else None
-        if "threshold" in extracted:
-            invocation.threshold = _coerce_optional_float(
-                _get_field(extracted, "threshold")
-            )
-        if "rerank" in extracted:
-            raw_rerank = _get_field(extracted, "rerank")
-            invocation.rerank = (
-                bool(raw_rerank) if raw_rerank is not None else None
-            )
-
-        if "input_messages" in extracted:
-            invocation.input_messages = _get_field(extracted, "input_messages")
-        if "output_messages" in extracted:
-            invocation.output_messages = _get_field(
-                extracted, "output_messages"
-            )
+        if "records" in extracted:
+            invocation.records = _get_field(extracted, "records")
 
         if "server_address" in extracted:
             raw = _get_field(extracted, "server_address")
@@ -369,20 +356,12 @@ class MemoryOperationWrapper:
 
         # Any leftover keys -> invocation.attributes (excluding known fields)
         known = {
-            "user_id",
-            "agent_id",
-            "run_id",
-            "app_id",
-            "memory_id",
-            "limit",
-            "page",
-            "page_size",
-            "top_k",
-            "memory_type",
-            "threshold",
-            "rerank",
-            "input_messages",
-            "output_messages",
+            "provider",
+            "store_id",
+            "record_id",
+            "record_count",
+            "query_text",
+            "records",
             "server_address",
             "server_port",
             "attributes",
@@ -415,24 +394,39 @@ class MemoryOperationWrapper:
                     )
                 return
 
-            # Built-in extractor path: directly extract for MemoryInvocation fields
-            input_msg, output_msg = self.extractor.extract_invocation_content(
-                operation_name,
-                normalized_kwargs,
-                result,
-                is_memory_client=is_memory_client,
-            )
-            if input_msg is not None:
-                invocation.input_messages = input_msg
-            if output_msg is not None:
-                invocation.output_messages = output_msg
+            if operation_name == "search":
+                query = normalized_kwargs.get("query")
+                if query is not None:
+                    invocation.query_text = safe_str(query)
 
-            # Extra attributes only (NOT covered by MemoryInvocation fields)
-            extra_attrs = self.extractor.extract_invocation_attributes(
-                operation_name, normalized_kwargs, result
-            )
-            if extra_attrs:
-                invocation.attributes.update(extra_attrs)
+            candidate_records: Any = result
+            if candidate_records is None and operation_name in (
+                "add",
+                "update",
+                "batch_update",
+            ):
+                candidate_records = normalized_kwargs.get(
+                    "memories",
+                    normalized_kwargs.get(
+                        "messages",
+                        normalized_kwargs.get(
+                            "data", normalized_kwargs.get("text")
+                        ),
+                    ),
+                )
+            records = _memory_records(candidate_records)
+            if records:
+                invocation.records = records
+
+            if result is not None:
+                invocation.record_count = extract_result_count(result)
+            if invocation.record_count is None:
+                for key in ("memories", "ids", "items", "data_list"):
+                    if isinstance(normalized_kwargs.get(key), list):
+                        invocation.record_count = len(normalized_kwargs[key])
+                        break
+            if invocation.record_count is None and invocation.record_id:
+                invocation.record_count = 1
         except Exception as e:
             logger.debug(f"Failed to extract invocation attributes: {e}")
 
@@ -449,7 +443,13 @@ class MemoryOperationWrapper:
         """Top-level Memory operation execution using util GenAI memory handler (sync)."""
         normalized_kwargs = _normalize_call_parameters(func, args, kwargs)
 
-        invocation = MemoryInvocation(operation=operation_name)
+        invocation = MemoryInvocation(
+            operation=_standard_memory_operation(operation_name),
+            span_kind=(
+                SpanKind.CLIENT if is_memory_client else SpanKind.INTERNAL
+            ),
+            provider="mem0" if is_memory_client else None,
+        )
         self._set_invocation_fields_from_kwargs(invocation, normalized_kwargs)
 
         # Server info (MemoryClient/AsyncMemoryClient)
@@ -541,7 +541,13 @@ class MemoryOperationWrapper:
         """Top-level Memory operation execution using util GenAI memory handler (async)."""
         normalized_kwargs = _normalize_call_parameters(func, args, kwargs)
 
-        invocation = MemoryInvocation(operation=operation_name)
+        invocation = MemoryInvocation(
+            operation=_standard_memory_operation(operation_name),
+            span_kind=(
+                SpanKind.CLIENT if is_memory_client else SpanKind.INTERNAL
+            ),
+            provider="mem0" if is_memory_client else None,
+        )
         self._set_invocation_fields_from_kwargs(invocation, normalized_kwargs)
 
         # Server info (MemoryClient/AsyncMemoryClient)
