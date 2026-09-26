@@ -209,6 +209,29 @@ def _uninstrument_create_agent() -> None:
 
 
 # ------------------------------------------------------------------
+# Embeddings patch
+# ------------------------------------------------------------------
+
+
+def _instrument_embeddings(handler: Any) -> None:
+    """Wrap all current and future ``Embeddings`` subclasses."""
+    from opentelemetry.instrumentation.langchain.internal.patch_embedding import (  # noqa: PLC0415
+        instrument_embeddings,
+    )
+
+    instrument_embeddings(handler)
+
+
+def _uninstrument_embeddings() -> None:
+    """Restore original ``Embeddings`` methods."""
+    from opentelemetry.instrumentation.langchain.internal.patch_embedding import (  # noqa: PLC0415
+        uninstrument_embeddings,
+    )
+
+    uninstrument_embeddings()
+
+
+# ------------------------------------------------------------------
 # BaseDocumentCompressor patch (rerank / compression)
 # ------------------------------------------------------------------
 
@@ -268,6 +291,7 @@ class LangChainInstrumentor(BaseInstrumentor):
         _instrument_agent_executor()
         _instrument_create_agent()
         _instrument_document_compressor(handler)
+        _instrument_embeddings(handler)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         try:
@@ -281,6 +305,7 @@ class LangChainInstrumentor(BaseInstrumentor):
         _uninstrument_agent_executor()
         _uninstrument_create_agent()
         _uninstrument_document_compressor()
+        _uninstrument_embeddings()
 
 
 class _BaseCallbackManagerInit:
