@@ -157,15 +157,19 @@ class _ContentBlockAccumulator:
         if self._current_block_type == "tool_use" and self._current_block_data:
             input_json_str = self._current_block_data.get("input_json", "")
             try:
-                arguments = json.loads(input_json_str) if input_json_str else None
+                arguments = (
+                    json.loads(input_json_str) if input_json_str else None
+                )
             except (json.JSONDecodeError, ValueError):
                 arguments = input_json_str
 
-            self.tool_calls.append({
-                "name": self._current_block_data.get("name", ""),
-                "id": self._current_block_data.get("id"),
-                "arguments": arguments,
-            })
+            self.tool_calls.append(
+                {
+                    "name": self._current_block_data.get("name", ""),
+                    "id": self._current_block_data.get("id"),
+                    "arguments": arguments,
+                }
+            )
 
         self._current_block_type = None
         self._current_block_data = {}
@@ -258,9 +262,8 @@ class AnthropicStreamWrapper:
         event_type = getattr(event, "type", None)
 
         # Record time to first token
-        if (
-            self.invocation.monotonic_first_token_s is None
-            and event_type in ("content_block_delta",)
+        if self.invocation.monotonic_first_token_s is None and event_type in (
+            "content_block_delta",
         ):
             self.invocation.monotonic_first_token_s = timeit.default_timer()
 
@@ -403,9 +406,8 @@ class AsyncAnthropicStreamWrapper:
         """Process a single streaming event - same logic as sync."""
         event_type = getattr(event, "type", None)
 
-        if (
-            self.invocation.monotonic_first_token_s is None
-            and event_type in ("content_block_delta",)
+        if self.invocation.monotonic_first_token_s is None and event_type in (
+            "content_block_delta",
         ):
             self.invocation.monotonic_first_token_s = timeit.default_timer()
 
