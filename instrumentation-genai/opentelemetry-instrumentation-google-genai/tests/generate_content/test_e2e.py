@@ -42,9 +42,11 @@ from vcr.record_mode import RecordMode
 
 try:
     # These modules are only supported in python >= 3.10
+    from aiohttp import StreamReader
     from aiohttp.client_exceptions import ClientConnectionError
     from vcr.stubs import aiohttp_stubs
 except ImportError:
+    StreamReader = None
     ClientConnectionError = None
     aiohttp_stubs = None
 
@@ -333,6 +335,12 @@ def fixture_patch_vcr_aiohttp_stream():
     # a VCR cassette with aiohttp stubs.
     # https://github.com/kevin1024/vcrpy/issues/927
     if ClientConnectionError is None or aiohttp_stubs is None:
+        return
+    # vcrpy releases that include https://github.com/kevin1024/vcrpy/pull/1055
+    # fix this themselves: a replayed response keeps a single aiohttp
+    # StreamReader as its content. The patch below is not needed there, and
+    # would break replaying.
+    if issubclass(aiohttp_stubs.MockStream, StreamReader):
         return
 
     class _ReplayMockStream(aiohttp_stubs.MockStream):
