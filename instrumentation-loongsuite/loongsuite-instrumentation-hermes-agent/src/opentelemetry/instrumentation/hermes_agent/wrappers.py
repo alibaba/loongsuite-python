@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import contextvars
+import functools
+import threading
 import timeit
 from collections.abc import Mapping
 from contextlib import suppress
@@ -24,6 +26,7 @@ from typing import Any
 
 from opentelemetry import trace as trace_api
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
+from opentelemetry.util.genai.response_id import extract_response_id
 from opentelemetry.util.genai.types import Error
 
 from .helpers import (
@@ -59,6 +62,148 @@ _GENAI_SPAN_NAME_PREFIXES = (
     "embedding ",
     "embeddings ",
 )
+_PROVIDER_CREATE_WRAPPED = "_otel_hermes_response_id_capture_wrapped"
+_PROVIDER_ATTEMPT = threading.local()
+_PROVIDER_CAPTURE = threading.local()
+_MISSING_THREAD_LOCAL = object()
+
+
+class _ProviderResponseAttempt:
+    """Response-ID state for one provider SDK ``create`` attempt."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._response_id: str | None = None
+        self._response_id_priority = 0
+
+    @property
+    def response_id(self) -> str | None:
+        with self._lock:
+            return self._response_id
+
+    def record(self, value: Any) -> None:
+        # DashScope exposes its provider correlation ID as ``request_id`` even
+        # when an OpenAI-compatible completion ``id`` is also present.
+        response_id = extract_response_id(value, fields=("request_id",))
+        priority = 2
+        if response_id is None:
+            response_id = extract_response_id(
+                value,
+                fields=("id", "response_id"),
+            )
+            priority = 1
+        if response_id is None:
+            return
+        with self._lock:
+            if priority > self._response_id_priority:
+                self._response_id = response_id
+                self._response_id_priority = priority
+
+
+class _ProviderResponseIdCapture:
+    """Invocation-local pointer to the active provider attempt."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._attempt: _ProviderResponseAttempt | None = None
+
+    def adopt_current_attempt(self) -> None:
+        attempt = getattr(_PROVIDER_ATTEMPT, "value", None)
+        if attempt is None:
+            return
+        _PROVIDER_CAPTURE.value = self
+        self.adopt(attempt)
+
+    def adopt(self, attempt: _ProviderResponseAttempt) -> None:
+        with self._lock:
+            self._attempt = attempt
+
+    @property
+    def response_id(self) -> str | None:
+        with self._lock:
+            attempt = self._attempt
+        return attempt.response_id if attempt is not None else None
+
+
+class _ProviderStreamProxy:
+    """Transparent iterator that observes provider chunks without changing them."""
+
+    def __init__(self, stream: Any, attempt: _ProviderResponseAttempt) -> None:
+        self._stream = stream
+        self._attempt = attempt
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        chunk = next(self._stream)
+        self._attempt.record(chunk)
+        return chunk
+
+    def __enter__(self):
+        enter = getattr(self._stream, "__enter__", None)
+        if enter is not None:
+            entered = enter()
+            if entered is not self._stream:
+                self._stream = entered
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        exit_method = getattr(self._stream, "__exit__", None)
+        if exit_method is None:
+            return False
+        return exit_method(exc_type, exc_value, traceback)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+
+def _wrap_provider_create(resource: Any) -> None:
+    create = (
+        getattr(resource, "create", None) if resource is not None else None
+    )
+    if not callable(create) or getattr(
+        create, _PROVIDER_CREATE_WRAPPED, False
+    ):
+        return
+
+    @functools.wraps(create)
+    def _capturing_create(*args, **kwargs):
+        attempt = _ProviderResponseAttempt()
+        _PROVIDER_ATTEMPT.value = attempt
+        capture = getattr(_PROVIDER_CAPTURE, "value", None)
+        if capture is not None:
+            capture.adopt(attempt)
+        response = create(*args, **kwargs)
+        attempt.record(response)
+
+        if (
+            kwargs.get("stream") is True
+            and not hasattr(response, "choices")
+            and hasattr(response, "__iter__")
+        ):
+            return _ProviderStreamProxy(response, attempt)
+        return response
+
+    setattr(_capturing_create, _PROVIDER_CREATE_WRAPPED, True)
+    try:
+        setattr(resource, "create", _capturing_create)
+    except (AttributeError, TypeError):
+        # A provider resource may use slots/read-only descriptors. Telemetry
+        # must never make the model call fail; the framework response remains
+        # available as the fallback ID in that case.
+        return
+
+
+class ProviderClientWrapper:
+    """Decorate Hermes request-local SDK clients for response-ID capture."""
+
+    def __call__(self, wrapped, instance, args, kwargs):
+        client = wrapped(*args, **kwargs)
+        _wrap_provider_create(
+            getattr(getattr(client, "chat", None), "completions", None)
+        )
+        return client
 
 
 def _resolve_handler(
@@ -307,16 +452,30 @@ class LLMCallWrapper:
 
         api_kwargs = args[0] if args else kwargs.get("api_kwargs", {})
         invocation = create_llm_invocation(instance, api_kwargs)
+        provider_response_capture = _ProviderResponseIdCapture()
         provider = invocation.provider or provider_name(instance)
         model = invocation.request_model or ""
         self._handler.start_llm(invocation)
         started_at = timeit.default_timer()
+        previous_provider_attempt = getattr(
+            _PROVIDER_ATTEMPT,
+            "value",
+            _MISSING_THREAD_LOCAL,
+        )
+        previous_provider_capture = getattr(
+            _PROVIDER_CAPTURE,
+            "value",
+            _MISSING_THREAD_LOCAL,
+        )
+        _PROVIDER_ATTEMPT.value = None
+        _PROVIDER_CAPTURE.value = provider_response_capture
 
         try:
             if self._streaming:
                 original_first_delta = kwargs.get("on_first_delta")
 
                 def _wrapped_first_delta():
+                    provider_response_capture.adopt_current_attempt()
                     now = timeit.default_timer()
                     invocation.monotonic_first_token_s = now
                     if current_state["first_token_monotonic_s"] is None:
@@ -327,9 +486,15 @@ class LLMCallWrapper:
                 kwargs["on_first_delta"] = _wrapped_first_delta
 
             response = wrapped(*args, **kwargs)
+            # Covers direct/synchronous streaming implementations that iterate
+            # on the caller thread instead of Hermes's worker thread.
+            provider_response_capture.adopt_current_attempt()
             input_tokens, output_tokens, total_tokens = (
                 update_llm_invocation_from_response(
-                    invocation, instance, response
+                    invocation,
+                    instance,
+                    response,
+                    provider_response_id=provider_response_capture.response_id,
                 )
             )
 
@@ -379,6 +544,16 @@ class LLMCallWrapper:
             finish_step(instance, "error", exc=exc)
             raise
         finally:
+            if previous_provider_attempt is _MISSING_THREAD_LOCAL:
+                with suppress(AttributeError):
+                    del _PROVIDER_ATTEMPT.value
+            else:
+                _PROVIDER_ATTEMPT.value = previous_provider_attempt
+            if previous_provider_capture is _MISSING_THREAD_LOCAL:
+                with suppress(AttributeError):
+                    del _PROVIDER_CAPTURE.value
+            else:
+                _PROVIDER_CAPTURE.value = previous_provider_capture
             current_state["active_llm_depth"] = max(
                 0, current_state["active_llm_depth"] - 1
             )

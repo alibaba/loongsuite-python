@@ -23,6 +23,8 @@ There are no changelog entries for this release.
 - Add `hook_advice` and `async_hook_advice` fail-open decorators for
   instrumentation-only logic, with explicit rejection of deferred generator
   lifecycles.
+- Add shared response ID extraction and provider-first fallback helpers for
+  GenAI instrumentations that receive both provider and framework responses.
 
 ### Fixed
 
