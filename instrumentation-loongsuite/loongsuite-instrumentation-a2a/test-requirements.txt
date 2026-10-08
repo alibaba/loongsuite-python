@@ -17,9 +17,13 @@ pytest-asyncio
 pytest-forked==1.6.0
 setuptools
 wrapt
-a2a-sdk
+a2a-sdk[http-server]
+httpx < 1
 opentelemetry-sdk
 
 -e opentelemetry-instrumentation
+-e instrumentation/opentelemetry-instrumentation-asgi
+-e instrumentation/opentelemetry-instrumentation-httpx
+-e util/opentelemetry-util-http
 -e util/opentelemetry-util-genai
 -e instrumentation-loongsuite/loongsuite-instrumentation-a2a
