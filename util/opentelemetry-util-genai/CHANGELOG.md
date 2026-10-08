@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Decouple GenAI configuration and internal HTTP suppression from instrumentation.
 
 - Add multimodal runtime config snapshot and generation-aware uploader hot-reload.
+- Align LLM, Retrieval, Agent, and Memory span attributes with the
+  current upstream OpenTelemetry GenAI semantic conventions while retaining the
+  existing invocation lifecycle.
+- Record `gen_ai.response.time_to_first_chunk` as double seconds independently
+  from the LoongSuite `gen_ai.response.time_to_first_token` integer nanoseconds.
+- Change Retrieval spans to client spans and emit `gen_ai.retrieval.top_k`;
+  omit the opt-in `gen_ai.retrieval.documents` attribute when content capture
+  is disabled instead of retaining document ids and scores.
+  Memory spans now use upstream operation names and Memory attributes instead
+  of legacy LoongSuite `gen_ai.memory.*` fields and the legacy Memory operation
+  event.
 - Avoid import-time warnings when optional audio dependencies for PCM16-to-WAV conversion are not installed.
 - Guarantee idempotent LLM span/context cleanup when synchronous probe
   finalization fails, and allow a detached streaming span to finish in another

@@ -26,6 +26,43 @@ GEN_AI_TOOL_DEFINITIONS: Final = "gen_ai.tool.definitions"
 The tool definitions used by the model.
 """
 
+# Attributes present in the current upstream GenAI semantic conventions but
+# not yet shipped by the minimum opentelemetry-semantic-conventions version
+# supported by LoongSuite.
+GEN_AI_PROMPT_NAME: Final = "gen_ai.prompt.name"
+"""The name that uniquely identifies the prompt template."""
+
+GEN_AI_PROMPT_VERSION: Final = "gen_ai.prompt.version"
+"""The version of the prompt template."""
+
+GEN_AI_PROMPT_VARIABLE_PREFIX: Final = "gen_ai.prompt.variable."
+"""Prefix for prompt-template variables; append the variable name."""
+
+GEN_AI_REQUEST_STREAM: Final = "gen_ai.request.stream"
+"""Whether the request uses streaming. Emit only for streaming requests."""
+
+GEN_AI_REQUEST_REASONING_LEVEL: Final = "gen_ai.request.reasoning.level"
+"""The provider-specific reasoning or thinking effort requested."""
+
+GEN_AI_RESPONSE_TIME_TO_FIRST_CHUNK: Final = (
+    "gen_ai.response.time_to_first_chunk"
+)
+"""Time from request issuance to the first response chunk, in seconds."""
+
+GEN_AI_USAGE_REASONING_OUTPUT_TOKENS: Final = (
+    "gen_ai.usage.reasoning.output_tokens"
+)
+"""Output tokens used for reasoning, included in output-token usage."""
+
+GEN_AI_CONVERSATION_COMPACTED: Final = "gen_ai.conversation.compacted"
+"""Positive indicator that the effective conversation was compacted."""
+
+GEN_AI_AGENT_VERSION: Final = "gen_ai.agent.version"
+"""The version of the GenAI agent."""
+
+GEN_AI_WORKFLOW_NAME: Final = "gen_ai.workflow.name"
+"""The low-cardinality, human-readable name of the GenAI workflow."""
+
 # Embedding attributes
 GEN_AI_EMBEDDINGS_DIMENSION_COUNT: Final = "gen_ai.embeddings.dimension.count"
 """
@@ -46,13 +83,16 @@ The result returned by the tool after execution.
 # Retrieval attributes
 GEN_AI_RETRIEVAL_QUERY_TEXT: Final = "gen_ai.retrieval.query.text"
 """
-The retrieval query text (short phrase). Per LoongSuite semantic convention.
+The retrieval query text (short phrase). Per upstream OpenTelemetry GenAI conventions.
 """
 
 GEN_AI_RETRIEVAL_DOCUMENTS: Final = "gen_ai.retrieval.documents"
 """
 The documents retrieved from the search or vector database.
 """
+
+GEN_AI_RETRIEVAL_TOP_K: Final = "gen_ai.retrieval.top_k"
+"""The maximum number of retrieval results requested."""
 
 # Rerank attributes
 GEN_AI_RERANK_DOCUMENTS_COUNT: Final = "gen_ai.rerank.documents.count"
@@ -233,8 +273,14 @@ class GenAiSpanKindValues(Enum):
 
 
 class GenAiExtendedOperationNameValues(Enum):
+    INVOKE_WORKFLOW = "invoke_workflow"
+    """Invoke a coordinated GenAI workflow."""
+
+    PLAN = "plan"
+    """Agent planning or task-decomposition phase."""
+
     RETRIEVAL = "retrieval"
-    """Retrieval operation (vector store / database lookup). Per LoongSuite semantic convention."""
+    """Retrieval operation (vector store / database lookup) from upstream OpenTelemetry GenAI conventions."""
 
     RERANK_DOCUMENTS = "rerank_documents"
     """Rerank documents operation."""
@@ -253,5 +299,5 @@ class GenAiExtendedProviderNameValues(Enum):
     OLLAMA = "ollama"
     """Ollama."""
 
-    MOONSHOT = "moonshot"
+    MOONSHOT = "moonshot_ai"
     """Moonshot."""

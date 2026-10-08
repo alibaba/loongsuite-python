@@ -87,7 +87,6 @@ from opentelemetry.util.genai._multimodal_processing import (
 from opentelemetry.util.genai.extended_memory import (
     MemoryInvocation,
     _apply_memory_finish_attributes,
-    _maybe_emit_memory_event,
 )
 from opentelemetry.util.genai.extended_metrics import (
     ExtendedInvocationMetricsRecorder,
@@ -576,7 +575,7 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         """Start a retrieval invocation and create a pending span entry."""
         span = self._tracer.start_span(
             name="retrieval",
-            kind=SpanKind.INTERNAL,
+            kind=SpanKind.CLIENT,
             context=context,
         )
         # Record a monotonic start timestamp (seconds) for duration
@@ -716,12 +715,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         context: Context | None = None,
     ) -> MemoryInvocation:
         """Start a memory operation invocation and create a pending span entry."""
-        span_name = f"memory_operation {invocation.operation}"
-
-        # Memory operations are CLIENT operations to remote services
         span = self._tracer.start_span(
-            name=span_name,
-            kind=SpanKind.CLIENT,
+            name=invocation.operation,
+            kind=invocation.span_kind,
             context=context,
         )
         # Record a monotonic start timestamp (seconds) for duration
@@ -741,7 +737,6 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
             return invocation
 
         _apply_memory_finish_attributes(invocation.span, invocation)
-        _maybe_emit_memory_event(self._logger, invocation.span, invocation)
         self._record_extended_metrics(invocation.span, invocation)
 
         _safe_detach(invocation.context_token)
@@ -758,7 +753,6 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         span = invocation.span
         _apply_memory_finish_attributes(span, invocation)
         _apply_error_attributes(span, error)
-        _maybe_emit_memory_event(self._logger, span, invocation, error)  # pylint: disable=too-many-function-args
         _safe_detach(invocation.context_token)
         span.end()
         return invocation

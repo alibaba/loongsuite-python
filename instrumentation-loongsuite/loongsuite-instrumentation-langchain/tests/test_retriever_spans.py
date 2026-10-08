@@ -117,7 +117,7 @@ class TestRetrieverInputOutputContent:
     def test_no_content_when_disabled(
         self, instrument_no_content, span_exporter
     ):
-        """When content capture is NO_CONTENT: query omitted; documents record id and score only."""
+        """NO_CONTENT omits the opt-in query and document attributes."""
         retriever = FakeRetriever()
         retriever.invoke("secret query")
 
@@ -128,8 +128,6 @@ class TestRetrieverInputOutputContent:
         assert GEN_AI_RETRIEVAL_QUERY_TEXT not in attrs, (
             "Query should NOT be captured when content capture is disabled"
         )
-        # Documents are recorded with id and score only (no content) when NO_CONTENT
-        docs_val = attrs.get(GEN_AI_RETRIEVAL_DOCUMENTS, "")
-        assert "secret query" not in docs_val, (
-            "Document content should NOT be captured when NO_CONTENT"
+        assert GEN_AI_RETRIEVAL_DOCUMENTS not in attrs, (
+            "Documents are opt-in and should not be captured when disabled"
         )

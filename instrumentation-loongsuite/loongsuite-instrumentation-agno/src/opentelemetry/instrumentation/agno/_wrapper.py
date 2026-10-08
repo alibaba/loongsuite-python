@@ -81,6 +81,37 @@ def _is_stream_close(exc: BaseException) -> bool:
     return isinstance(exc, (GeneratorExit, StopIteration, StopAsyncIteration))
 
 
+def _safe_get(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    try:
+        return getattr(value, name, None)
+    except (AttributeError, KeyError):
+        return None
+
+
+def _response_has_token(response: Any) -> bool:
+    return any(
+        (
+            _safe_get(response, "content"),
+            _safe_get(response, "reasoning_content"),
+            _safe_get(response, "redacted_reasoning_content"),
+            _safe_get(response, "tool_calls"),
+        )
+    )
+
+
+def _mark_llm_stream_item(invocation: Any, response: Any) -> None:
+    now = timeit.default_timer()
+    invocation.stream = True
+    if invocation.monotonic_first_chunk_s is None:
+        invocation.monotonic_first_chunk_s = now
+    if invocation.monotonic_first_token_s is None and _response_has_token(
+        response
+    ):
+        invocation.monotonic_first_token_s = now
+
+
 @dataclass
 class _AgnoRunState:
     handler: ExtendedTelemetryHandler
@@ -698,8 +729,7 @@ class AgnoModelWrapper:
         try:
             stream = wrapped(*args, **kwargs)
             for response in stream:
-                if invocation.monotonic_first_token_s is None:
-                    invocation.monotonic_first_token_s = timeit.default_timer()
+                _mark_llm_stream_item(invocation, response)
                 responses.append(response)
                 yield response
             self._finish_llm_call(
@@ -744,8 +774,7 @@ class AgnoModelWrapper:
             if inspect.isawaitable(stream):
                 stream = await stream
             async for response in stream:
-                if invocation.monotonic_first_token_s is None:
-                    invocation.monotonic_first_token_s = timeit.default_timer()
+                _mark_llm_stream_item(invocation, response)
                 responses.append(response)
                 yield response
             self._finish_llm_call(
@@ -886,8 +915,7 @@ class AgnoModelWrapper:
         try:
             stream = wrapped(*args, **kwargs)
             for response in stream:
-                if invocation.monotonic_first_token_s is None:
-                    invocation.monotonic_first_token_s = timeit.default_timer()
+                _mark_llm_stream_item(invocation, response)
                 responses.append(response)
                 yield response
             if responses:
@@ -967,8 +995,7 @@ class AgnoModelWrapper:
             if inspect.isawaitable(stream):
                 stream = await stream
             async for response in stream:
-                if invocation.monotonic_first_token_s is None:
-                    invocation.monotonic_first_token_s = timeit.default_timer()
+                _mark_llm_stream_item(invocation, response)
                 responses.append(response)
                 yield response
             if responses:

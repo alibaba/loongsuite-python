@@ -69,7 +69,7 @@ class AgentScopeGenAiProviderName(str, Enum):
 
     OLLAMA = "ollama"
     DASHSCOPE = "dashscope"
-    MOONSHOT = "moonshot"
+    MOONSHOT = "moonshot_ai"
 
 
 # Provider name mapping based on class names
@@ -79,6 +79,7 @@ _PROVIDER_NAME_MAP = {
     "anthropic": GenAIAttributes.GenAiProviderNameValues.ANTHROPIC.value,
     "dashscope": AgentScopeGenAiProviderName.DASHSCOPE.value,
     "ollama": AgentScopeGenAiProviderName.OLLAMA.value,
+    "moonshot": AgentScopeGenAiProviderName.MOONSHOT.value,
 }
 
 # Base URL to provider mapping for OpenAI-compatible APIs
@@ -89,6 +90,7 @@ _BASE_URL_PROVIDER_MAP = [
         GenAIAttributes.GenAiProviderNameValues.DEEPSEEK.value,
     ),
     ("dashscope.aliyuncs.com", AgentScopeGenAiProviderName.DASHSCOPE.value),
+    ("api.moonshot.cn", AgentScopeGenAiProviderName.MOONSHOT.value),
 ]
 
 

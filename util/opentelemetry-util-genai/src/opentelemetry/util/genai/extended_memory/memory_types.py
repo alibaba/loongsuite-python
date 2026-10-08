@@ -17,7 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
-from opentelemetry.util.genai.types import ContextToken, Span
+from opentelemetry.trace import Span, SpanKind
+from opentelemetry.util.genai.types import ContextToken
 
 
 def _new_str_any_dict() -> Dict[str, Any]:
@@ -33,11 +34,24 @@ class MemoryInvocation:
     The span and context_token attributes are set by the TelemetryHandler.
     """
 
-    operation: str  # Memory operation type (add, search, update, etc.)
+    operation: str
+    """Upstream operation name, for example ``search_memory``."""
     context_token: ContextToken | None = None
     span: Span | None = None
     attributes: Dict[str, Any] = field(default_factory=_new_str_any_dict)
-    # Memory identifiers (conditionally required)
+    provider: str | None = None
+    store_id: str | None = None
+    record_id: str | None = None
+    record_count: int | None = None
+    query_text: str | None = None
+    records: Any = None
+    span_kind: SpanKind = SpanKind.CLIENT
+    server_address: str | None = None
+    server_port: int | None = None
+    monotonic_start_s: float | None = None
+
+    # Legacy input fields retained for source compatibility. They are not
+    # emitted as attributes by the standard Memory span implementation.
     user_id: str | None = None
     agent_id: str | None = None
     run_id: str | None = None
@@ -54,7 +68,3 @@ class MemoryInvocation:
     # Memory content (optional, controlled by content capturing mode)
     input_messages: Any = None  # Original memory content
     output_messages: Any = None  # Query results
-    # Server information
-    server_address: str | None = None
-    server_port: int | None = None
-    monotonic_start_s: float | None = None

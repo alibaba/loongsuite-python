@@ -111,7 +111,7 @@ def test_infer_provider_from_base_url():
 
         # Test Moonshot (extended provider)
         result = infer_provider_from_base_url("https://api.moonshot.cn/v1")
-        assert result == "moonshot"
+        assert result == "moonshot_ai"
 
         # Test Anthropic (defaults to anthropic)
         os.environ["ANTHROPIC_BASE_URL"] = "https://api.anthropic.com"

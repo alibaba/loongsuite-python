@@ -444,6 +444,14 @@ def test_streaming_completion_records_ttft_choices_and_tool_calls(
     assert len(spans) == 1
     span = spans[0]
     assert "gen_ai.response.time_to_first_token" in span.attributes
+    assert "gen_ai.response.time_to_first_chunk" in span.attributes
+    assert span.attributes["gen_ai.request.stream"] is True
+    assert isinstance(
+        span.attributes["gen_ai.response.time_to_first_chunk"], float
+    )
+    assert isinstance(
+        span.attributes["gen_ai.response.time_to_first_token"], int
+    )
     assert span.attributes["gen_ai.request.choice.count"] == 2
     assert span.attributes["gen_ai.usage.input_tokens"] == 6
     assert span.attributes["gen_ai.usage.output_tokens"] == 5

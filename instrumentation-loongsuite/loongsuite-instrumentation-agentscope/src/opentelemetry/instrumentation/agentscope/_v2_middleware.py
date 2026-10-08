@@ -26,6 +26,7 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Mapping,
     Sequence,
 )
 from dataclasses import asdict, dataclass, is_dataclass
@@ -167,8 +168,11 @@ def _release_llm_context(state: _LLMState) -> bool:
 
 @hook_advice("agentscope", "record_llm_chunk")
 def _record_llm_chunk(state: _LLMState, chunk: ChatResponse) -> None:
-    if not state.first_token_seen:
-        state.invocation.monotonic_first_token_s = timeit.default_timer()
+    now = timeit.default_timer()
+    if state.invocation.monotonic_first_chunk_s is None:
+        state.invocation.monotonic_first_chunk_s = now
+    if not state.first_token_seen and _chat_response_has_token(chunk):
+        state.invocation.monotonic_first_token_s = now
         state.first_token_seen = True
     state.last_chunk = chunk
 
@@ -1018,6 +1022,7 @@ def _create_llm_invocation(
             ),
         ),
         tool_definitions=_tool_definitions(input_kwargs.get("tools")),
+        stream=True if _is_streaming_model(model, input_kwargs) else None,
     )
     _apply_identity(invocation)
     parameters = getattr(model, "parameters", None)
@@ -1178,6 +1183,30 @@ def _get_provider_name(model: Any) -> str:
 def _is_first_token_event(item: Any) -> bool:
     event_type = getattr(item, "type", None)
     return event_type in _FIRST_TOKEN_EVENT_TYPES
+
+
+def _chat_response_has_token(response: Any) -> bool:
+    content = _safe_get(response, "content")
+    if isinstance(content, str):
+        return bool(content)
+    for block in content or []:
+        block_type = _safe_get(block, "type")
+        if block_type == "text" and _safe_get(block, "text"):
+            return True
+        if block_type == "thinking" and _safe_get(block, "thinking"):
+            return True
+        if block_type == "tool_call":
+            return True
+    return False
+
+
+def _safe_get(value: Any, name: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name)
+    try:
+        return getattr(value, name, None)
+    except (AttributeError, KeyError):
+        return None
 
 
 def _middleware_arg_position() -> int | None:
