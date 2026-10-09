@@ -1,0 +1,42 @@
+interactions:
+- request:
+    body: '{"messages":[{"role":"system","content":"Return only the requested deterministic
+      token."},{"role":"user","content":"Reply with exactly MAF_VCR_STREAM_OK"}],"model":"qwen-plus","stream":true,"stream_options":{"include_usage":true}}'
+    headers:
+      content-type:
+      - application/json
+    method: POST
+    uri: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  response:
+    body:
+      string: 'data: {"model":"qwen-plus","id":"maf-vcr-response-id","created":1700000000,"object":"chat.completion.chunk","usage":null,"choices":[{"logprobs":null,"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":null}]}
+
+
+        data: {"model":"qwen-plus","id":"maf-vcr-response-id","choices":[{"delta":{"content":"MA"},"index":0,"finish_reason":null,"logprobs":null}],"created":1700000000,"object":"chat.completion.chunk","usage":null}
+
+
+        data: {"model":"qwen-plus","id":"maf-vcr-response-id","choices":[{"delta":{"content":"F"},"index":0,"finish_reason":null,"logprobs":null}],"created":1700000000,"object":"chat.completion.chunk","usage":null}
+
+
+        data: {"model":"qwen-plus","id":"maf-vcr-response-id","choices":[{"delta":{"content":"_VCR_STREAM"},"index":0,"finish_reason":null,"logprobs":null}],"created":1700000000,"object":"chat.completion.chunk","usage":null}
+
+
+        data: {"model":"qwen-plus","id":"maf-vcr-response-id","choices":[{"delta":{"content":"_OK"},"index":0,"finish_reason":null,"logprobs":null}],"created":1700000000,"object":"chat.completion.chunk","usage":null}
+
+
+        data: {"model":"qwen-plus","id":"maf-vcr-response-id","choices":[{"delta":{"content":""},"index":0,"finish_reason":"stop","logprobs":null}],"created":1700000000,"object":"chat.completion.chunk","usage":null}
+
+
+        data: {"model":"qwen-plus","id":"maf-vcr-response-id","choices":[],"created":1700000000,"object":"chat.completion.chunk","usage":{"total_tokens":35,"completion_tokens":6,"prompt_tokens":29,"prompt_tokens_details":{"cached_tokens":0}}}
+
+
+        data: [DONE]
+
+        '
+    headers:
+      content-type:
+      - text/event-stream;charset=utf-8
+    status:
+      code: 200
+      message: OK
+version: 1

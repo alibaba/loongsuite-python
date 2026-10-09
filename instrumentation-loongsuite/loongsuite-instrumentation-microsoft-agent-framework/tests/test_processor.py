@@ -317,9 +317,10 @@ def test_finish_reasons_json_string_normalized_to_array():
         span.set_attribute(GEN_AI_OPERATION_NAME, GenAIOperation.CHAT)
         span.set_attribute(GEN_AI_RESPONSE_FINISH_REASONS, '["tool_call"]')
     spans = _flush(exporter)
-    assert spans[0].attributes.get(GEN_AI_RESPONSE_FINISH_REASONS) == (
-        "tool_calls",
-    )
+    # Stable across OTel SDKs that expose array attributes as tuple or list.
+    assert list(spans[0].attributes.get(GEN_AI_RESPONSE_FINISH_REASONS)) == [
+        "tool_calls"
+    ]
 
 
 def test_output_messages_finish_reason_added_for_agent_span():
