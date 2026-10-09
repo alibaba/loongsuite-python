@@ -18,6 +18,7 @@
 | [loongsuite-instrumentation-langchain](./loongsuite-instrumentation-langchain) | langchain_core >= 0.1.0 | No | development
 | [loongsuite-instrumentation-langgraph](./loongsuite-instrumentation-langgraph) | langgraph >= 0.2 | No | development
 | [loongsuite-instrumentation-litellm](./loongsuite-instrumentation-litellm) | litellm >= 1.0.0 | No | development
+| [loongsuite-instrumentation-llama-index](./loongsuite-instrumentation-llama-index) | llama-index-core >= 0.11.0 | No | development
 | [loongsuite-instrumentation-mcp](./loongsuite-instrumentation-mcp) | mcp >= 1.3.0, <= 1.25.0 | No | development
 | [loongsuite-instrumentation-mem0](./loongsuite-instrumentation-mem0) | mem0ai >= 1.0.0, < 2.0.0 | No | development
 | [loongsuite-instrumentation-microsoft-agent-framework](./loongsuite-instrumentation-microsoft-agent-framework) | agent-framework-core >= 1.0.0 | No | development

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Skip the `test_e2e.py` workaround for [kevin1024/vcrpy#927](https://github.com/kevin1024/vcrpy/issues/927) on vcrpy releases that include [kevin1024/vcrpy#1055](https://github.com/kevin1024/vcrpy/pull/1055), where it breaks replaying ([#276](https://github.com/alibaba/loongsuite-python/pull/276)).
+
 ## Version 0.7b0 (2026-02-20)
 - Fix bug in how tokens are counted when using the streaming `generateContent` method.  ([#4152](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4152)).
 - Add `gen_ai.tool.definitions` attribute to `gen_ai.client.inference.operation.details` log event ([#4142](https://github.com/open-telemetry/opentelemetry-python-contrib/pull/4142)).
