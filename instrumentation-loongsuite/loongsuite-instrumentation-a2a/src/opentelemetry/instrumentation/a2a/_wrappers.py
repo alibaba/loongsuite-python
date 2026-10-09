@@ -117,19 +117,3 @@ def wrap(tracer, method, server, streaming):
             telemetry.finish(state)
 
     return coroutine_wrapper
-
-
-async def send(wrapped, instance, args, kwargs):
-    request = args[0] if args else kwargs.get("request")
-    telemetry.inject(request)
-    return await wrapped(*args, **kwargs)
-
-
-async def request(wrapped, instance, args, kwargs):
-    token = telemetry.request_headers(
-        args[0] if args else kwargs.get("request")
-    )
-    try:
-        return await wrapped(*args, **kwargs)
-    finally:
-        telemetry.detach(token)

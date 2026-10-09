@@ -19,7 +19,7 @@ import asyncio
 import httpx
 import pytest
 
-from opentelemetry import trace
+from opentelemetry import context, trace
 from opentelemetry.instrumentation.a2a import _telemetry
 from opentelemetry.instrumentation.a2a._semconv import attributes
 from opentelemetry.instrumentation.a2a._wrappers import wrap
@@ -27,8 +27,11 @@ from opentelemetry.instrumentation.utils import suppress_instrumentation
 from opentelemetry.trace import SpanKind, StatusCode
 
 
+@pytest.mark.parametrize(
+    "headers", [{}, {"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}]
+)
 @pytest.mark.asyncio
-async def test_client_real_sdk(telemetry):
+async def test_client_real_sdk(telemetry, headers):
     provider, exporter, _ = telemetry
     observed = []
     try:
@@ -61,7 +64,7 @@ async def test_client_real_sdk(telemetry):
         )
 
     async with httpx.AsyncClient(
-        transport=httpx.MockTransport(respond)
+        transport=httpx.MockTransport(respond), headers=headers
     ) as http:
         if modern:
             from a2a.client.transports.jsonrpc import JsonRpcTransport
@@ -112,10 +115,51 @@ async def test_client_real_sdk(telemetry):
     assert span.attributes["a2a.message.id"] == "input"
     assert span.attributes["gen_ai.conversation.id"] == "session"
     assert span.parent.span_id == parent.get_span_context().span_id
-    assert observed[0]["traceparent"].split("-")[2] == format(
-        span.context.span_id, "016x"
-    )
+    assert observed[0].get("traceparent") == headers.get("traceparent")
     assert not any("gen_ai.operation.name" in s.attributes for s in spans)
+
+
+def test_instrumentation_does_not_patch_httpx(telemetry):
+    provider, _, instrumentor = telemetry
+    instrumentor.uninstrument()
+    original = httpx.AsyncClient.send
+    instrumentor.instrument(tracer_provider=provider)
+    assert httpx.AsyncClient.send is original
+
+
+@pytest.mark.asyncio
+async def test_server_uses_current_context_not_request_headers(telemetry):
+    from types import SimpleNamespace
+
+    provider, exporter, _ = telemetry
+    tracer = provider.get_tracer("test")
+    headers = {"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"}
+    call_context = SimpleNamespace(state={"headers": headers})
+
+    async def business(*args, **kwargs):
+        return None
+
+    token = context.attach(context.Context())
+    try:
+        # The transport can establish context without a recording SERVER span.
+        remote = trace.SpanContext(
+            3, 4, is_remote=True, trace_flags=trace.TraceFlags(1)
+        )
+        with trace.use_span(trace.NonRecordingSpan(remote)):
+            await wrap(tracer, "GetTask", True, False)(
+                business, None, ({"id": "task"}, call_context), {}
+            )
+        # Raw trace headers alone must not establish a parent in the A2A plugin.
+        await wrap(tracer, "GetTask", True, False)(
+            business, None, ({"id": "task"}, call_context), {}
+        )
+    finally:
+        context.detach(token)
+    inherited, standalone = exporter.get_finished_spans()
+    assert inherited.parent == remote
+    assert inherited.context.trace_id == remote.trace_id
+    assert standalone.parent is None
+    assert headers["traceparent"] == "00-" + "1" * 32 + "-" + "2" * 16 + "-01"
 
 
 @pytest.mark.parametrize("server", [False, True])
@@ -341,6 +385,28 @@ def test_native_tracing_restored_and_user_override(telemetry, monkeypatch):
     monkeypatch.setenv("OTEL_INSTRUMENTATION_A2A_SDK_ENABLED", "true")
     instrumentor.instrument(tracer_provider=provider)
     assert native.trace is original
+
+
+@pytest.mark.asyncio
+async def test_disabled_sdk_tracing_preserves_transport_span(telemetry):
+    import a2a.utils.telemetry as native
+
+    provider, _, _ = telemetry
+
+    @native.trace_function
+    async def internal():
+        assert trace.get_current_span() is parent
+        raise ValueError("handled by the application")
+
+    with provider.get_tracer("test").start_as_current_span(
+        "HTTP", kind=SpanKind.SERVER
+    ) as parent:
+        with pytest.raises(ValueError):
+            await internal()
+        assert trace.get_current_span() is parent
+        assert parent.is_recording()
+        assert parent.status.status_code == StatusCode.UNSET
+        assert not parent.events
 
 
 @pytest.mark.parametrize(

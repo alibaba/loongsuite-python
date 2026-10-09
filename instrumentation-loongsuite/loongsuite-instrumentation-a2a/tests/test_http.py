@@ -1,13 +1,30 @@
+# Copyright The OpenTelemetry Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Real SDK client, dispatcher, executor and response serialization over ASGI HTTP."""
 
 import asyncio
 import inspect
 import uuid
+from contextlib import asynccontextmanager
 
 import httpx
 import pytest
 
-from opentelemetry import trace
+from opentelemetry import context, trace
+from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.trace import SpanKind
 
 try:
@@ -16,6 +33,38 @@ try:
     MODERN = True
 except ImportError:
     MODERN = False
+
+
+@asynccontextmanager
+async def transport_client(
+    app, provider, client_probe=True, server_probe=True, observed=None
+):
+    if server_probe:
+        app = OpenTelemetryMiddleware(app, tracer_provider=provider)
+
+    async def network_boundary(scope, receive, send):
+        # ASGITransport runs in-process; real servers do not inherit caller context.
+        if observed is not None:
+            observed.append(dict(scope["headers"]))
+        token = context.attach(context.Context())
+        try:
+            await app(scope, receive, send)
+        finally:
+            context.detach(token)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=network_boundary),
+        headers={"a2a-version": "1.0"} if MODERN else {},
+    ) as http:
+        if client_probe:
+            HTTPXClientInstrumentor.instrument_client(
+                http, tracer_provider=provider
+            )
+        try:
+            yield http
+        finally:
+            if client_probe:
+                HTTPXClientInstrumentor.uninstrument_client(http)
 
 
 def make_card():
@@ -137,26 +186,19 @@ def make_app(calls):
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("http_instrumentation", [False, True])
+@pytest.mark.parametrize("client_probe", [False, True])
+@pytest.mark.parametrize("server_probe", [False, True])
 @pytest.mark.asyncio
 async def test_real_http_propagation(
-    telemetry, streaming, http_instrumentation
+    telemetry, streaming, client_probe, server_probe
 ):
     provider, exporter, _ = telemetry
     calls = []
     app, handler = make_app(calls)
-    if http_instrumentation:
-        asgi = pytest.importorskip("opentelemetry.instrumentation.asgi")
-        http_probe = pytest.importorskip("opentelemetry.instrumentation.httpx")
-        app = asgi.OpenTelemetryMiddleware(app, tracer_provider=provider)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        headers={"a2a-version": "1.0"} if MODERN else {},
+    observed = []
+    async with transport_client(
+        app, provider, client_probe, server_probe, observed
     ) as http:
-        if http_instrumentation:
-            http_probe.HTTPXClientInstrumentor.instrument_client(
-                http, tracer_provider=provider
-            )
         client = make_client(http)
         with provider.get_tracer("test").start_as_current_span(
             "caller"
@@ -171,8 +213,6 @@ async def test_real_http_propagation(
                 result = await client.send_message(request)
                 assert result is not None
             assert trace.get_current_span() is parent
-        if http_instrumentation:
-            http_probe.HTTPXClientInstrumentor.uninstrument_client(http)
     close = getattr(handler, "aclose", None)
     if close:
         await close()
@@ -192,21 +232,21 @@ async def test_real_http_propagation(
     ]
     assert len(client_spans) == len(server_spans) == 1
     client_span, server_span = client_spans[0], server_spans[0]
-    assert (
-        client_span.context.trace_id
-        == server_span.context.trace_id
-        == parent.get_span_context().trace_id
-    )
-    assert server_span.parent.is_remote
+    assert client_span.context.trace_id == parent.get_span_context().trace_id
+    assert (b"traceparent" in observed[0]) is client_probe
     transport_spans = [
         s
         for s in spans
         if s.kind == SpanKind.CLIENT and "a2a.method.name" not in s.attributes
     ]
-    immediate_parent = (
-        transport_spans[0] if http_instrumentation else client_span
-    )
-    assert server_span.parent.span_id == immediate_parent.context.span_id
+    assert len(transport_spans) == int(client_probe)
+    if client_probe and server_probe:
+        assert client_span.context.trace_id == server_span.context.trace_id
+        assert server_span.parent.is_remote
+        assert server_span.parent.span_id == transport_spans[0].context.span_id
+    else:
+        assert client_span.context.trace_id != server_span.context.trace_id
+        assert server_span.parent is None
     assert calls[0][1].span_id == server_span.context.span_id
     assert len(calls) == 1
     assert not any(
@@ -226,10 +266,7 @@ async def test_concurrent_sessions_and_two_turns(telemetry):
     provider, exporter, _ = telemetry
     calls = []
     app, handler = make_app(calls)
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        headers={"a2a-version": "1.0"} if MODERN else {},
-    ) as http:
+    async with transport_client(app, provider) as http:
         client = make_client(http)
 
         async def worker(index):
@@ -273,9 +310,7 @@ async def test_real_rest_transport(telemetry, streaming):
     calls = []
     _, handler = make_app(calls)
     app = Starlette(routes=create_rest_routes(handler))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), headers={"a2a-version": "1.0"}
-    ) as http:
+    async with transport_client(app, provider) as http:
         client = RestTransport(http, make_card(), "http://agent.test")
         with provider.get_tracer("test").start_as_current_span(
             "parent"
@@ -315,10 +350,7 @@ async def test_real_task_error(telemetry, operation):
         if MODERN
         else request_type(id="rpc", params={"id": "missing"})
     )
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        headers={"a2a-version": "1.0"} if MODERN else {},
-    ) as http:
+    async with transport_client(app, provider) as http:
         client = make_client(http)
         if MODERN:
             with pytest.raises(Exception):

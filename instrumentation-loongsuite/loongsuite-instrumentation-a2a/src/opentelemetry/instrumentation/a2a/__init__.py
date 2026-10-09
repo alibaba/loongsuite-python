@@ -19,18 +19,35 @@ Agent, model and tool spans belong to their framework instrumentations.
 
 import importlib
 import os
+from contextlib import nullcontext
 from typing import Collection
 
-from wrapt import FunctionWrapper, wrap_function_wrapper
+from wrapt import FunctionWrapper
 
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from opentelemetry.instrumentation.utils import unwrap
-from opentelemetry.trace import NoOpTracerProvider, get_tracer
+from opentelemetry.trace import (
+    INVALID_SPAN,
+    NoOpTracer,
+    NoOpTracerProvider,
+    get_tracer,
+)
 
 from ._semconv import CLIENT_METHODS, SERVER_METHODS, STREAM_METHODS
-from ._wrappers import request, send, wrap
+from ._wrappers import wrap
 from .package import _instruments
 from .version import __version__
+
+
+class _SDKNoOpTracer(NoOpTracer):
+    def start_as_current_span(self, *args, **kwargs):
+        # SDK decorators must neither replace the transport's current span nor
+        # record their internal status/errors onto it while tracing is disabled.
+        return nullcontext(INVALID_SPAN)
+
+
+class _SDKNoOpTracerProvider(NoOpTracerProvider):
+    def get_tracer(self, *args, **kwargs):
+        return _SDKNoOpTracer()
 
 
 class A2AInstrumentor(BaseInstrumentor):
@@ -51,7 +68,7 @@ class A2AInstrumentor(BaseInstrumentor):
             != "true"
         ):
             self._native = (telemetry, telemetry.trace)
-            telemetry.trace = NoOpTracerProvider()
+            telemetry.trace = _SDKNoOpTracerProvider()
 
         from a2a.server.request_handlers import RequestHandler
 
@@ -74,19 +91,6 @@ class A2AInstrumentor(BaseInstrumentor):
                 cls = getattr(module, class_name, None)
                 if cls is not None:
                     self._patch_class(cls, CLIENT_METHODS, False)
-        # Before ServerCallContext existed, the HTTP app was the only header boundary.
-        self._legacy_endpoint = None
-        try:
-            module = importlib.import_module("a2a.server.apps.starlette_app")
-        except ImportError:
-            pass
-        else:
-            cls = module.A2AStarletteApplication
-            if hasattr(cls, "_handle_requests"):
-                wrap_function_wrapper(
-                    module, "A2AStarletteApplication._handle_requests", request
-                )
-                self._legacy_endpoint = cls
         try:
             rpc = importlib.import_module(
                 "a2a.server.request_handlers.jsonrpc_handler"
@@ -95,7 +99,6 @@ class A2AInstrumentor(BaseInstrumentor):
             pass
         else:
             self._patch_class(rpc.JSONRPCHandler, SERVER_METHODS, True)
-        wrap_function_wrapper("httpx", "AsyncClient.send", send)
 
     def _patch_class(self, cls, methods, server):
         for name, method in methods.items():
@@ -132,9 +135,6 @@ class A2AInstrumentor(BaseInstrumentor):
         self._subclass_hook = (base, own, replacement)
 
     def _uninstrument(self, **kwargs):
-        unwrap("httpx.AsyncClient", "send")
-        if self._legacy_endpoint is not None:
-            unwrap(self._legacy_endpoint, "_handle_requests")
         for cls, name, original, wrapper in reversed(self._patched):
             if cls.__dict__.get(name) is wrapper:
                 setattr(cls, name, original)

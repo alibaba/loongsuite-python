@@ -16,7 +16,7 @@
 
 from dataclasses import dataclass
 
-from opentelemetry import context, propagate, trace
+from opentelemetry import context, trace
 from opentelemetry.instrumentation.utils import is_instrumentation_enabled
 from opentelemetry.trace import SpanKind, StatusCode
 from opentelemetry.util.genai import hook_advice
@@ -25,7 +25,6 @@ from ._semconv import attributes, card_attributes, field, payload, terminal
 
 _CLIENT = context.create_key("a2a-client")
 _SERVER = context.create_key("a2a-server")
-_HEADERS = context.create_key("a2a-headers")
 
 
 @dataclass
@@ -48,6 +47,8 @@ def start(tracer, method, instance, args, kwargs, server):
         **card_attributes(instance),
         **attributes(request, request=True),
     }
+    # Transport instrumentation owns remote propagation. Preserve its current
+    # context, including a remote parent without a recording transport span.
     parent = context.get_current()
     current = trace.get_current_span()
     # Only borrow a detectable transport SERVER span, never an arbitrary ancestor.
@@ -69,12 +70,7 @@ def start(tracer, method, instance, args, kwargs, server):
         call_context = kwargs.get("context") or (
             args[1] if len(args) > 1 else None
         )
-        headers = field(call_context, "state", {}).get(
-            "headers", context.get_value(_HEADERS) or {}
-        )
-        if not borrowed:
-            # Incoming requests are remote boundaries, not children of incidental local context.
-            parent = propagate.extract(headers, context=context.Context())
+        headers = field(call_context, "state", {}).get("headers", {})
         tenant = field(call_context, "tenant")
         if tenant:
             attrs["a2a.tenant"] = tenant
@@ -153,17 +149,3 @@ def finish(state):
 @hook_advice("a2a", "terminal")
 def is_terminal(value):
     return terminal(value)
-
-
-@hook_advice("a2a", "inject")
-def inject(request):
-    if context.get_value(_CLIENT) and is_instrumentation_enabled():
-        # The HTTPX transport probe, when installed, injects its own child context later.
-        carrier = {}
-        propagate.inject(carrier)
-        request.headers.update(carrier)
-
-
-@hook_advice("a2a", "request-headers")
-def request_headers(request):
-    return context.attach(context.set_value(_HEADERS, dict(request.headers)))

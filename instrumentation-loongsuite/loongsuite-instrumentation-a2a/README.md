@@ -14,8 +14,8 @@ A2AInstrumentor().instrument()
 
 Install and enable the instrumentation in both services to get A2A protocol
 attributes on both sides. Each service also needs its A2A SDK and its normal
-framework instrumentation. Configure the global propagator normally; this
-package respects `OTEL_PROPAGATORS` and custom propagators.
+framework instrumentation. Cross-process trace propagation is provided by the
+transport instrumentations, not by this package.
 
 ## Trace shape and propagation
 
@@ -23,20 +23,40 @@ package respects `OTEL_PROPAGATORS` and custom propagators.
 AgentScope agent (framework instrumentation)
   tool: call remote agent
     SendMessage CLIENT (A2A)
-      HTTP CLIENT (optional HTTPX instrumentation)
-        SendMessage SERVER (A2A, or enriched HTTP SERVER)
+      HTTP CLIENT (HTTPX instrumentation injects trace context)
+        SendMessage SERVER (ASGI/FastAPI extracts context; A2A enriches its span)
           LangChain agent/chain (framework instrumentation)
             model / tool calls
 ```
 
-The HTTP client injects the configured propagation headers while sending an
-A2A call. The server extracts them from the SDK request context when there is no
-instrumented HTTP SERVER span. With HTTPX and ASGI/FastAPI instrumentation, the
-HTTP transport remains the immediate network parent. A2A enriches and renames
-the detected HTTP SERVER span and does not create or end a second SERVER span.
+For HTTP, install and enable `opentelemetry-instrumentation-httpx` in the calling
+service and the appropriate server instrumentation, such as
+`opentelemetry-instrumentation-asgi` or `opentelemetry-instrumentation-fastapi`,
+in the receiving service. Those instrumentations handle the configured
+propagator, including `OTEL_PROPAGATORS`, and own injection/extraction of
+`traceparent`, `tracestate` and baggage. For example, with a configured tracer
+provider:
 
-HTTP instrumentation can already connect the services without this package;
-A2A instrumentation adds protocol semantics and a propagation fallback.
+```python
+# Calling service
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+HTTPXClientInstrumentor().instrument()
+
+# Receiving service: wrap the actual ASGI app once, or use its framework probe.
+from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
+
+app = OpenTelemetryMiddleware(app)
+```
+
+A2A uses the current context established by the application or transport probe.
+It enriches and renames a detectable HTTP SERVER span without creating or ending
+a second SERVER span. Otherwise, it creates its own protocol SERVER span under
+the current context. It never wraps HTTPX or HTTP endpoints, reads trace headers
+to establish context, or writes propagation headers. With only A2A instrumentation
+enabled, protocol spans are recorded in each process but remote trace continuity
+is not provided. HTTP instrumentation can already connect services without this
+package; A2A instrumentation adds protocol semantics.
 `contextId` and `taskId` are business identifiers, not replacements for
 `traceparent`.
 
@@ -47,9 +67,9 @@ subclasses. Methods are recorded when implemented by the installed SDK:
 `ListTasks`, extended Agent Card and push-notification configuration operations.
 Direct `AgentExecutor.execute()` calls are not protocol calls and emit no A2A span.
 
-The fallback depends on the SDK exposing incoming headers. Custom transports
-and gRPC propagation are not implemented by this package; use their transport
-instrumentations. A detectable current gRPC SERVER span is enriched without
+For custom transports and gRPC, enable the corresponding client and server
+transport instrumentations for propagation. This package does not add gRPC
+client protocol hooks. A detectable current gRPC SERVER span is enriched without
 renaming it. Requests rejected before reaching a request handler (for example
 invalid JSON or unsupported protocol versions) remain the responsibility of HTTP
 instrumentation.
@@ -101,8 +121,8 @@ agent may use GenAI util explicitly at its real agent invocation boundary.
 
 SDK internal function/queue spans are suppressed while this instrumentor is
 enabled, even if the SDK was imported earlier. This only replaces the SDK's
-module-local tracer and is restored by `uninstrument()`; global tracing and the
-environment are unchanged. To retain native SDK spans for debugging, explicitly
+module-local tracer and is restored by `uninstrument()`; the current transport
+span, global tracing and the environment are unchanged. To retain native SDK spans for debugging, explicitly
 set `OTEL_INSTRUMENTATION_A2A_SDK_ENABLED=true` **before importing the SDK**.
 That debug mode intentionally retains SDK noise and is not a clean protocol tree.
 
@@ -114,7 +134,9 @@ pytest instrumentation-loongsuite/loongsuite-instrumentation-a2a/tests
 
 The suite uses real SDK clients, HTTP dispatchers, executors and streaming
 serialization, plus fault injection. It uses a local ASGI transport and requires
-no model credentials or network access. HTTPX/ASGI test instrumentation is
+no model credentials or network access. The ASGI test boundary isolates caller
+context to model separate processes; only enabling both transport probes joins
+the traces. HTTPX/ASGI test instrumentation is
 included in `test-requirements.txt`. SDK 0.2.1 requires Python 3.13; SDK 0.3.0 can
 exercise the package's Python 3.10 lane. Current SDK 1.x has its own Python version
 requirements.
