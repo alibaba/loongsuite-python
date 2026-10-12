@@ -21,7 +21,7 @@ Requires both ``loongsuite-instrumentation-langgraph`` (patches
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence, TypedDict
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -102,6 +102,31 @@ def _build_react_agent(responses: list[AIMessage], **extra: Any):
     return create_react_agent(llm, [_dummy_tool], **extra)
 
 
+def _build_opt_in_harness():
+    """Build a plain StateGraph marked by a framework adapter."""
+    from langgraph.graph import StateGraph  # noqa: PLC0415
+
+    class _State(TypedDict):
+        result: str
+
+    llm = _FakeChatModelWithTools(
+        responses=[AIMessage(content="Harness answer.")]
+    )
+
+    def decision_node(state: _State) -> _State:
+        message = llm.invoke("hello")
+        return {**state, "result": str(message.content)}
+
+    builder = StateGraph(_State)
+    builder.add_node("decision", decision_node)
+    builder.set_entry_point("decision")
+    builder.set_finish_point("decision")
+    graph = builder.compile(name="example-harness")
+    graph._loongsuite_agent_framework = "example-harness"
+    graph._loongsuite_agent_step_node = "decision"
+    return graph
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -165,6 +190,40 @@ class TestLangGraphReActSingleRound:
         # Step is child of Agent
         assert step.parent is not None
         assert step.parent.span_id == agent.context.span_id
+
+
+def test_opt_in_state_graph_uses_declared_decision_node(
+    instrument, span_exporter
+):
+    """A LangGraph-based harness can opt in without changing prebuilt rules."""
+    graph = _build_opt_in_harness()
+
+    result = graph.invoke({"result": ""})
+
+    assert result["result"] == "Harness answer."
+    spans = span_exporter.get_finished_spans()
+    agent_spans = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.span.kind") == "AGENT"
+    ]
+    step_spans = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.span.kind") == "STEP"
+    ]
+    llm_spans = [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.span.kind") == "LLM"
+    ]
+
+    assert len(agent_spans) == 1
+    assert agent_spans[0].attributes["gen_ai.framework"] == "example-harness"
+    assert len(step_spans) == 1
+    assert step_spans[0].parent.span_id == agent_spans[0].context.span_id
+    assert len(llm_spans) == 1
+    assert llm_spans[0].context.trace_id == agent_spans[0].context.trace_id
 
 
 class TestLangGraphReActMultiRound:
