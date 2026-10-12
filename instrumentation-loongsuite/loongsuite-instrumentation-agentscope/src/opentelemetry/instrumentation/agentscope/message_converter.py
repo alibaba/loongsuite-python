@@ -674,7 +674,7 @@ def get_message_converter(
     elif provide_name == "ollama":  # AgentScopeGenAiProviderName.OLLAMA.value
         parser = OllamaMessageParser()
     elif (
-        provide_name == "moonshot"
+        provide_name == "moonshot_ai"
     ):  # AgentScopeGenAiProviderName.MOONSHOT.value
         # Moonshot uses OpenAI-compatible API format
         parser = OpenAIMessageParser()

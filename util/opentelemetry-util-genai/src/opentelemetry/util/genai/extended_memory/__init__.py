@@ -22,11 +22,9 @@ from __future__ import annotations
 from opentelemetry.util.genai.extended_memory.memory_utils import (
     MemoryInvocation,
     _apply_memory_finish_attributes,
-    _maybe_emit_memory_event,
 )
 
 __all__ = [
     "MemoryInvocation",
     "_apply_memory_finish_attributes",
-    "_maybe_emit_memory_event",
 ]

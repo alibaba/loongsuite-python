@@ -32,6 +32,23 @@ from .common import _is_streaming_response
 logger = logging.getLogger(__name__)
 
 
+def _generation_chunk_has_token(chunk) -> bool:
+    output = getattr(chunk, "output", None)
+    if output is None:
+        return False
+    if getattr(output, "text", None) or getattr(output, "content", None):
+        return True
+    for choice in getattr(output, "choices", None) or []:
+        message = getattr(choice, "message", None)
+        if message is None:
+            continue
+        if getattr(message, "content", None):
+            return True
+        if getattr(message, "tool_calls", None):
+            return True
+    return False
+
+
 def wrap_generation_call(wrapped, instance, args, kwargs, handler=None):
     """Wrapper for Generation.call (sync).
 
@@ -170,14 +187,17 @@ def _wrap_sync_generator(
     """
     last_response = None
     accumulated_text = ""
-    first_token_received = False
-
     try:
         for chunk in generator:
-            # Record time when first token is received
-            if not first_token_received:
-                first_token_received = True
-                invocation.monotonic_first_token_s = timeit.default_timer()
+            now = timeit.default_timer()
+            invocation.stream = True
+            if invocation.monotonic_first_chunk_s is None:
+                invocation.monotonic_first_chunk_s = now
+            if (
+                invocation.monotonic_first_token_s is None
+                and _generation_chunk_has_token(chunk)
+            ):
+                invocation.monotonic_first_token_s = now
 
             last_response = chunk
 
@@ -231,14 +251,17 @@ async def _wrap_async_generator(
     """
     last_response = None
     accumulated_text = ""
-    first_token_received = False
-
     try:
         async for chunk in generator:
-            # Record time when first token is received
-            if not first_token_received:
-                first_token_received = True
-                invocation.monotonic_first_token_s = timeit.default_timer()
+            now = timeit.default_timer()
+            invocation.stream = True
+            if invocation.monotonic_first_chunk_s is None:
+                invocation.monotonic_first_chunk_s = now
+            if (
+                invocation.monotonic_first_token_s is None
+                and _generation_chunk_has_token(chunk)
+            ):
+                invocation.monotonic_first_token_s = now
 
             last_response = chunk
 
