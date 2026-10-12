@@ -467,7 +467,7 @@ CI 工作流会调用同一个脚本完成构建和分支管理，然后在独�
 当新插件合入 `main` 后，可以先创建正式 PyPI 项目名，避免正式 release 时一次性首次创建过多项目触发 PyPI 限流。
 
 1. 确认新插件目录在 `instrumentation-loongsuite/` 下，且没有被 `loongsuite_pypi_manifest.py` 或 `loongsuite-build-config.json` 跳过。
-2. 确认 GitHub Actions 中的 `PYPI_API_TOKEN` 有权限上传并创建新的 PyPI project。API Token 发布模式不需要为每个新项目提前配置 Pending Publisher；只有改用 OIDC Trusted Publishing 时才需要在 PyPI 为新项目添加 Pending Publisher。
+2. 确认 GitHub Actions 中的 `PYPI_API_TOKEN` 有权限上传并创建新的 PyPI project。API Token 发布模式不需要为每个新项目提前配置 Pending Publisher；正式发布使用 OIDC，新项目在 bootstrap 完成后、首次正式发布前仍需配置 Trusted Publisher。
 3. 进入 GitHub 仓库 → **Actions** → **LoongSuite Release** → **Run workflow**，并选择 `main` 分支：
    - `mode`: `dev-bootstrap-new-projects`
    - `loongsuite_version`: 下一个正式版本号，例如 `0.6.0`
@@ -506,7 +506,7 @@ git push origin v0.1.0
 | 收集/归档 changelog | 脚本内调用 Python 脚本 | 同上 |
 | Commit + Push | 脚本内 `git commit` + `git push` | 同上 |
 | GitHub Release | 脚本内 `gh release create`（可 skip） | 独立 job |
-| PyPI publish | 不执行（本地不做） | 独立 job 通过 API Token（未来可迁移到 OIDC） |
+| PyPI publish | 不执行（本地不做） | 正式发布使用 OIDC；dev-bootstrap 使用 API Token |
 | Post-release PR | 脚本内创建 PR（需 `gh` CLI） | 独立 job，自动创建 |
 | 新 PyPI 项目 dev-bootstrap | 不执行 | `mode=dev-bootstrap-new-projects` 独立执行，仅构建和上传缺失项目名的 dev wheel |
 
@@ -514,15 +514,17 @@ git push origin v0.1.0
 
 **发布到生产 PyPI：**
 
-1. **API Token（当前 workflow 使用）**：在 GitHub 仓库 Settings → Secrets → Actions 中添加：
-   - `PYPI_API_TOKEN`：从 [pypi.org/manage/account/token/](https://pypi.org/manage/account/token/) 创建。使用 API Token 发布时，首次上传新 distribution 会创建对应 PyPI project，不需要 Pending Publisher。
-
-2. **OIDC Trusted Publishing（可选替代方案）**：
-   - PyPI 项目设置 → Publishing → Add a new pending publisher
+1. **正式发布使用 OIDC Trusted Publishing**：
+   - 在 PyPI 项目设置 → Publishing 中配置 Trusted Publisher。
    - Owner: `alibaba`，Repository: `loongsuite-python`
    - Workflow: `loongsuite-release.yml`，Environment: `pypi`
-   - 在 GitHub 仓库中创建 Environment `pypi`（Settings → Environments）
-   - 如果用 OIDC 创建新 project，需要为每个新 project 配置 Pending Publisher。
+   - 在 GitHub 仓库中创建 Environment `pypi`（Settings → Environments）。
+   - 正式 `publish-pypi` job 保留 `id-token: write`，不使用 `PYPI_API_TOKEN`。
+   - 新项目首次通过 OIDC 发布时，需要先配置 Pending Publisher。
+
+2. **dev-bootstrap 使用 API Token**：
+   - 仅 `publish-dev-bootstrap-pypi` 使用 GitHub Secret `PYPI_API_TOKEN`。
+   - Token 必须有创建新 PyPI project 的权限；bootstrap 后仍需为新项目配置上述 Trusted Publisher，供后续正式发布使用。
 
 **发布到 Test PyPI（测试用）：**
 
@@ -533,7 +535,7 @@ git push origin v0.1.0
 **重要说明：**
 
 - `dist-pypi/` 中的 `loongsuite_otel_util_genai-*.whl`、`loongsuite_distro-*.whl` 以及 `loongsuite_instrumentation_*.whl`（`instrumentation-loongsuite` 中当前参与 PyPI 构建的插件；`agno` / `mcp` / `dify` 暂排除）会上传到 PyPI；若通过 OIDC 发布，每个新插件首次发布前需在 PyPI 上完成 Pending Publisher 配置
-- 新插件可以先通过 `mode=dev-bootstrap-new-projects` 发布唯一 dev 版本来创建正式 PyPI 项目名；正式 release 后续只上传正式版本
+- 新插件可以先通过 `mode=dev-bootstrap-new-projects` 发布唯一 dev 版本来创建正式 PyPI 项目名；创建后配置 Trusted Publisher，正式 release 后续通过 OIDC 上传正式版本
 - `loongsuite-python-*.tar.gz` 仅用于 GitHub Release，**禁止**上传到 PyPI
 
 ### 5.4 Post-Release PR
@@ -696,8 +698,8 @@ pip install loongsuite-otel-util-genai
 
 **问题**: PyPI 发布 403 Forbidden
 ```bash
-# 解决: 检查 PYPI_API_TOKEN 是否有效、未过期，并且有目标 project 的上传权限
-# 如果未来改用 OIDC Trusted Publishing，再检查对应的 publisher 配置
+# 正式发布: 检查 PyPI Trusted Publisher 的仓库、workflow 和 environment 配置
+# dev-bootstrap: 检查 PYPI_API_TOKEN 是否有效，并且有创建新 project 的权限
 ```
 
 **问题**: 版本号已存在

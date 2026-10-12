@@ -20,11 +20,10 @@
 # - push tags: Automatic trigger on v* tags
 #
 # PyPI / Test PyPI configuration:
-# - Production PyPI: Set PYPI_API_TOKEN secret. This workflow currently uses
-#   API-token publishing, not PyPI OIDC Trusted Publishing.
-# - If switching to OIDC Trusted Publishing later, add id-token permissions and
-#   configure Pending Publishers for new PyPI project names with
-#   workflow=loongsuite-release.yml and environment=pypi.
+# - Production PyPI: Use OIDC Trusted Publishing with id-token: write and
+#   workflow=loongsuite-release.yml, environment=pypi.
+# - Dev bootstrap only: Set PYPI_API_TOKEN with permission to create new projects.
+#   Configure their Trusted Publishers before the first formal release.
 # - Test PyPI: Set TEST_PYPI_TOKEN secret (pypi-xxx from https://test.pypi.org/manage/account/token/)
 # - Use publish_target: testpypi to publish to Test PyPI instead of production
 #
@@ -33,8 +32,7 @@
 #
 name: LoongSuite Release
 
-# Keep this workflow filename stable; any future PyPI OIDC Trusted Publishing
-# setup would reference it from Pending Publisher entries.
+# Keep this workflow filename stable; PyPI Trusted Publisher entries reference it.
 run-name: "LoongSuite ${{ github.event.inputs.mode || 'release' }}"
 
 on:
@@ -253,6 +251,8 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/project/loongsuite-distro/
+    permissions:
+      id-token: write
     steps:
       - name: Download PyPI artifacts
         uses: actions/download-artifact@v4
@@ -263,8 +263,6 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          username: __token__
-          password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
 
   # Publish dev wheels that create newly added PyPI project names before a formal release.

@@ -68,6 +68,8 @@ def project_exists_on_pypi(distribution_name: str, *, timeout: float) -> bool:
 
         time.sleep(attempt)
 
+    raise RuntimeError("PyPI lookup retry loop exhausted unexpectedly")
+
 
 def write_github_outputs(output_path: Path, values: dict[str, str]) -> None:
     with output_path.open("a", encoding="utf-8") as f:
