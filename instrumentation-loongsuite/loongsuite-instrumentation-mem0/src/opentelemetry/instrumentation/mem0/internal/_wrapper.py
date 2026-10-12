@@ -427,6 +427,8 @@ class MemoryOperationWrapper:
                         break
             if invocation.record_count is None and invocation.record_id:
                 invocation.record_count = 1
+            if invocation.record_count is None and records:
+                invocation.record_count = len(records)
         except Exception as e:
             logger.debug(f"Failed to extract invocation attributes: {e}")
 

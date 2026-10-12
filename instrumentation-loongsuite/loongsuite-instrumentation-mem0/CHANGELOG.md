@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+- Fall back to normalized memory records when the response does not provide a record count.
+
 - Map Mem0 methods to upstream Memory operations and emit store, record, count,
   query, and records attributes while preserving the LoongSuite `MEMORY` span
   classification.

@@ -392,3 +392,39 @@ def test_inner_hooks_vector_graph_rerank_and_exception_paths(monkeypatch):
     # Sanity: at least one before/after pair shares context object (vector success)
     assert calls[0][0] == "before" and calls[1][0] == "after"
     assert calls[0][3] is calls[1][3]
+
+
+@pytest.mark.parametrize(
+    ("result", "kwargs", "expected_count"),
+    [
+        ("memory-1", {}, 1),
+        (None, {"messages": [{"content": "a"}, {"content": "b"}]}, 2),
+        (None, {"text": "likes apples"}, 1),
+        ({"results": []}, {"messages": ["ignored"]}, 0),
+        ({"results": [{"id": "a"}, {"id": "b"}]}, {}, 2),
+        (None, {}, None),
+    ],
+)
+def test_normalized_memory_records_supply_missing_count(
+    result, kwargs, expected_count
+):
+    handler = _DummyTelemetryHandler()
+    wrapper = MemoryOperationWrapper(handler)
+    calls = []
+
+    def operation(**arguments):
+        calls.append(arguments)
+        return result
+
+    returned = wrapper._execute_with_handler(
+        operation,
+        instance=object(),
+        args=(),
+        kwargs=kwargs,
+        operation_name="add",
+        extract_attributes_func=None,
+    )
+
+    assert returned is result
+    assert calls == [kwargs]
+    assert handler.started[-1].record_count == expected_count
