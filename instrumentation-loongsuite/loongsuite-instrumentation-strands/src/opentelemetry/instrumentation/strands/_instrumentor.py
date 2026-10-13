@@ -20,6 +20,9 @@ from wrapt import wrap_function_wrapper
 
 from opentelemetry import context as otel_context
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.strands._compat import (
+    BaggageContextCompat,
+)
 from opentelemetry.instrumentation.strands._hooks import LoongsuiteHook
 from opentelemetry.instrumentation.strands._native_telemetry import (
     NativeTelemetrySuppression,
@@ -48,6 +51,17 @@ class StrandsInstrumentor(BaseInstrumentor):
 
         self._hook = LoongsuiteHook(handler)
         self._native_telemetry = NativeTelemetrySuppression()
+        self._baggage_context_compat = BaggageContextCompat()
+
+        try:
+            self._baggage_context_compat.install()
+        except Exception:
+            self._baggage_context_compat.restore()
+            logger.warning(
+                "Failed to tolerate the Strands baggage context detach; "
+                "LoongSuite instrumentation will continue",
+                exc_info=True,
+            )
 
         try:
             self._native_telemetry.install()
@@ -160,6 +174,9 @@ class StrandsInstrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs):
         self._unwrap_agent_lifecycle()
+        baggage_context_compat = getattr(self, "_baggage_context_compat", None)
+        if baggage_context_compat is not None:
+            baggage_context_compat.restore()
         native_telemetry = getattr(self, "_native_telemetry", None)
         if native_telemetry is not None:
             native_telemetry.restore()

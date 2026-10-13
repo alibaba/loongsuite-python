@@ -14,9 +14,13 @@
 
 import asyncio
 import builtins
+import contextvars
+import importlib
+import inspect
 import json
 import os
 from collections.abc import AsyncGenerator, Sequence
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,6 +29,8 @@ from strands import Agent, tool
 from strands.models import Model
 from strands.telemetry.tracer import get_tracer
 
+from opentelemetry import baggage
+from opentelemetry import context as otel_context
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -41,6 +47,10 @@ from opentelemetry.instrumentation.strands import (
 )
 from opentelemetry.instrumentation.strands import (
     _instrumentor as instrumentor_module,
+)
+from opentelemetry.instrumentation.strands._compat import (
+    BaggageContextCompat,
+    _TolerantContextApi,
 )
 from opentelemetry.instrumentation.strands._hooks import (
     _agent_invocation_usage,
@@ -235,28 +245,31 @@ def content_telemetry(monkeypatch):
     native.tracer = original_native_tracer
 
 
-def _agent() -> Agent:
-    return Agent(
-        model=DeterministicModel(
-            [
-                {
-                    "content": [
-                        {
-                            "toolUse": {
-                                "toolUseId": "tool-1",
-                                "name": "calculator",
-                                "input": {"expression": "2+2"},
-                            }
-                        }
-                    ]
-                },
-                {"content": [{"text": "The answer is 4."}]},
-            ]
-        ),
-        tools=[calculator],
-        name="test_agent",
-        retry_strategy=None,
-    )
+_TOOL_THEN_ANSWER: list[dict[str, Any]] = [
+    {
+        "content": [
+            {
+                "toolUse": {
+                    "toolUseId": "tool-1",
+                    "name": "calculator",
+                    "input": {"expression": "2+2"},
+                }
+            }
+        ]
+    },
+    {"content": [{"text": "The answer is 4."}]},
+]
+
+
+def _agent(**kwargs: Any) -> Agent:
+    options: dict[str, Any] = {
+        "model": DeterministicModel(_TOOL_THEN_ANSWER),
+        "tools": [calculator],
+        "name": "test_agent",
+        "retry_strategy": None,
+    }
+    options.update(kwargs)
+    return Agent(**options)
 
 
 @pytest.mark.asyncio
@@ -953,6 +966,116 @@ def test_native_tracer_is_restored_on_uninstrument(telemetry):
     replacement = native.tracer
     instrumentor.uninstrument()
     assert native.tracer is not replacement
+
+
+def _stub_agent_module() -> Any:
+    def _init_with_baggage(self, *, baggage_attributes=None) -> None:
+        return None
+
+    return SimpleNamespace(
+        context_api=otel_context,
+        Agent=type("Agent", (), {"__init__": _init_with_baggage}),
+    )
+
+
+def _supports_baggage_attributes() -> bool:
+    return "baggage_attributes" in inspect.signature(Agent.__init__).parameters
+
+
+def test_baggage_context_compat_tolerates_cross_context_detach():
+    module = _stub_agent_module()
+    compat = BaggageContextCompat()
+    compat.install(module)
+    previous = otel_context.get_current()
+    try:
+        assert module.context_api is not otel_context
+        token = module.context_api.attach(
+            otel_context.set_value("strands.compat.probe", "value")
+        )
+        assert otel_context.get_value("strands.compat.probe") == "value"
+        contextvars.copy_context().run(module.context_api.detach, token)
+        assert otel_context.get_value("strands.compat.probe") == "value"
+    finally:
+        # the skipped detach leaves its value attached; restore the context
+        otel_context.attach(previous)
+        compat.restore()
+    assert module.context_api is otel_context
+
+
+def test_tolerant_context_api_only_tolerates_cross_context_detach():
+    class _RaisingDelegate:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(otel_context, name)
+
+        @staticmethod
+        def detach(token: Any) -> None:
+            raise ValueError("unrelated detach failure")
+
+    proxy = _TolerantContextApi(_RaisingDelegate())
+    assert proxy.get_value("strands.compat.delegate.probe") is None
+    with pytest.raises(ValueError, match="unrelated detach failure"):
+        proxy.detach(object())
+
+
+def test_baggage_context_compat_skips_frameworks_without_baggage():
+    def _init_without_baggage(self) -> None:
+        return None
+
+    with_context_api = SimpleNamespace(
+        context_api=otel_context,
+        Agent=type("Agent", (), {"__init__": _init_without_baggage}),
+    )
+    without_context_api = SimpleNamespace(
+        Agent=type("Agent", (), {"__init__": _init_without_baggage})
+    )
+
+    compat = BaggageContextCompat()
+    try:
+        compat.install(with_context_api)
+        assert with_context_api.context_api is otel_context
+        compat.install(without_context_api)
+    finally:
+        compat.restore()
+
+
+def test_instrumentor_patches_and_restores_framework_context_api(telemetry):
+    instrumentor, _, _ = telemetry
+    module = importlib.import_module("strands.agent.agent")
+    if getattr(module, "context_api", None) is None:
+        pytest.skip("installed strands-agents has no context_api binding")
+    assert module.context_api is not otel_context
+    instrumentor.uninstrument()
+    assert module.context_api is otel_context
+
+
+@pytest.mark.asyncio
+async def test_invocation_baggage_attach_is_preserved(
+    telemetry, caplog, monkeypatch
+):
+    if not _supports_baggage_attributes():
+        pytest.skip("installed strands-agents has no baggage_attributes")
+    module = importlib.import_module("strands.agent.agent")
+    attached: list[dict[str, str]] = []
+    proxy = module.context_api
+    original_attach = proxy.attach
+
+    def spy_attach(context: Any) -> Any:
+        attached.append(dict(baggage.get_all(context)))
+        return original_attach(context)
+
+    monkeypatch.setattr(proxy, "attach", spy_attach)
+    agent = _agent(baggage_attributes={"tenant": "acme"})
+
+    async for _ in agent.stream_async("Calculate 2+2"):
+        pass
+
+    assert attached == [{"tenant": "acme"}]
+    assert baggage.get_all() == {}
+    assert not any(
+        "different Context" in record.getMessage()
+        or "Failed to detach context" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_instrumentation_dependencies():

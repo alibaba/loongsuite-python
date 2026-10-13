@@ -62,3 +62,12 @@ invoke_agent <agent_name>       (INTERNAL, gen_ai.span.kind=AGENT)
   the reporter error while its parent spans retain the original business error.
 - Strands-native `strands.*` metrics remain available, while the LoongSuite OSS
   product contract derives its unified GenAI metrics from the emitted spans.
+- Strands 1.60.0 and later attach an OpenTelemetry baggage context for each
+  invocation inside `Agent.stream_async` and detach it when the stream is
+  closed. That baggage only exists in the context that started the stream, so
+  closing a stream from another context (for example
+  `asyncio.create_task(stream.aclose())`) cannot restore it. The
+  instrumentation tolerates that framework-owned detach and keeps its own
+  context tokens strictly paired, so closing a stream does not surface a
+  spurious `Failed to detach context` error.
+
