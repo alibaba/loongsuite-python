@@ -14,6 +14,7 @@
 
 import os
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from mcp import JSONRPCRequest
@@ -25,6 +26,7 @@ from wrapt import FunctionWrapper
 from opentelemetry import context, propagate
 from opentelemetry import trace as trace_api
 from opentelemetry.instrumentation.mcp import MCPInstrumentor, ServerMetrics
+from opentelemetry.instrumentation.mcp.session_handler import _SessionContext
 from opentelemetry.metrics import get_meter
 from opentelemetry.trace import SpanKind
 
@@ -36,6 +38,25 @@ FASTMCP_SERVER_SCRIPT = os.path.join(
 @asynccontextmanager
 async def mock_client(params):
     yield params
+
+
+def test_session_context_detach_removes_attached_context():
+    target = SimpleNamespace()
+    session_context = _SessionContext({})
+    context = (target,)
+    session_context._safe_attach(context)
+    assert hasattr(target, "_session_context")
+
+    session_context._safe_detach(context)
+
+    assert not hasattr(target, "_session_context")
+
+
+def test_session_context_detach_without_attachment_does_not_raise():
+    target = SimpleNamespace()
+    session_context = _SessionContext({})
+    session_context._safe_detach((target,))
+    assert not hasattr(target, "_session_context")
 
 
 @pytest.mark.asyncio

@@ -82,7 +82,7 @@ class _SessionContext:
 
     def _safe_detach(self, context: Any):
         try:
-            if context is None or hasattr(context[0], "_session_context"):
+            if context is None or not hasattr(context[0], "_session_context"):
                 return
             delattr(context[0], "_session_context")
         except Exception:
