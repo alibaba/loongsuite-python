@@ -143,8 +143,12 @@ def test_dream_hook_only_enabled_for_v2(
     try:
         inst._instrument()
         # Entry instrumentation must remain enabled on every supported runtime.
-        wrap.assert_called_once()
-        assert wrap.call_args.args[:2] == (module_name, method_name)
+        assert wrap.call_count == 2
+        assert wrap.call_args_list[0].args[:2] == (module_name, method_name)
+        assert wrap.call_args_list[1].args[:2] == (
+            "agentscope.tool._coding._shell",
+            "execute_shell_command",
+        )
         if enables_dream:
             dream.assert_called_once_with()
             assert inst._dream_class is dream.return_value
@@ -155,6 +159,7 @@ def test_dream_hook_only_enabled_for_v2(
         # No real wrappers were installed; restore the singleton's test state.
         inst._handler = None
         inst._dream_class = None
+        inst._shell_command_wrapped = False
 
 
 def test_uninstrument_handles_qwenpaw_runner(monkeypatch):

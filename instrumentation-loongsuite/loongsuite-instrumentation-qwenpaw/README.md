@@ -179,3 +179,12 @@ When AgentScope spans run under a QwenPaw Entry span, the QwenPaw
 `gen_ai.session.id` / `gen_ai.user.id` values are propagated through
 OpenTelemetry baggage so downstream AgentScope LLM, agent, embedding, and tool
 spans carry the same request identity.
+
+## Child agent trace propagation
+
+When an AgentScope shell tool launches `copaw agents chat` or
+`qwenpaw agents chat`, this instrumentation injects the current OpenTelemetry
+context into the subprocess environment. The child continues the parent trace
+without creating a second application Entry span. Set
+`COPAW_OTEL_INJECT_SHELL_TRACE=1` only when every shell child should receive
+that behavior.
