@@ -564,6 +564,7 @@ def _create_llm_invocation(
         request_model=request_model,
         provider=provider_name,
         input_messages=input_messages,
+        stream=True if stream else None,
     )
 
     # Set generation parameters

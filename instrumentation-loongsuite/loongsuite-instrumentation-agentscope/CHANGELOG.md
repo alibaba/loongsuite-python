@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Align streaming timing, reasoning-token usage, provider names, and agent
+  version attributes with the current upstream GenAI conventions.
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Fixed

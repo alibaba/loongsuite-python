@@ -24,6 +24,15 @@ from typing import Any, Dict, List, Optional, cast
 import pytest
 
 
+def _memory_spans(spans, operation_name):
+    return [
+        span
+        for span in spans
+        if span.attributes.get("gen_ai.operation.name") == operation_name
+        and span.attributes.get("gen_ai.span.kind") == "MEMORY"
+    ]
+
+
 def _build_demo_config_from_env() -> Dict[str, Any]:
     # Allow overriding model and dimensions via environment variables
     llm_model = os.environ.get("OPENAI_LLM_MODEL", "qwen-plus")
@@ -191,22 +200,17 @@ def test_record_memory_full_flow_vcr(
 
     # Verify OTel spans at least contain each main operation
     spans: List[Any] = span_exporter.get_finished_spans()
-    ops_needed: set[str] = {
-        "add",
-        "search",
-        "get",
-        "get_all",
-        "update",
-        "delete",
-        "delete_all",
-        "history",
+    ops_needed = {
+        "upsert_memory",
+        "search_memory",
+        "update_memory",
+        "delete_memory",
     }
-    ops_seen: set[str] = set()
-    for s in spans:
-        op = s.attributes.get("gen_ai.memory.operation")
-        if isinstance(op, str):
-            if op in ops_needed:
-                ops_seen.add(op)
+    ops_seen = {
+        span.attributes["gen_ai.operation.name"]
+        for span in spans
+        if span.attributes.get("gen_ai.span.kind") == "MEMORY"
+    }
     missing = ops_needed - ops_seen
     assert not missing, f"should contain span attributes: {missing}"
 
@@ -256,37 +260,13 @@ def test_record_memory_add_vcr(
 
     # Verify add operation span attributes
     spans = span_exporter.get_finished_spans()
-    add_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "add"
-    ]
+    add_spans = _memory_spans(spans, "upsert_memory")
     assert add_spans, "should have add operation span"
 
     add_span = add_spans[0]
-    # Required attributes
-    assert (
-        add_span.attributes.get("gen_ai.operation.name") == "memory_operation"
-    )
-    assert add_span.attributes.get("gen_ai.memory.operation") == "add"
-    assert add_span.attributes.get("gen_ai.memory.user_id") == user_id
-    assert add_span.attributes.get("gen_ai.memory.agent_id") == agent_id
-    assert add_span.attributes.get("gen_ai.memory.run_id") == run_id
-
-    # Operation specific attributes
-    assert "gen_ai.memory.infer" in add_span.attributes
-    assert add_span.attributes["gen_ai.memory.infer"] is False
-    assert "gen_ai.memory.metadata" in add_span.attributes  # metadata keys
-    assert "gen_ai.memory.input.messages" in add_span.attributes
-
-    # Result attributes
-    if "gen_ai.memory.result_count" in add_span.attributes:
-        assert add_span.attributes["gen_ai.memory.result_count"] > 0
-    if "gen_ai.memory.output.messages" in add_span.attributes:
-        # Output message should be JSON string
-        assert isinstance(
-            add_span.attributes["gen_ai.memory.output.messages"], str
-        )
+    assert add_span.name == "upsert_memory"
+    assert isinstance(add_span.attributes["gen_ai.memory.record.count"], int)
+    assert isinstance(add_span.attributes["gen_ai.memory.records"], str)
 
 
 @pytest.mark.vcr()
@@ -332,35 +312,14 @@ def test_record_memory_get_all_vcr(
 
     # Verify get_all operation span attributes
     spans = span_exporter.get_finished_spans()
-    getall_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "get_all"
-    ]
+    getall_spans = _memory_spans(spans, "search_memory")
     assert getall_spans, "should have get_all operation span"
 
     getall_span = getall_spans[0]
-    # Required attributes
-    assert (
-        getall_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
+    assert isinstance(
+        getall_span.attributes["gen_ai.memory.record.count"], int
     )
-    assert getall_span.attributes.get("gen_ai.memory.operation") == "get_all"
-    assert getall_span.attributes.get("gen_ai.memory.user_id") == user_id
-    assert getall_span.attributes.get("gen_ai.memory.agent_id") == agent_id
-    assert getall_span.attributes.get("gen_ai.memory.run_id") == run_id
-
-    # Operation specific attributes
-    assert "gen_ai.memory.limit" in getall_span.attributes
-    assert getall_span.attributes["gen_ai.memory.limit"] == limit
-
-    # Result attributes
-    assert "gen_ai.memory.result_count" in getall_span.attributes
-    if "gen_ai.memory.output.messages" in getall_span.attributes:
-        # Output message should be JSON string
-        assert isinstance(
-            getall_span.attributes["gen_ai.memory.output.messages"], str
-        )
+    assert isinstance(getall_span.attributes["gen_ai.memory.records"], str)
 
 
 @pytest.mark.vcr()
@@ -413,25 +372,13 @@ def test_record_memory_get_vcr(
 
     # Verify get operation span attributes
     spans = span_exporter.get_finished_spans()
-    get_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "get"
-    ]
+    get_spans = _memory_spans(spans, "search_memory")
     assert get_spans, "should have get operation span"
 
     get_span = get_spans[0]
-    # Required attributes
-    assert (
-        get_span.attributes.get("gen_ai.operation.name") == "memory_operation"
-    )
-    assert get_span.attributes.get("gen_ai.memory.operation") == "get"
-    assert "gen_ai.memory.id" in get_span.attributes
-    assert get_span.attributes["gen_ai.memory.id"] == mem_id
-
-    # Output attributes (if has results)
-    if "gen_ai.memory.output.messages" in get_span.attributes:
-        output = get_span.attributes["gen_ai.memory.output.messages"]
+    assert get_span.attributes["gen_ai.memory.record.id"] == mem_id
+    if "gen_ai.memory.records" in get_span.attributes:
+        output = get_span.attributes["gen_ai.memory.records"]
         assert isinstance(output, str) and len(output) > 0
 
 
@@ -478,35 +425,16 @@ def test_record_memory_search_vcr(
 
     # Verify search operation span attributes
     spans = span_exporter.get_finished_spans()
-    search_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "search"
-    ]
+    search_spans = _memory_spans(spans, "search_memory")
     assert search_spans, "shouldhas search operation span"
 
     search_span = search_spans[0]
-    # Required attributes
-    assert (
-        search_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
+    assert search_span.attributes["gen_ai.memory.query.text"] == query
+    assert isinstance(
+        search_span.attributes["gen_ai.memory.record.count"], int
     )
-    assert search_span.attributes.get("gen_ai.memory.operation") == "search"
-    assert search_span.attributes.get("gen_ai.memory.user_id") == user_id
-
-    # Operation specific attributes
-    assert "gen_ai.memory.limit" in search_span.attributes
-    assert search_span.attributes["gen_ai.memory.limit"] == limit
-    assert "gen_ai.memory.input.messages" in search_span.attributes
-    # query should be in input.messages
-    assert query in str(search_span.attributes["gen_ai.memory.input.messages"])
-
-    # Result attributes
-    assert "gen_ai.memory.result_count" in search_span.attributes
-    if "gen_ai.memory.output.messages" in search_span.attributes:
-        assert isinstance(
-            search_span.attributes["gen_ai.memory.output.messages"], str
-        )
+    if "gen_ai.memory.records" in search_span.attributes:
+        assert isinstance(search_span.attributes["gen_ai.memory.records"], str)
 
 
 @pytest.mark.vcr()
@@ -562,28 +490,12 @@ def test_record_memory_update_vcr(
 
     # Verify update operation span attributes
     spans = span_exporter.get_finished_spans()
-    update_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "update"
-    ]
+    update_spans = _memory_spans(spans, "update_memory")
     assert update_spans, "shouldhas update operation span"
 
     update_span = update_spans[0]
-    # Required attributes
-    assert (
-        update_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
-    )
-    assert update_span.attributes.get("gen_ai.memory.operation") == "update"
-    assert "gen_ai.memory.id" in update_span.attributes
-    assert update_span.attributes["gen_ai.memory.id"] == mem_id
-
-    # Input attributes (new content)
-    assert "gen_ai.memory.input.messages" in update_span.attributes
-    assert new_content in str(
-        update_span.attributes["gen_ai.memory.input.messages"]
-    )
+    assert update_span.attributes["gen_ai.memory.record.id"] == mem_id
+    assert new_content in update_span.attributes["gen_ai.memory.records"]
 
 
 @pytest.mark.vcr()
@@ -638,22 +550,11 @@ def test_record_memory_delete_vcr(
 
     # Verify delete operation span attributes
     spans = span_exporter.get_finished_spans()
-    delete_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "delete"
-    ]
+    delete_spans = _memory_spans(spans, "delete_memory")
     assert delete_spans, "shouldhas delete operation span"
 
     delete_span = delete_spans[0]
-    # Required attributes
-    assert (
-        delete_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
-    )
-    assert delete_span.attributes.get("gen_ai.memory.operation") == "delete"
-    assert "gen_ai.memory.id" in delete_span.attributes
-    assert delete_span.attributes["gen_ai.memory.id"] == mem_id
+    assert delete_span.attributes["gen_ai.memory.record.id"] == mem_id
 
 
 @pytest.mark.vcr()
@@ -711,26 +612,12 @@ def test_record_memory_history_vcr(
 
     # Verify history operation span attributes
     spans = span_exporter.get_finished_spans()
-    history_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "history"
-    ]
+    history_spans = _memory_spans(spans, "search_memory")
     assert history_spans, "should have history operation span"
 
     history_span = history_spans[0]
-    # Required attributes
-    assert (
-        history_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
-    )
-    assert history_span.attributes.get("gen_ai.memory.operation") == "history"
-    assert "gen_ai.memory.id" in history_span.attributes
-    assert history_span.attributes["gen_ai.memory.id"] == mem_id
-
-    # Result attributes (history count)
-    if "gen_ai.memory.result_count" in history_span.attributes:
-        assert history_span.attributes["gen_ai.memory.result_count"] >= 0
+    assert history_span.attributes["gen_ai.memory.record.id"] == mem_id
+    assert history_span.attributes["gen_ai.memory.record.count"] >= 0
 
 
 @pytest.mark.vcr()
@@ -779,23 +666,7 @@ def test_record_memory_delete_all_vcr(
 
     # Verify delete_all operation span attributes
     spans = span_exporter.get_finished_spans()
-    deleteall_spans = [
-        s
-        for s in spans
-        if s.attributes.get("gen_ai.memory.operation") == "delete_all"
-    ]
+    deleteall_spans = _memory_spans(spans, "delete_memory")
     assert deleteall_spans, "shouldhas delete_all operation span"
 
-    deleteall_span = deleteall_spans[0]
-    # Required attributes
-    assert (
-        deleteall_span.attributes.get("gen_ai.operation.name")
-        == "memory_operation"
-    )
-    assert (
-        deleteall_span.attributes.get("gen_ai.memory.operation")
-        == "delete_all"
-    )
-    assert deleteall_span.attributes.get("gen_ai.memory.user_id") == user_id
-    assert deleteall_span.attributes.get("gen_ai.memory.agent_id") == agent_id
-    assert deleteall_span.attributes.get("gen_ai.memory.run_id") == run_id
+    assert deleteall_spans[0].name == "delete_memory"

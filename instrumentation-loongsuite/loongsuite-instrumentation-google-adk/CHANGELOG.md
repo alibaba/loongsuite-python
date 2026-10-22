@@ -15,6 +15,8 @@ There are no changelog entries for this release.
 
 ### Added
 
+- Capture stream request state, reasoning token usage, response IDs, and
+  independent time-to-first-chunk and time-to-first-token timestamps.
 - Capture `gen_ai.skill.*` attributes on Google ADK SkillToolset
   `load_skill` and `load_skill_resource` execute-tool spans.
 

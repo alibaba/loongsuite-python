@@ -239,6 +239,15 @@ def _apply_usage_to_invocation(
     if include_output_tokens and output_tokens is not None:
         invocation.output_tokens = output_tokens
 
+    completion_details = get_litellm_value(usage, "completion_tokens_details")
+    reasoning_tokens = get_litellm_value(
+        completion_details, "reasoning_tokens"
+    )
+    if reasoning_tokens is not None and hasattr(
+        invocation, "reasoning_output_tokens"
+    ):
+        invocation.reasoning_output_tokens = reasoning_tokens
+
     prompt_details = get_litellm_value(usage, "prompt_tokens_details")
     cached_tokens = get_litellm_value(prompt_details, "cached_tokens")
     if cached_tokens is not None and hasattr(
@@ -265,7 +274,7 @@ def parse_provider_from_model(model: str) -> Optional[str]:
         return None
 
     if "/" in model:
-        return model.split("/")[0]
+        return model.split("/", 1)[0]
 
     # Fallback: try to infer from model name patterns
     if "gpt" in model.lower():
@@ -522,6 +531,10 @@ def create_llm_invocation_from_litellm(**kwargs):
         operation_name=GenAiOperationNameValues.CHAT.value,
         input_messages=input_messages,
     )
+    invocation.stream = True if kwargs.get("stream") is True else None
+    reasoning_level = kwargs.get("reasoning_effort")
+    if reasoning_level is not None:
+        invocation.reasoning_level = str(reasoning_level)
     if system_instruction:
         invocation.system_instruction = system_instruction
 
