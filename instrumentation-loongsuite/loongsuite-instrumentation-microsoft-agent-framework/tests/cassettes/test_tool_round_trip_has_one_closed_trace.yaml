@@ -1,0 +1,41 @@
+interactions:
+- request:
+    body: '{"messages":[{"role":"system","content":"Always call get_weather, then
+      return exactly MAF_VCR_TOOL_OK."},{"role":"user","content":"Check weather in
+      Hangzhou."}],"model":"qwen-plus","stream":false,"tool_choice":"auto","tools":[{"type":"function","function":{"name":"get_weather","description":"Return
+      deterministic weather for a city.","parameters":{"properties":{"city":{"title":"City","type":"string"}},"required":["city"],"title":"get_weather_input","type":"object"}}}]}'
+    headers:
+      content-type:
+      - application/json
+    method: POST
+    uri: http://127.0.0.1:18765/v1/chat/completions
+  response:
+    body:
+      string: '{"id":"maf-vcr-response-id","object":"chat.completion","created":1700000000,"model":"qwen-plus","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_maf_weather","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Hangzhou\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":40,"completion_tokens":12,"total_tokens":52}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"messages":[{"role":"system","content":"Always call get_weather, then
+      return exactly MAF_VCR_TOOL_OK."},{"role":"user","content":"Check weather in
+      Hangzhou."},{"role":"assistant","tool_calls":[{"id":"call_maf_weather","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Hangzhou\"}"}}]},{"role":"tool","tool_call_id":"call_maf_weather","content":"Hangzhou:
+      sunny"}],"model":"qwen-plus","stream":false,"tool_choice":"auto","tools":[{"type":"function","function":{"name":"get_weather","description":"Return
+      deterministic weather for a city.","parameters":{"properties":{"city":{"title":"City","type":"string"}},"required":["city"],"title":"get_weather_input","type":"object"}}}]}'
+    headers:
+      content-type:
+      - application/json
+    method: POST
+    uri: http://127.0.0.1:18765/v1/chat/completions
+  response:
+    body:
+      string: '{"id":"maf-vcr-response-id","object":"chat.completion","created":1700000000,"model":"qwen-plus","choices":[{"index":0,"message":{"role":"assistant","content":"MAF_VCR_TOOL_OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":60,"completion_tokens":6,"total_tokens":66}}'
+    headers:
+      content-type:
+      - application/json
+    status:
+      code: 200
+      message: OK
+version: 1

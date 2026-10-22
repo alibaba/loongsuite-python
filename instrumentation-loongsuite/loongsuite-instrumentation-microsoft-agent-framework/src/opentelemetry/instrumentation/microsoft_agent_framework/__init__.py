@@ -14,8 +14,8 @@
 
 """OpenTelemetry instrumentation for Microsoft Agent Framework.
 
-This instrumentor enables MAF's built-in OTel telemetry (``enable_instrumentation``
-with ``force=True`` so a sticky user-disable does not block us), bridges MAF's
+This instrumentor enables MAF's built-in OTel telemetry (using ``force=True``
+when the installed MAF version supports it), bridges MAF's
 native span helpers through ``opentelemetry-util-genai`` finish helpers, and
 registers :class:`~.span_processor.MAFSemanticProcessor` for workflow/MCP
 normalization. Microsoft Agent Framework's native counter and histogram
@@ -36,6 +36,7 @@ Usage::
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Collection, Optional
 
@@ -88,11 +89,12 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         )
         meter_provider = kwargs.get("meter_provider")
 
-        # 1) Enable MAF's built-in OTel instrumentation. ``force=True`` clears
-        #    any sticky disable previously set by ``disable_instrumentation()``
-        #    so our instrumentation always takes effect. ``enable_sensitive_data``
-        #    is wired to the ARMS_MAF_SENSITIVE_DATA_ENABLED env (default False —
-        #    PII/data redaction by default, per ARMS privacy guardrails).
+        # 1) Enable MAF's built-in OTel instrumentation. Newer MAF releases
+        #    accept ``force=True`` to clear a sticky user-disable; MAF 1.0 does
+        #    not expose that parameter, even though it is within our declared
+        #    support range. ``enable_sensitive_data`` is wired to the
+        #    ARMS_MAF_SENSITIVE_DATA_ENABLED env (default False — PII/data
+        #    redaction by default, per ARMS privacy guardrails).
         sensitive = bool(
             kwargs.get(
                 "enable_sensitive_data",
@@ -102,7 +104,17 @@ class MicrosoftAgentFrameworkInstrumentor(BaseInstrumentor):
         try:
             from agent_framework.observability import enable_instrumentation
 
-            enable_instrumentation(enable_sensitive_data=sensitive, force=True)
+            enable_kwargs = {"enable_sensitive_data": sensitive}
+            try:
+                supports_force = (
+                    "force"
+                    in inspect.signature(enable_instrumentation).parameters
+                )
+            except (TypeError, ValueError):
+                supports_force = False
+            if supports_force:
+                enable_kwargs["force"] = True
+            enable_instrumentation(**enable_kwargs)
         except (ImportError, AttributeError, TypeError) as exc:
             logger.warning(
                 "Could not enable MAF native instrumentation: %s. "
