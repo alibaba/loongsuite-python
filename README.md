@@ -535,6 +535,26 @@ Open the Jaeger UI and confirm traces arrive.
 
 ![Trace view in Jaeger](docs/_assets/img/quickstart-results.png)
 
+## Contributing
+
+See the [contributing guide](CONTRIBUTING-loongsuite-zh.md) (简体中文).
+
+### Maintainers
+
+- [Huxing Zhang](https://github.com/ralf0131), Alibaba
+- [Liu Ziming](https://github.com/123liuziming), Alibaba
+- [RichardoMu](https://github.com/RichardoMrMu), ByteDance
+- [sipercai](https://github.com/sipercai), Alibaba
+
+### Emeritus
+
+- [Minghui Zhang](https://github.com/Cirilla-zmh), Alibaba
+- [Lurious](https://github.com/lyred193)
+
+### Thanks to all of our contributors!
+
+Thank you to everyone who contributes to LoongSuite Python and the upstream [OpenTelemetry Python Contrib](https://github.com/open-telemetry/opentelemetry-python-contrib) project!
+
 ## Community
 
 We are looking forward to your feedback and suggestions. You can join
