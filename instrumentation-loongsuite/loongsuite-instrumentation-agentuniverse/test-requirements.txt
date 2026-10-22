@@ -1,0 +1,13 @@
+pytest
+pytest-asyncio
+pytest-forked==1.6.0
+setuptools
+agentUniverse == 0.0.19.1
+
+-e opentelemetry-instrumentation
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-agentuniverse
+# Chroma's transitive FastAPI instrumentation must match this source checkout.
+-e instrumentation/opentelemetry-instrumentation-fastapi
+-e instrumentation/opentelemetry-instrumentation-asgi
+-e util/opentelemetry-util-http
