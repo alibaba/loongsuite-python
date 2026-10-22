@@ -35,6 +35,7 @@ from opentelemetry.util.genai.extended_types import (
     InvokeAgentInvocation,
     ReactStepInvocation,
 )
+from opentelemetry.util.genai.response_id import resolve_response_id
 from opentelemetry.util.genai.types import (
     FunctionToolDefinition,
     GenericToolDefinition,
@@ -674,6 +675,8 @@ def update_llm_invocation_from_response(
     invocation: LLMInvocation,
     instance: Any,
     response: Any,
+    *,
+    provider_response_id: str | None = None,
 ) -> tuple[int, int, int]:
     response_model = getattr(response, "model", None)
     if response_model:
@@ -681,7 +684,11 @@ def update_llm_invocation_from_response(
     else:
         invocation.response_model_name = invocation.request_model
 
-    response_id = getattr(response, "id", None)
+    response_id = resolve_response_id(
+        provider_response_id,
+        response,
+        framework_fields=("request_id", "id", "response_id"),
+    )
     if response_id:
         invocation.response_id = response_id
 

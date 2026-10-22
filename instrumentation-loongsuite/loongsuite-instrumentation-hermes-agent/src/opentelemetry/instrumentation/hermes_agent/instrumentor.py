@@ -29,6 +29,7 @@ from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from .metrics import HermesMetrics
 from .wrappers import (
     LLMCallWrapper,
+    ProviderClientWrapper,
     RunConversationWrapper,
     ToolBatchWrapper,
     ToolCallWrapper,
@@ -129,6 +130,11 @@ class HermesAgentInstrumentor(BaseInstrumentor):
         )
         _safe_wrap_function_wrapper(
             "run_agent",
+            "AIAgent._create_request_openai_client",
+            ProviderClientWrapper(),
+        )
+        _safe_wrap_function_wrapper(
+            "run_agent",
             "AIAgent._invoke_tool",
             ToolCallWrapper(handler),
         )
@@ -180,6 +186,7 @@ class HermesAgentInstrumentor(BaseInstrumentor):
         _safe_unwrap(ai_agent, "run_conversation")
         _safe_unwrap(ai_agent, "_interruptible_api_call")
         _safe_unwrap(ai_agent, "_interruptible_streaming_api_call")
+        _safe_unwrap(ai_agent, "_create_request_openai_client")
         _safe_unwrap(ai_agent, "_invoke_tool")
         _safe_unwrap(ai_agent, "_execute_tool_calls")
         _safe_unwrap(model_tools, "handle_function_call")
