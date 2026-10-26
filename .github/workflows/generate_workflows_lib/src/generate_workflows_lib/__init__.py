@@ -471,10 +471,7 @@ def _generate_workflow_with_template(
     runner="ubuntu-latest",
     control_runner="ubuntu-latest",
 ):
-    if (
-        name in {"loongsuite_lint", "loongsuite_test"}
-        and len(job_datas) > max_jobs
-    ):
+    if name == "loongsuite_lint" and len(job_datas) > max_jobs:
         raise RuntimeError(
             f"{name} dynamic matrix has {len(job_datas)} jobs, which exceeds "
             f"the {max_jobs}-job single-workflow limit. Add an explicit "
@@ -484,14 +481,20 @@ def _generate_workflow_with_template(
     for stale_workflow_path in workflow_directory_path.glob(f"{name}_*.yml"):
         stale_workflow_path.unlink()
 
-    # Github seems to limit the amount of jobs in a workflow file, that is why
-    # they are split in groups of 250 per workflow file.
-    for file_number, job_datas in enumerate(
-        [
+    if name == "loongsuite_test":
+        # A matrix can hold at most 256 jobs, so the dynamic test matrix is
+        # split into chunks of max_jobs. They stay in one workflow file, whose
+        # result job checks every chunk.
+        file_job_datas = [job_datas]
+    else:
+        # Github seems to limit the amount of jobs in a workflow file, that is
+        # why they are split in groups of 250 per workflow file.
+        file_job_datas = [
             job_datas[index : index + max_jobs]
             for index in range(0, len(job_datas), max_jobs)
         ]
-    ):
+
+    for file_number, job_datas in enumerate(file_job_datas):
         with open(
             workflow_directory_path.joinpath(f"{name}_{file_number}.yml"), "w"
         ) as test_yml_file:
@@ -500,6 +503,10 @@ def _generate_workflow_with_template(
                 .get_template(f"{template_name}.yml.j2")
                 .render(
                     job_datas=job_datas,
+                    job_chunks=[
+                        job_datas[index : index + max_jobs]
+                        for index in range(0, len(job_datas), max_jobs)
+                    ],
                     file_number=file_number,
                     runner=runner,
                     control_runner=control_runner,
