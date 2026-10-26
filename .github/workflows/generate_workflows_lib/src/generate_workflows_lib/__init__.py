@@ -79,6 +79,7 @@ def get_test_job_datas(
         "py312": "3.12",
         "py313": "3.13",
         "py314": "3.14",
+        "py315": "3.15",
     }
 
     test_job_datas = []
