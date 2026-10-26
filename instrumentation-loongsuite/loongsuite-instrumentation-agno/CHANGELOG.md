@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Close the Agno stream when an application stops reading an instrumented
+  streaming agent run early (`close()`, `aclose()`, `break`), so Agno's own
+  cleanup runs at that point. The abandoned stream was otherwise only
+  finalized by the garbage collector, which ended its model span late and could
+  set an ended span from that run as the current OpenTelemetry context in
+  whatever code was running at the time.
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.
