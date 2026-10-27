@@ -33,6 +33,18 @@ from .conftest import NATIVE_WRAPPER_GLOBALS, StreamingLLM, StubLLM
 from .runtime_app import Workload
 from .runtime_provider import USAGE
 
+import importlib.metadata as _metadata
+
+def _is_alpha():
+    raw = _metadata.version("agentUniverse")
+    parts = raw.split(".")
+    return (int(parts[0]), int(parts[1])) >= (0, 1)
+
+_stable_react = pytest.mark.skipif(
+    _is_alpha(),
+    reason="stable text ReAct protocol; alpha uses structured tool_calls",
+)
+
 
 def test_name_proxy_preserves_otel_context_for_genai_events(
     configured_providers,
@@ -170,6 +182,7 @@ def test_cross_task_cancel_preserves_business_exception_and_origin(
     assert all(span.parent is None for span in spans)
 
 
+@_stable_react
 def test_concurrent_collector_fault_keeps_business_and_clean_sibling(
     monkeypatch, configured_providers, session_exporter
 ):

@@ -35,6 +35,19 @@ from .runtime_app import Workload
 from .runtime_provider import MODEL, prompt
 from .runtime_provider import Provider as ToolProvider
 
+import importlib.metadata as _metadata
+
+def _is_alpha():
+    raw = _metadata.version("agentUniverse")
+    parts = raw.split(".")
+    return (int(parts[0]), int(parts[1])) >= (0, 1)
+
+_IS_ALPHA = _is_alpha()
+_stable_react = pytest.mark.skipif(
+    _IS_ALPHA,
+    reason="stable text ReAct protocol; alpha uses structured tool_calls",
+)
+
 
 def _stream_event_usage(chunk):
     """Read token usage from a stream chunk across SDK layouts.
@@ -196,6 +209,7 @@ def test_stable_sdk_raw_tool_calls_and_fragments(
     assert attrs["gen_ai.usage.output_tokens"] == 10
 
 
+@_stable_react
 @pytest.mark.parametrize("mode", ["SPAN_ONLY", "NO_CONTENT"])
 @pytest.mark.parametrize("reasoning", [True, False])
 def test_stable_native_react_conversations(

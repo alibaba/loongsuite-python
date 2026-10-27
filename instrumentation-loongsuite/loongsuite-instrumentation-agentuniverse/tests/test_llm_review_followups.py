@@ -302,6 +302,10 @@ class TestUsageAndChunkText:
             ),
         ) as client:
             adapter.client = client
+            # On agentUniverse 0.1.0a2, OpenAIStyleLLM._get_client() resolves
+            # via _client_pool[api_base] instead of self.client when api_base
+            # is set. Pre-populate the pool so the MockTransport client is used.
+            adapter._client_pool["http://provider.invalid/v1"] = client
             result = adapter.call(
                 messages=[{"role": "user", "content": "hello"}]
             )
