@@ -168,7 +168,8 @@ class Workload:
             },
         )
         agent.agent_model.action = {"tool": self.names}
-        agent.max_iterations = 5
+        # SDK 0.0.19.1 InventoryAgent does not accept a max_iterations field;
+        # leave the ReAct loop at its SDK default instead of setting a custom one.
         agent.configured_llm = llm
         agent.configured_prompt = Prompt(
             prompt_template=(

@@ -257,7 +257,7 @@ class TestUsageAndChunkText:
         assert record.gen_ai.get("gen_ai.usage.output_tokens") == 5
 
     def test_usage_of_reads_the_real_adapter_output(
-        self, loongsuite_harness: Any
+        self, loongsuite_harness: Any, monkeypatch: Any
     ) -> None:
         """The real adapter's construction path, not a hand-built TokenUsage."""
         import httpx
@@ -267,6 +267,10 @@ class TestUsageAndChunkText:
         from opentelemetry.instrumentation.agentuniverse._llm import (
             usage_of,
         )
+
+        # The SDK may fall back to constructing a default OpenAI client; provide
+        # a synthetic key so the offline MockTransport path is taken.
+        monkeypatch.setenv("OPENAI_API_KEY", "synthetic")
 
         completion = {
             "id": "chatcmpl-1",
