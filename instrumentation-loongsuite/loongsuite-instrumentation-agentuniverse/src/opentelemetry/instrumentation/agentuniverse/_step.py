@@ -262,6 +262,17 @@ def install_react_step_hooks(layer: ReactStepLayer) -> Dict[str, Any]:
         name: getattr(Agent, name) for name in REACT_STEP_HOOKS
     }
 
+    # A hook already replaced by a foreign owner (anything that is not the
+    # framework's own class-declared method) must not be overwritten; refuse
+    # atomically so the whole install rolls back instead of claiming it.
+    for name, current in originals.items():
+        qual = getattr(current, "__qualname__", "")
+        if not qual.startswith("Agent."):
+            raise RuntimeError(
+                f"Agent.{name} is already claimed by another owner "
+                f"({qual!r}); refusing a partial round-hook install"
+            )
+
     def before(
         self: Any,
         context: Any,
