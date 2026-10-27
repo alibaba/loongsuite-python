@@ -555,6 +555,12 @@ loongsuite-instrument \
 |----|----|
 | <img src="docs/_assets/img/loongsuite-go-sig-dingtalk.png" height="150"> | <img src="docs/_assets/img/loongsuite-java-sig-dingtalk.jpg" height="150"> |
 
+### 维护者
+
+- [sipercai](https://github.com/sipercai), Alibaba
+- [123liuziming](https://github.com/123liuziming), Alibaba
+- [RichardoMrMu](https://github.com/RichardoMrMu), ByteDance
+
 ## 资源
 * AgentScope: https://github.com/modelscope/agentscope
 * Observability Community: https://observability.cn
