@@ -79,8 +79,20 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
     original = {
         name: getattr(trace_module, name) for name in NATIVE_WRAPPER_GLOBALS
     }
+    native_hooks = {name: getattr(Agent, name) for name in REACT_STEP_HOOKS}
+    # Force the second round-hook assignment to fail mid-install; the whole
+    # install must roll back, leaving neither instrumentation nor side effects.
+    # Class attribute assignment goes through the metaclass __setattr__.
+    metaclass = type(Agent)
+    real_setattr = metaclass.__setattr__
+
+    def failing_setattr(cls, name, value):
+        if cls is Agent and name == "on_after_llm_round":
+            raise RuntimeError("boom: second hook assignment failed")
+        return real_setattr(cls, name, value)
+
     monkeypatch.setattr(
-        Agent, "on_after_llm_round", lambda *a, **k: None, raising=False
+        metaclass, "__setattr__", staticmethod(failing_setattr)
     )
     instrumentor = AgentUniverseInstrumentor()
     instrumentor.instrument()
@@ -88,6 +100,9 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
     assert all(
         getattr(trace_module, name) is value
         for name, value in original.items()
+    )
+    assert all(
+        getattr(Agent, name) is value for name, value in native_hooks.items()
     )
 
 
