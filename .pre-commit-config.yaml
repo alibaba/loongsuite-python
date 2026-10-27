@@ -10,7 +10,7 @@ repos:
       - id: ruff-format
   - repo: https://github.com/astral-sh/uv-pre-commit
     # uv version.
-    rev: 1ce7e7fa8aa6eda60e54755509a9380b0f1c5d08 # frozen: v0.9.30
+    rev: 46787482b9fb2003c56e0f7592e312ef381829d9 # frozen: 0.13.6
     hooks:
       - id: uv-lock
         args: ["--index-url", "https://pypi.org/simple/"]
