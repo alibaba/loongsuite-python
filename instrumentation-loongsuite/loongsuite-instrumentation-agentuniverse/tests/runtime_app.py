@@ -15,6 +15,7 @@
 """Stable native ReAct/AgentExecutor; only the HTTP provider is scripted."""
 
 import asyncio
+import importlib.metadata as _metadata
 import threading
 import time
 from collections import Counter
@@ -36,7 +37,6 @@ from openai import AsyncOpenAI, OpenAI
 
 from opentelemetry import context
 
-import importlib.metadata as _metadata
 
 def _framework_version():
     raw = _metadata.version("agentUniverse")
