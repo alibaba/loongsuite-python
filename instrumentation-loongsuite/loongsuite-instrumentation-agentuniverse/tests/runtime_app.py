@@ -36,8 +36,20 @@ from openai import AsyncOpenAI, OpenAI
 
 from opentelemetry import context
 
-from .runtime_provider import MODEL, answer, prompt
-from .stable_runtime_provider import Provider
+import importlib.metadata as _metadata
+
+def _framework_version():
+    raw = _metadata.version("agentUniverse")
+    parts = raw.split(".")
+    return (int(parts[0]), int(parts[1]))
+
+IS_ALPHA = _framework_version() >= (0, 1)
+
+from .runtime_provider import MODEL, Provider as StructuredProvider, answer, prompt
+if IS_ALPHA:
+    Provider = StructuredProvider
+else:
+    from .stable_runtime_provider import Provider
 
 
 class ChannelLLM(LLM):
@@ -163,16 +175,21 @@ class Workload:
         LLMManager().register(llm_code, llm)
         self._llm_code = llm_code
         agent = InventoryAgent()
+        profile = {
+            "llm_model": dict(
+                name="inventory_llm",
+                model_name=MODEL,
+                temperature=0,
+                streaming=streaming,
+            )
+        }
+        if IS_ALPHA:
+            # 0.1.0a2 builds the user message from profile['instruction']
+            # rendered with input_dict; without it messages come back empty.
+            profile["instruction"] = "{input}"
         agent.agent_model = AgentModel(
             info={"name": "inventory_" + label},
-            profile={
-                "llm_model": dict(
-                    name="inventory_llm",
-                    model_name=MODEL,
-                    temperature=0,
-                    streaming=streaming,
-                )
-            },
+            profile=profile,
         )
         agent.agent_model.action = {"tool": self.names}
         # SDK 0.0.19.1 InventoryAgent does not accept a max_iterations field;
@@ -227,8 +244,12 @@ class Workload:
                             text=text,
                         )
                     )
-            agent.configured_llm._channel_instance.client.close()
-            await agent.configured_llm._channel_instance.async_client.close()
+            # On alpha the registered LLM is shared via LLMManager and each
+            # agent gets a copied channel; closing the shared original here
+            # would poison later workers. MockTransport clients need no close.
+            if not IS_ALPHA:
+                agent.configured_llm._channel_instance.client.close()
+                await agent.configured_llm._channel_instance.async_client.close()
 
         await worker("auSync", False, True)
         await asyncio.gather(
