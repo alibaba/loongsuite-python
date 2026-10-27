@@ -34,12 +34,12 @@ from .conftest import NATIVE_WRAPPER_GLOBALS, StreamingLLM, StubLLM
 from .runtime_app import Workload
 from .runtime_provider import USAGE
 
-import importlib.metadata as _metadata
 
 def _is_alpha():
     raw = _metadata.version("agentUniverse")
     parts = raw.split(".")
     return (int(parts[0]), int(parts[1])) >= (0, 1)
+
 
 def test_name_proxy_preserves_otel_context_for_genai_events(
     configured_providers,
@@ -59,6 +59,7 @@ def test_name_proxy_preserves_otel_context_for_genai_events(
         assert span.name == "native-name"
     finally:
         span.end()
+
 
 def test_auxiliary_install_failure_restores_every_hook_and_allows_retry(
     monkeypatch,
@@ -87,6 +88,7 @@ def test_auxiliary_install_failure_restores_every_hook_and_allows_retry(
     instrumentor.instrument()
     assert instrumentor.is_instrumented_by_opentelemetry
 
+
 def test_uninstrument_preserves_later_hook_owners():
     converter = inspect.getattr_static(TokenUsage, "from_openai")
     instrumentor = instrumentation.AgentUniverseInstrumentor()
@@ -106,6 +108,7 @@ def test_uninstrument_preserves_later_hook_owners():
     finally:
         TokenUsage.from_openai = converter
 
+
 def test_provider_totals_do_not_mutate_business_usage(loongsuite_harness):
     original = TokenUsage.from_openai(USAGE)
     response = LLMOutput(text="answer", usage=original, raw={"usage": USAGE})
@@ -123,6 +126,7 @@ def test_provider_totals_do_not_mutate_business_usage(loongsuite_harness):
         == 30
     )
 
+
 def test_unread_sync_stream_close_finalizes_once(loongsuite_harness):
     before = context.get_current()
     stream = StreamingLLM().call(prompt="hello")
@@ -132,6 +136,7 @@ def test_unread_sync_stream_close_finalizes_once(loongsuite_harness):
     assert len(loongsuite_harness.spans()) == 1
     assert context.get_current() is before
     assert _current_call.get() is None
+
 
 def test_cross_task_cancel_preserves_business_exception_and_origin(
     loongsuite_harness,
@@ -171,6 +176,7 @@ def test_cross_task_cancel_preserves_business_exception_and_origin(
     assert len(spans) == 2
     assert all(span.parent is None for span in spans)
 
+
 def test_concurrent_collector_fault_keeps_business_and_clean_sibling(
     monkeypatch, configured_providers, session_exporter
 ):
@@ -194,6 +200,7 @@ def test_concurrent_collector_fault_keeps_business_and_clean_sibling(
     before = context.get_current()
     result = asyncio.run(Workload().run(provider))
     import importlib.metadata as _im
+
     _raw = _im.version("agentUniverse")
     _parts = _raw.split(".")
     _is_a = (int(_parts[0]), int(_parts[1])) >= (0, 1)

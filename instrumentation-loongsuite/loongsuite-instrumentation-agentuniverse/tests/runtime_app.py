@@ -43,9 +43,12 @@ def _framework_version():
     parts = raw.split(".")
     return (int(parts[0]), int(parts[1]))
 
+
 IS_ALPHA = _framework_version() >= (0, 1)
 
-from .runtime_provider import MODEL, Provider as StructuredProvider, answer, prompt
+from .runtime_provider import MODEL, answer, prompt
+from .runtime_provider import Provider as StructuredProvider
+
 if IS_ALPHA:
     Provider = StructuredProvider
 else:
@@ -249,7 +252,9 @@ class Workload:
             # would poison later workers. MockTransport clients need no close.
             if not IS_ALPHA:
                 agent.configured_llm._channel_instance.client.close()
-                await agent.configured_llm._channel_instance.async_client.close()
+                await (
+                    agent.configured_llm._channel_instance.async_client.close()
+                )
 
         await worker("auSync", False, True)
         await asyncio.gather(

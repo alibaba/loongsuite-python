@@ -36,12 +36,15 @@ from .runtime_app import Workload
 from .runtime_provider import MODEL, prompt
 from .runtime_provider import Provider as ToolProvider
 
+
 def _is_alpha():
     raw = _metadata.version("agentUniverse")
     parts = raw.split(".")
     return (int(parts[0]), int(parts[1])) >= (0, 1)
 
+
 _IS_ALPHA = _is_alpha()
+
 
 def _stream_event_usage(chunk):
     """Read token usage from a stream chunk across SDK layouts.
@@ -54,6 +57,7 @@ def _stream_event_usage(chunk):
     if isinstance(raw, dict):
         return raw.get("usage")
     return getattr(chunk, "usage", None)
+
 
 def test_stable_without_native_round_hooks_enables_all_core_wrappers():
     # stable 0.0.19.1 ships no native round hooks; alpha ships them natively.
@@ -79,6 +83,7 @@ def test_stable_without_native_round_hooks_enables_all_core_wrappers():
     else:
         # stable: no native round hooks and still none after uninstall.
         assert not any(hasattr(Agent, name) for name in REACT_STEP_HOOKS)
+
 
 def test_partial_round_hook_install_is_atomic(monkeypatch):
     original = {
@@ -142,6 +147,7 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
             assert getattr(Agent, name) is value
     assert metaclass.__setattr__ is real_setattr
 
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_stable_sdk_raw_tool_calls_and_fragments(
     streaming, loongsuite_harness, monkeypatch
@@ -199,6 +205,7 @@ def test_stable_sdk_raw_tool_calls_and_fragments(
     assert attrs["gen_ai.usage.input_tokens"] == 20
     assert attrs["gen_ai.usage.output_tokens"] == 10
 
+
 @pytest.mark.parametrize("mode", ["SPAN_ONLY", "NO_CONTENT"])
 @pytest.mark.parametrize("reasoning", [True, False])
 def test_stable_native_react_conversations(
@@ -231,7 +238,11 @@ def test_stable_native_react_conversations(
     tools = [
         s for s in spans if s.attributes.get("gen_ai.span.kind") == "TOOL"
     ]
-    assert (len(llms), len(agents), len(tools)) == (expected_llm_calls, 6, expected_tool_spans)
+    assert (len(llms), len(agents), len(tools)) == (
+        expected_llm_calls,
+        6,
+        expected_tool_spans,
+    )
     if not _IS_ALPHA:
         assert all("gen_ai.tool.call.id" not in s.attributes for s in tools)
     by_id = {s.context.span_id: s for s in spans}
@@ -242,12 +253,18 @@ def test_stable_native_react_conversations(
         parent = by_id[span.parent.span_id]
         assert parent.context.trace_id == span.context.trace_id
         if span in llms + tools:
-            assert parent.attributes.get("gen_ai.span.kind") in ("AGENT", "STEP")
+            assert parent.attributes.get("gen_ai.span.kind") in (
+                "AGENT",
+                "STEP",
+            )
             assert (
                 parent.attributes["gen_ai.session.id"]
                 == span.attributes["gen_ai.session.id"]
             )
-    expected = {r.get("id", str(i)): r for i, r in enumerate(workload.backend.responses)}
+    expected = {
+        r.get("id", str(i)): r
+        for i, r in enumerate(workload.backend.responses)
+    }
     for span in llms:
         attrs = span.attributes
         assert attrs["gen_ai.usage.input_tokens"] == 20
@@ -273,10 +290,14 @@ def test_stable_native_react_conversations(
                 outputs = json.loads(out_raw)
                 parts = [pt for m in outputs for pt in m["parts"]]
                 texts = [pt["content"] for pt in parts if pt["type"] == "text"]
-                reasons = [pt["content"] for pt in parts if pt["type"] == "reasoning"]
+                reasons = [
+                    pt["content"] for pt in parts if pt["type"] == "reasoning"
+                ]
                 if response.get("content") is not None:
                     assert "".join(texts) == response["content"]
-                assert reasons == ([response["reasoning"]] if reasoning else [])
+                assert reasons == (
+                    [response["reasoning"]] if reasoning else []
+                )
     for span in tools:
         attrs = span.attributes
         if mode == "SPAN_ONLY":
@@ -290,15 +311,21 @@ def test_stable_native_react_conversations(
             assert len(actual) == 1
             assert str(actual[0]["result"]) in attrs["gen_ai.tool.call.result"]
     for span in agents:
-        assert span.attributes["gen_ai.usage.input_tokens"] == expected_agent_in
-        assert span.attributes["gen_ai.usage.output_tokens"] == expected_agent_out
+        assert (
+            span.attributes["gen_ai.usage.input_tokens"] == expected_agent_in
+        )
+        assert (
+            span.attributes["gen_ai.usage.output_tokens"] == expected_agent_out
+        )
         if mode == "SPAN_ONLY":
             outputs = json.loads(span.attributes["gen_ai.output.messages"])
             assert len(outputs) == 1 and len(outputs[0]["parts"]) == 1
             assert outputs[0]["parts"][0]["content"].startswith("[")
     metrics = collect_metrics(reader)
     assert counter_value(metrics, "llm_total_tokens") == expected_total_tokens
-    assert counter_value(metrics, "agent_total_tokens") == expected_total_tokens
+    assert (
+        counter_value(metrics, "agent_total_tokens") == expected_total_tokens
+    )
     if mode == "NO_CONTENT":
         for span in spans:
             assert not any(

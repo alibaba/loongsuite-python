@@ -68,6 +68,7 @@ class Provider:
     @staticmethod
     def _is_alpha():
         import importlib.metadata
+
         raw = importlib.metadata.version("agentUniverse")
         parts = raw.split(".")
         return (int(parts[0]), int(parts[1])) >= (0, 1)
