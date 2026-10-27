@@ -30,6 +30,7 @@ from agentuniverse.agent.template.react_agent_template import (
 )
 from agentuniverse.llm.llm import LLM
 from agentuniverse.llm.llm_channel.llm_channel import LLMChannel
+from agentuniverse.llm.llm_manager import LLMManager
 from agentuniverse.prompt.prompt import Prompt
 from openai import AsyncOpenAI, OpenAI
 
@@ -155,6 +156,12 @@ class Workload:
         )
         llm._channel_instance = channel
         llm._max_context_length = 8192
+        # The stable SDK's Agent.invoke_llm resolves the LLM by name through
+        # LLMManager; a bare process_llm override is never consulted. Register
+        # the channel-backed instance so judge_stream sees a real LLM.
+        llm_code = llm.get_instance_code()
+        LLMManager().register(llm_code, llm)
+        self._llm_code = llm_code
         agent = InventoryAgent()
         agent.agent_model = AgentModel(
             info={"name": "inventory_" + label},
@@ -227,6 +234,11 @@ class Workload:
         await asyncio.gather(
             worker("auStreamA", True), worker("auStreamB", True)
         )
+        # Drop the registered channel-backed LLM so it cannot leak into other
+        # tests; MockTransport clients hold no real sockets.
+        code = getattr(self, "_llm_code", None)
+        if code and code in LLMManager()._instance_obj_map:
+            LLMManager().unregister(code)
         counts = Counter(
             (item["args"]["worker"], item["args"]["turn"], item["name"])
             for item in self.tool_calls
