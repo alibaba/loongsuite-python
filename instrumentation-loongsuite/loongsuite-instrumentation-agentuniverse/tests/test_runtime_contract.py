@@ -79,7 +79,18 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
     original = {
         name: getattr(trace_module, name) for name in NATIVE_WRAPPER_GLOBALS
     }
-    native_hooks = {name: getattr(Agent, name) for name in REACT_STEP_HOOKS}
+    # stable 0.0.19.1 ships no native round hooks; alpha ships them. Snapshot
+    # whatever exists; on stable there is nothing to restore, and the synthetic
+    # hooks we install for this seam are removed again on teardown.
+    had_hooks = all(hasattr(Agent, n) for n in REACT_STEP_HOOKS)
+    if not had_hooks:
+        for name in REACT_STEP_HOOKS:
+            monkeypatch.setattr(
+                Agent, name, lambda *a, **k: None, raising=False
+            )
+    native_hooks = {
+        name: getattr(Agent, name, None) for name in REACT_STEP_HOOKS
+    }
     # Force the second round-hook assignment to fail mid-install; the whole
     # install must roll back, leaving neither instrumentation nor side effects.
     # Class attribute assignment goes through the metaclass __setattr__.
@@ -111,9 +122,18 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
         getattr(trace_module, name) is value
         for name, value in original.items()
     )
-    assert all(
-        getattr(Agent, name) is value for name, value in native_hooks.items()
-    )
+    if had_hooks:
+        assert all(
+            getattr(Agent, name) is value
+            for name, value in native_hooks.items()
+        )
+    else:
+        # stable: rollback restored the synthetic lambdas monkeypatch supplied;
+        # monkeypatch teardown drops them, returning the class to hook-less.
+        assert all(
+            getattr(Agent, name) is value
+            for name, value in native_hooks.items()
+        )
 
 
 @pytest.mark.parametrize("streaming", [False, True])
