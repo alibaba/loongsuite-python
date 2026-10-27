@@ -85,18 +85,28 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
     # Class attribute assignment goes through the metaclass __setattr__.
     metaclass = type(Agent)
     real_setattr = metaclass.__setattr__
+    events: list[str] = []
+    after_failures = {"n": 0}
 
-    def failing_setattr(cls, name, value):
-        if cls is Agent and name == "on_after_llm_round":
+    def fake_setattr(cls, name, value):
+        if (
+            cls is Agent
+            and name == "on_after_llm_round"
+            and after_failures["n"] == 0
+        ):
+            after_failures["n"] += 1
+            events.append("after-assign-failed")
             raise RuntimeError("boom: second hook assignment failed")
+        events.append("assign:" + name)
         return real_setattr(cls, name, value)
 
-    monkeypatch.setattr(
-        metaclass, "__setattr__", staticmethod(failing_setattr)
-    )
+    monkeypatch.setattr(metaclass, "__setattr__", fake_setattr)
     instrumentor = AgentUniverseInstrumentor()
     instrumentor.instrument()
     assert not instrumentor.is_instrumented_by_opentelemetry
+    # Exactly one failure, on the second hook; the first hook installed first.
+    assert events.count("after-assign-failed") == 1
+    assert events[0].startswith("assign:on_before_llm_round")
     assert all(
         getattr(trace_module, name) is value
         for name, value in original.items()
