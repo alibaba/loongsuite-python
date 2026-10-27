@@ -1,0 +1,18 @@
+pytest
+pytest-asyncio
+pytest-forked==1.6.0
+setuptools
+# agentUniverse 0.0.19.1 hard-pins grpcio==1.63.0, which conflicts with the
+# pinned core otlp-proto-grpc (>=1.63.2). 0.1.0a2 drops the grpcio pin and
+# requires opentelemetry-api/sdk>=1.30.0, both satisfied by the core checkout.
+# The instrumentation code is compatible with both lines; this pin selects the
+# installable prerelease for the formal CI install path (no --no-deps override).
+agentUniverse == 0.1.0a2
+
+-e opentelemetry-instrumentation
+-e util/opentelemetry-util-genai
+-e instrumentation-loongsuite/loongsuite-instrumentation-agentuniverse
+# Chroma's transitive FastAPI instrumentation must match this source checkout.
+-e instrumentation/opentelemetry-instrumentation-fastapi
+-e instrumentation/opentelemetry-instrumentation-asgi
+-e util/opentelemetry-util-http
