@@ -90,6 +90,8 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
             monkeypatch.setattr(
                 Agent, name, lambda *a, **k: None, raising=False
             )
+    # Snapshot hooks as seen by the install attempt (synthetic + native).
+    after_seam = {name: getattr(Agent, name) for name in REACT_STEP_HOOKS}
     # Force the second round-hook assignment to fail mid-install; the whole
     # install must roll back, leaving neither instrumentation nor side effects.
     # Class attribute assignment goes through the metaclass __setattr__.
@@ -120,6 +122,10 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
     assert all(
         getattr(trace_module, name) is value
         for name, value in original.items()
+    )
+    # Mid-install rollback restored hooks to the seam state (not half-installed).
+    assert all(
+        getattr(Agent, name) is value for name, value in after_seam.items()
     )
     # Explicit undo: names that existed keep their original object; names that
     # were absent (stable) are absent again after teardown.
