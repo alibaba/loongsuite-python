@@ -80,17 +80,16 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
         name: getattr(trace_module, name) for name in NATIVE_WRAPPER_GLOBALS
     }
     # stable 0.0.19.1 ships no native round hooks; alpha ships them. Snapshot
-    # whatever exists; on stable there is nothing to restore, and the synthetic
-    # hooks we install for this seam are removed again on teardown.
-    had_hooks = all(hasattr(Agent, n) for n in REACT_STEP_HOOKS)
-    if not had_hooks:
-        for name in REACT_STEP_HOOKS:
-            monkeypatch.setattr(
-                Agent, name, lambda *a, **k: None, raising=False
-            )
+    # per-name existence/identity; only names that are missing get a synthetic
+    # seam lambda, so existing hooks keep their identity.
     native_hooks = {
         name: getattr(Agent, name, None) for name in REACT_STEP_HOOKS
     }
+    for name in REACT_STEP_HOOKS:
+        if not hasattr(Agent, name):
+            monkeypatch.setattr(
+                Agent, name, lambda *a, **k: None, raising=False
+            )
     # Force the second round-hook assignment to fail mid-install; the whole
     # install must roll back, leaving neither instrumentation nor side effects.
     # Class attribute assignment goes through the metaclass __setattr__.
@@ -122,18 +121,15 @@ def test_partial_round_hook_install_is_atomic(monkeypatch):
         getattr(trace_module, name) is value
         for name, value in original.items()
     )
-    if had_hooks:
-        assert all(
-            getattr(Agent, name) is value
-            for name, value in native_hooks.items()
-        )
-    else:
-        # stable: rollback restored the synthetic lambdas monkeypatch supplied;
-        # monkeypatch teardown drops them, returning the class to hook-less.
-        assert all(
-            getattr(Agent, name) is value
-            for name, value in native_hooks.items()
-        )
+    # Explicit undo: names that existed keep their original object; names that
+    # were absent (stable) are absent again after teardown.
+    monkeypatch.undo()
+    for name, value in native_hooks.items():
+        if value is None:
+            assert not hasattr(Agent, name)
+        else:
+            assert getattr(Agent, name) is value
+    assert metaclass.__setattr__ is real_setattr
 
 
 @pytest.mark.parametrize("streaming", [False, True])
