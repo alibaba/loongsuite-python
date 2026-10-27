@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep incidental provider requests out of the CrewAI VCR cassettes so a
   first-use model-metadata fetch cannot fail the recorded tests.
   ([#270](https://github.com/alibaba/loongsuite-python/pull/270))
+- Keep the CrewAI tests off the network: turn off crewAI's telemetry and
+  version check, stop VCR from passing requests through to real hosts, and
+  block real connections. A telemetry export in flight let concurrent LLM
+  calls skip their cassettes, so tests failed at random.
+  ([#287](https://github.com/alibaba/loongsuite-python/pull/287))
 
 ## Version 0.9.0 (2026-09-07)
 
