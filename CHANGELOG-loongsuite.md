@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Test LoongSuite instrumentation packages and `loongsuite-distro` on Python
+  3.14 and add the Python 3.14 classifier. CrewAI, LangChain, OpenHands and
+  QwenPaw stay on Python 3.13 and older: `crewai`, `openhands-ai` and `qwenpaw`
+  require Python < 3.14, and the LangChain tests use `langchain` 0.3, whose
+  `langchain.chains` does not import on Python 3.14.
+
 ### Changed
 
 - Upgrade the vulnerable packages in the development `uv.lock` and the
