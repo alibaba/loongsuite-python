@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block real connections. A telemetry export in flight let concurrent LLM
   calls skip their cassettes, so tests failed at random.
   ([#287](https://github.com/alibaba/loongsuite-python/pull/287))
+- Fix the CrewAI tests on crewAI 1.15.31 and later: its LiteLLM fallback, which
+  serves the tests' `openai/qwen-turbo` model, needs litellm 1.97.0 or later,
+  and the tests' `aiohttp<3.12` cap held litellm at 1.95.0.
+  ([#290](https://github.com/alibaba/loongsuite-python/pull/290))
 
 ## Version 0.9.0 (2026-09-07)
 
