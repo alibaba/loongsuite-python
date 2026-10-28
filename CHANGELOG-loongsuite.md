@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Upgrade the vulnerable packages in the development `uv.lock` and the
+  `uv-pre-commit` hook.
+  ([#288](https://github.com/alibaba/loongsuite-python/pull/288))
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Added
