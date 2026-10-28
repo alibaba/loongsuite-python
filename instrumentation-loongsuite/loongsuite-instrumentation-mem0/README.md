@@ -114,7 +114,7 @@ conventions** and should be treated as experimental.
 
 ## Compatibility
 
-- Python: `>= 3.8, <= 3.13`
+- Python: `>= 3.8, <= 3.14`
 - Mem0 / `mem0ai`: `>= 1.0.0`
 - OpenTelemetry API: `>= 1.20.0`
 

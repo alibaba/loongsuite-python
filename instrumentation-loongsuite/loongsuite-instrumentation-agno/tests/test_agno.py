@@ -815,6 +815,8 @@ def test_streaming_agent_span_finishes_when_consumer_breaks(
 
     spans = _spans_by_name(span_exporter)
     assert "invoke_agent BreakAgent" in spans
+    # Closing the stream closes Agno's stream too, which ends its model span.
+    assert "chat echo-model" in spans
     agent_attrs = spans["invoke_agent BreakAgent"].attributes
     assert agent_attrs["gen_ai.span.kind"] == "AGENT"
     assert "he" in agent_attrs["gen_ai.output.messages"]
@@ -913,6 +915,47 @@ def test_async_streaming_agent_identity_is_scoped_between_yields(
     assert model_attrs["gen_ai.session.id"] == "async-scoped-stream-session"
     assert "gen_ai.user.id" not in tool_attrs
     assert "gen_ai.session.id" not in tool_attrs
+
+
+def test_async_streaming_agent_closes_agno_stream_when_consumer_breaks(
+    span_exporter: InMemorySpanExporter,
+):
+    agno_stream_closed = []
+
+    async def agno_stream(*args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        try:
+            yield SimpleNamespace(content="he")
+            yield SimpleNamespace(content="llo")
+        finally:
+            agno_stream_closed.append(True)
+
+    agent = SimpleNamespace(
+        name="AsyncBreakAgent",
+        id="agent-id",
+        model=EchoModel(),
+        tools=[],
+        instructions=[],
+    )
+    wrapper = AgnoAgentWrapper(get_extended_telemetry_handler())
+
+    async def run_agent():
+        stream = wrapper._arun_stream(
+            agno_stream,
+            agent,
+            ("stream please",),
+            {},
+            {"input": "stream please"},
+            otel_context.get_current(),
+        )
+        first_chunk = await stream.__anext__()
+        assert first_chunk.content == "he"
+        await stream.aclose()
+        # Check before asyncio.run() closes leftover async generators.
+        return list(agno_stream_closed)
+
+    assert asyncio.run(run_agent()) == [True]
+    spans = _spans_by_name(span_exporter)
+    assert "invoke_agent AsyncBreakAgent" in spans
 
 
 def test_tool_call_loop_emits_react_steps_and_split_llm_spans(
