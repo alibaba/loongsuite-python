@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Trace the tools that crewAI calls by native function calling: it runs them
+  through `BaseTool.run` instead of `ToolUsage._use`, so they had no TOOL
+  span.
+  ([#292](https://github.com/alibaba/loongsuite-python/pull/292))
 - Keep incidental provider requests out of the CrewAI VCR cassettes so a
   first-use model-metadata fetch cannot fail the recorded tests.
   ([#270](https://github.com/alibaba/loongsuite-python/pull/270))

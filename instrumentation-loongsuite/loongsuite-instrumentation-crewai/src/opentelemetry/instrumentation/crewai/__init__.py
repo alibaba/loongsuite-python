@@ -46,6 +46,8 @@ from opentelemetry.util.genai.types import Error
 logger = logging.getLogger(__name__)
 _ENTRY_DEPTH: ContextVar[int] = ContextVar("crewai_entry_depth", default=0)
 _TASK_DEPTH: ContextVar[int] = ContextVar("crewai_task_depth", default=0)
+# The tool whose execute_tool span is open in this context, if any.
+_ACTIVE_TOOL: ContextVar[Any] = ContextVar("crewai_active_tool", default=None)
 _CREWAI_UNINSTRUMENT_TARGETS = (
     ("crewai.crew", "Crew", "kickoff"),
     ("crewai.crew", "Crew", "kickoff_async"),
@@ -54,6 +56,10 @@ _CREWAI_UNINSTRUMENT_TARGETS = (
     ("crewai.agent", "Agent", "execute_task"),
     ("crewai.task", "Task", "execute_sync"),
     ("crewai.tools.tool_usage", "ToolUsage", "_use"),
+    # BaseTool first: unwrapping Tool.run, when Tool inherits it, is then a
+    # no-op.
+    ("crewai.tools.base_tool", "BaseTool", "run"),
+    ("crewai.tools.base_tool", "Tool", "run"),
 )
 
 
@@ -406,6 +412,31 @@ def _fail_tool(
     )
 
 
+def _is_active_tool(tool: Any) -> bool:
+    """Whether an execute_tool span for ``tool`` is already open here.
+
+    ``ToolUsage._use`` gets the ``CrewStructuredTool`` built from a
+    ``BaseTool``, so the structured tool's ``_original_tool`` counts too.
+    """
+    active = _ACTIVE_TOOL.get()
+    return active is not None and (
+        active is tool or getattr(active, "_original_tool", None) is tool
+    )
+
+
+def _tool_class_overrides_run() -> bool:
+    """Whether crewAI's ``Tool`` (behind ``@tool``) has its own ``run``.
+
+    Older releases inherit ``BaseTool.run``; wrapping it again there would
+    leave a stale wrapper behind on uninstrumentation.
+    """
+    try:
+        tool_class = import_module("crewai.tools.base_tool").Tool
+    except (ImportError, AttributeError):
+        return False
+    return "run" in vars(tool_class)
+
+
 def _wrap_stream_result(
     result: Any,
     on_success: Any,
@@ -595,7 +626,7 @@ class CrewAIInstrumentor(BaseInstrumentor):
             logger_provider=logger_provider,
         )
 
-        for module, name, wrapper in (
+        wrappers = [
             (
                 "crewai.crew",
                 "Crew.kickoff",
@@ -631,7 +662,22 @@ class CrewAIInstrumentor(BaseInstrumentor):
                 "ToolUsage._use",
                 _ToolUseWrapper(self._handler),
             ),
-        ):
+            # Native function calls run tools through ``run``, not ``_use``.
+            (
+                "crewai.tools.base_tool",
+                "BaseTool.run",
+                _ToolRunWrapper(self._handler),
+            ),
+        ]
+        if _tool_class_overrides_run():
+            wrappers.append(
+                (
+                    "crewai.tools.base_tool",
+                    "Tool.run",
+                    _ToolRunWrapper(self._handler),
+                )
+            )
+        for module, name, wrapper in wrappers:
             try:
                 wrap_function_wrapper(
                     module=module, name=name, wrapper=wrapper
@@ -824,11 +870,14 @@ class _ToolUseWrapper:
         started = _safe_handler_call(
             "start_execute_tool", self._handler.start_execute_tool, invocation
         )
+        token = _ACTIVE_TOOL.set(tool)
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
             _fail_tool(self._handler, invocation, started, exc)
             raise
+        finally:
+            _ACTIVE_TOOL.reset(token)
 
         _finish_tool_success(
             self._handler,
@@ -837,6 +886,49 @@ class _ToolUseWrapper:
             result,
             instance,
             tool,
+        )
+        return result
+
+
+class _ToolRunWrapper:
+    """Wrap ``BaseTool.run`` as a util-genai execute_tool span.
+
+    With native function calling, crewAI runs tools through ``run`` instead
+    of ``ToolUsage._use``. A ``run`` inside an already traced execution of
+    the same tool gets no second span.
+    """
+
+    def __init__(self, handler: ExtendedTelemetryHandler):
+        self._handler = handler
+
+    def __call__(self, wrapped: Any, instance: Any, args: Any, kwargs: Any):
+        if _is_active_tool(instance):
+            return wrapped(*args, **kwargs)
+
+        invocation = _safe_build_invocation(
+            "tool",
+            create_tool_invocation,
+            instance,
+            None,
+            tool_call_arguments=kwargs or (list(args) if args else None),
+        )
+        if invocation is None:
+            return wrapped(*args, **kwargs)
+
+        started = _safe_handler_call(
+            "start_execute_tool", self._handler.start_execute_tool, invocation
+        )
+        token = _ACTIVE_TOOL.set(instance)
+        try:
+            result = wrapped(*args, **kwargs)
+        except Exception as exc:
+            _fail_tool(self._handler, invocation, started, exc)
+            raise
+        finally:
+            _ACTIVE_TOOL.reset(token)
+
+        _finish_tool_success(
+            self._handler, invocation, started, result, None, instance
         )
         return result
 
@@ -851,5 +943,6 @@ __all__ = [
     "_FlowKickoffAsyncWrapper",
     "_AgentExecuteTaskWrapper",
     "_TaskExecuteSyncWrapper",
+    "_ToolRunWrapper",
     "_ToolUseWrapper",
 ]
