@@ -130,6 +130,7 @@ loongsuite-instrument <your_run_command>
 | ReAct Step | `STEP` | `gen_ai.operation.name=react`, `gen_ai.react.round`, `gen_ai.react.finish_reason` |
 | Tool | `TOOL` | `gen_ai.operation.name=execute_tool` |
 | Retriever | `RETRIEVER` | `gen_ai.operation.name=retrieval` |
+| Embedding | `EMBEDDING` | `gen_ai.operation.name=embeddings`, `gen_ai.request.model`, `gen_ai.provider.name`, `server.address`, `server.port`, `gen_ai.embeddings.dimension.count`, `gen_ai.request.encoding_formats` |
 | Reranker | `RERANKER` | `gen_ai.operation.name=rerank_documents`, `gen_ai.request.model`, `gen_ai.rerank.documents.count`, `gen_ai.request.top_k`, `gen_ai.rerank.input_documents`, `gen_ai.rerank.output_documents` (when content capture enabled) |
 
 ReAct Step spans are created for each Reasoning-Acting iteration, with the hierarchy: Agent > ReAct Step > LLM/Tool. Supported agent types:
