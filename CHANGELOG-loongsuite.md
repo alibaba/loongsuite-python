@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   require Python < 3.14, and the LangChain tests use `langchain` 0.3, whose
   `langchain.chains` does not import on Python 3.14.
 
+### Changed
+
+- Upgrade the vulnerable packages in the development `uv.lock` and the
+  `uv-pre-commit` hook.
+  ([#288](https://github.com/alibaba/loongsuite-python/pull/288))
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Added
