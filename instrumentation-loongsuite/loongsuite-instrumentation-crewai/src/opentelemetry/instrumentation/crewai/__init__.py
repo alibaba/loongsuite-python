@@ -48,6 +48,21 @@ _ENTRY_DEPTH: ContextVar[int] = ContextVar("crewai_entry_depth", default=0)
 _TASK_DEPTH: ContextVar[int] = ContextVar("crewai_task_depth", default=0)
 # The tool whose execute_tool span is open in this context, if any.
 _ACTIVE_TOOL: ContextVar[Any] = ContextVar("crewai_active_tool", default=None)
+# The model's id of the native tool call that CrewAI runs in this context.
+_NATIVE_TOOL_CALL_ID: ContextVar[str | None] = ContextVar(
+    "crewai_native_tool_call_id", default=None
+)
+# Where CrewAI runs one native tool call; each takes the model's tool call
+# first. Missing ones (other CrewAI versions) are skipped, and the spans of
+# their tool calls fall back to the tool name as the call id.
+_NATIVE_TOOL_CALL_TARGETS = (
+    (
+        "crewai.agents.agent_executor",
+        "AgentExecutor",
+        "_execute_single_native_tool_call",
+    ),
+    ("crewai.agents.step_executor", None, "execute_single_native_tool_call"),
+)
 _CREWAI_UNINSTRUMENT_TARGETS = (
     ("crewai.crew", "Crew", "kickoff"),
     ("crewai.crew", "Crew", "kickoff_async"),
@@ -60,6 +75,7 @@ _CREWAI_UNINSTRUMENT_TARGETS = (
     # no-op.
     ("crewai.tools.base_tool", "BaseTool", "run"),
     ("crewai.tools.base_tool", "Tool", "run"),
+    *_NATIVE_TOOL_CALL_TARGETS,
 )
 
 
@@ -125,7 +141,9 @@ def _uninstrument_targets() -> list[tuple[Any, str]]:
     for module_name, class_name, method_name in _CREWAI_UNINSTRUMENT_TARGETS:
         try:
             module = import_module(module_name)
-            target = getattr(module, class_name)
+            target = (
+                module if class_name is None else getattr(module, class_name)
+            )
         except ImportError:
             logger.debug(
                 "CrewAI module %s was not available for uninstrumentation.",
@@ -365,7 +383,7 @@ def _finish_tool_success(
 
     def post_process() -> None:
         nonlocal error
-        invocation.tool_call_result = result
+        invocation.tool_call_result = _tool_result_for_agent(tool, result)
         if _is_tool_parsing_error(instance):
             error = RuntimeError(
                 "CrewAI tool parsing attempts exceeded for "
@@ -374,8 +392,13 @@ def _finish_tool_success(
                 f"{getattr(instance, '_max_parsing_attempts', None)}"
             )
             _record_exception(invocation, error)
-        else:
+            return
+        failure = _returned_tool_failure(result, instance)
+        if failure is None:
             _set_ok(invocation)
+        else:
+            # Returned, not raised: an error status but no exception event.
+            error = RuntimeError(failure.as_agent_message())
 
     _safe_post_process("tool success", post_process)
     if not started:
@@ -410,6 +433,76 @@ def _fail_tool(
         invocation,
         _error(exc),
     )
+
+
+def _tool_result_for_agent(tool: Any, result: Any) -> Any:
+    """``result`` as the text the agent gets, as ``ToolUsage._use`` returns.
+
+    ``BaseTool.run`` returns the raw result, which need not be JSON
+    serializable: a pydantic model or a ``ToolFailure``, for instance.
+    """
+    if result is None or isinstance(result, str):
+        return result
+    format_output = getattr(tool, "format_output_for_agent", None)
+    if callable(format_output):
+        try:
+            return format_output(result)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.debug(
+                "Could not format a CrewAI tool result", exc_info=True
+            )
+    return str(result)
+
+
+def _returned_tool_failure(result: Any, instance: Any) -> Any:
+    """The ``ToolFailure`` that the tool returned instead of raising, if any.
+
+    ``ToolUsage._use`` keeps it in ``last_failure`` and returns the text the
+    agent gets; ``BaseTool.run`` returns it as is.
+    """
+    try:
+        tool_failure_type = import_module(
+            "crewai.tools.tool_failure"
+        ).ToolFailure
+    except (ImportError, AttributeError):
+        return None
+    for candidate in (getattr(instance, "last_failure", None), result):
+        if isinstance(candidate, tool_failure_type):
+            return candidate
+    return None
+
+
+def _native_tool_call_id(tool_call: Any) -> str | None:
+    """The model's id of a native tool call, as CrewAI itself reads it."""
+    try:
+        info = import_module(
+            "crewai.utilities.agent_utils"
+        ).extract_tool_call_info(tool_call)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    return info[0] if info and isinstance(info[0], str) else None
+
+
+def _wrap_native_tool_call(
+    wrapped: Any, instance: Any, args: Any, kwargs: Any
+) -> Any:
+    """Keep the model's call id while CrewAI runs one native tool call."""
+    del instance
+    tool_call = args[0] if args else kwargs.get("tool_call")
+    token = _NATIVE_TOOL_CALL_ID.set(_native_tool_call_id(tool_call))
+    try:
+        return wrapped(*args, **kwargs)
+    finally:
+        _NATIVE_TOOL_CALL_ID.reset(token)
+
+
+def _run_arguments(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    """The arguments of a ``BaseTool.run`` call, as recorded on its span."""
+    if args and kwargs:
+        return {"args": list(args), "kwargs": kwargs}
+    if args:
+        return list(args)
+    return kwargs or None
 
 
 def _is_active_tool(tool: Any) -> bool:
@@ -685,6 +778,19 @@ class CrewAIInstrumentor(BaseInstrumentor):
             except Exception as exc:
                 logger.warning("Could not wrap %s: %s", name, exc)
 
+        for module, class_name, method_name in _NATIVE_TOOL_CALL_TARGETS:
+            name = (
+                method_name
+                if class_name is None
+                else f"{class_name}.{method_name}"
+            )
+            try:
+                wrap_function_wrapper(
+                    module=module, name=name, wrapper=_wrap_native_tool_call
+                )
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug("Could not wrap %s.%s: %s", module, name, exc)
+
     def _uninstrument(self, **kwargs: Any) -> None:
         del kwargs
         for target, method_name in _uninstrument_targets():
@@ -894,8 +1000,9 @@ class _ToolRunWrapper:
     """Wrap ``BaseTool.run`` as a util-genai execute_tool span.
 
     With native function calling, crewAI runs tools through ``run`` instead
-    of ``ToolUsage._use``. A ``run`` inside an already traced execution of
-    the same tool gets no second span.
+    of ``ToolUsage._use``. The span takes the model's call id from the native
+    tool call being run, if any. A ``run`` inside an already traced
+    execution of the same tool gets no second span.
     """
 
     def __init__(self, handler: ExtendedTelemetryHandler):
@@ -905,12 +1012,13 @@ class _ToolRunWrapper:
         if _is_active_tool(instance):
             return wrapped(*args, **kwargs)
 
+        call_id = _NATIVE_TOOL_CALL_ID.get()
         invocation = _safe_build_invocation(
             "tool",
             create_tool_invocation,
             instance,
-            None,
-            tool_call_arguments=kwargs or (list(args) if args else None),
+            {"id": call_id} if call_id else None,
+            tool_call_arguments=_run_arguments(args, kwargs),
         )
         if invocation is None:
             return wrapped(*args, **kwargs)
@@ -918,14 +1026,17 @@ class _ToolRunWrapper:
         started = _safe_handler_call(
             "start_execute_tool", self._handler.start_execute_tool, invocation
         )
-        token = _ACTIVE_TOOL.set(instance)
+        tool_token = _ACTIVE_TOOL.set(instance)
+        # A tool run from inside this one is not the model's tool call.
+        call_id_token = _NATIVE_TOOL_CALL_ID.set(None)
         try:
             result = wrapped(*args, **kwargs)
         except Exception as exc:
             _fail_tool(self._handler, invocation, started, exc)
             raise
         finally:
-            _ACTIVE_TOOL.reset(token)
+            _NATIVE_TOOL_CALL_ID.reset(call_id_token)
+            _ACTIVE_TOOL.reset(tool_token)
 
         _finish_tool_success(
             self._handler, invocation, started, result, None, instance
