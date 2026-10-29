@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Correct rerank field names and standardize manual instrumentation examples on
+  explicit Invocation objects. Document custom attribute boundaries, content and
+  event coverage, Provider setup, context lifetimes, and version troubleshooting.
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.

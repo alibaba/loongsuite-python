@@ -1,6 +1,14 @@
 OpenTelemetry Util for GenAI
 ============================
 
+.. note::
+
+   LoongSuite Extension: For LoongSuite installation, explicit Invocation
+   examples, custom attributes, and lifecycle guidance, use the
+   `LoongSuite manual instrumentation guide <README-loongsuite.rst>`_.
+   The published LoongSuite distribution is ``loongsuite-otel-util-genai``;
+   the Python import namespace remains ``opentelemetry.util.genai``.
+
 
 The GenAI Utils package will include boilerplate and helpers to standardize instrumentation for Generative AI. 
 This package will provide APIs and decorators to minimize the work needed to instrument genai libraries, 
