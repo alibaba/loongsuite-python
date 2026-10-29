@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python < 3.15, its older releases need `fastuuid`, which has no Python 3.15
   wheels and does not build there, and `vita` has no Python 3.15 wheels.
 
+### Changed
+
+- Upgrade the vulnerable packages in the development `uv.lock` and the
+  `uv-pre-commit` hook.
+  ([#288](https://github.com/alibaba/loongsuite-python/pull/288))
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Added
