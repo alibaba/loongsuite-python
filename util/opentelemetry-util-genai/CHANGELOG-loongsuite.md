@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   event coverage, Provider setup, context lifetimes, and version troubleshooting.
   Present GenAI Utils as a standalone library configured through the OpenTelemetry
   SDK, with optional storage backends separate from the setup guide.
+- Fix the API docs build: Sphinx read the "Streaming:" prefix of the
+  `InvokeAgentInvocation.monotonic_first_token_s` docstring as a type and
+  failed on the missing `Streaming` class.
 
 ## Version 0.9.0 (2026-09-07)
 
