@@ -1,10 +1,12 @@
 OpenTelemetry Util for GenAI - LoongSuite 扩展
 =================================================
 
-本文档面向使用 GenAI Utils 手动埋点的应用开发者，以及复用共享语义的探针开发者。
+GenAI Utils 是可独立安装和使用的开源 Python 工具库，为应用与框架提供
+GenAI 调用的类型、生命周期和 OpenTelemetry 遥测辅助 API。
 对外发行包名为 ``loongsuite-otel-util-genai``，Python 导入命名空间为
 ``opentelemetry.util.genai``；本仓库源码目录为 ``util/opentelemetry-util-genai``。
-以下 API 与字段以当前源码版本为准；发行包或商业探针的兼容桥需按实际安装版本验证。
+Provider 与导出器由使用方通过标准 OpenTelemetry SDK 配置；本库复用该配置生成遥测。
+以下 API 与字段以当前源码版本为准。
 
 .. contents:: 本页导航
    :local:
@@ -30,7 +32,9 @@ OpenTelemetry Util for GenAI - LoongSuite 扩展
 定位与能力
 ~~~~~~~~~~
 
-面向大语言模型、Agent、工具调用与向量检索等场景，将调用语义映射为 OpenTelemetry 遥测数据：统一的 Span 命名与属性、可选的消息内容捕获、可选的 GenAI 事件，以及与 LoongSuite / OpenTelemetry 导出链路的对接。
+面向大语言模型、Agent、工具调用与向量检索等场景，将调用语义映射为 OpenTelemetry
+遥测数据：统一的 Span 命名与属性、可选的消息内容捕获及 GenAI 事件。
+使用方选择导出器，将数据发送到本地控制台、OpenTelemetry Collector 或兼容后端。
 
 本实现在上游 GenAI Util 能力之上提供扩展，主要包括：
 
@@ -55,107 +59,45 @@ LLM 等通用字段衔接 OpenTelemetry GenAI 语义约定；ENTRY、STEP、RERA
 2. 快速使用
 ------------------------------------------------------------------------
 
-先选择一种 Provider 初始化方式：已使用探针启动时看 2.1 节；独立应用看
-2.2 节。内容采集变量应在启动 Python 前设置，见 2.3 节。
+安装工具库后，由应用初始化 OpenTelemetry SDK，再创建 Handler。
+已配置 Provider 的应用可以直接复用现有配置。内容采集变量应在首次使用库前设置，
+配置示例见 2.3 节。
 下文统一采用 **显式构造 Invocation，再传给 Handler**：请求字段在开始前准备好，
 业务调用在 ``with`` 内执行，响应字段在返回后补充。
 
-安装注意事项
-~~~~~~~~~~~~
+2.1. 安装
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-- **发行包**：安装 ``loongsuite-otel-util-genai``。它与社区发行
-  ``opentelemetry-util-genai`` 提供相同导入命名空间；混装可能发生文件覆盖或版本冲突。
-  使用商业探针时先遵循该探针的配套版本说明，排查方法见第 6 节。
-- **monorepo 本地安装探针时**：若 instrumentor 是从 **本仓库本地路径** 安装的（例如 ``pip install ./instrumentation-loongsuite/...``），则 **必须** 先从 **同一 monorepo 源码树** 安装本模块（例如 ``pip install -e ./util/opentelemetry-util-genai``）。否则安装 instrumentor 时，解析结果可能回落为**上游** GenAI Util，与本地探针版本不一致，导致扩展能力或行为不符合预期。
-
-2.1. 使用 LoongSuite / OpenTelemetry Instrumentation 接入
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-前提：已通过 ``loongsuite-instrument``、``opentelemetry-instrument`` 或等价方式在进程启动时配置全局 Provider 与导出器，应用代码不自行构造 ``TracerProvider`` / ``MeterProvider``。
-
-**安装**
-
-::
-
-    pip install loongsuite-otel-util-genai
-
-从本 monorepo 本地安装时（与发行包等价源码树）::
-
-    pip install -e ./util/opentelemetry-util-genai
-
-Framework 探针若已声明对本包的依赖，会随探针一并安装；单独手写 GenAI Span 时仍需安装 \ **loongsuite-otel-util-genai**\ （或上述本地路径）。
-
-**LLM 示例代码**
-
-先由启动器配置 Provider 和导出器，再获取 Handler。下例中的 ``call_model``
-是业务函数的占位名：接收提示词，返回包含 ``text``、``finish_reason`` 的字典，
-可选包含 SDK 实际返回的 ``input_tokens`` / ``output_tokens``。
-接入时按实际 SDK 响应映射，未知 usage 保持 ``None``，不要估算或填零。
-
-::
-
-    from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler
-    from opentelemetry.util.genai.types import InputMessage, LLMInvocation, OutputMessage, Text
-
-    handler = get_extended_telemetry_handler()
-
-    prompt = "用一句话解释 OpenTelemetry。"
-    invocation = LLMInvocation(
-        provider="example-provider",  # 替换为实际提供方与模型
-        request_model="example-model",
-        input_messages=[
-            InputMessage(role="user", parts=[Text(content=prompt)]),
-        ],
-    )
-    with handler.llm(invocation) as inv:
-        response = call_model(prompt)
-        inv.output_messages = [
-            OutputMessage(
-                role="assistant",
-                parts=[Text(content=response["text"])],
-                finish_reason=response["finish_reason"],
-            )
-        ]
-        inv.input_tokens = response.get("input_tokens")
-        inv.output_tokens = response.get("output_tokens")
-
-未传入 ``tracer_provider`` / ``logger_provider`` 时使用全局 Provider。
-``get_extended_telemetry_handler()`` 缓存单例，首次创建后的调用不会重新绑定
-Provider，即使再次传入不同的 Provider；不要在每个请求里初始化 Provider。
-仅调用 ``trace.get_tracer_provider()`` 不能证明已有 SDK 或导出器。
-
-**环境变量**
-
-若需在 Trace/Event 中采集**模型输入、输出等正文**（或完整消息结构），**必须**按 **2.3 节** 设置相关变量；否则默认不采集消息正文。
-
-**进程启动（Instrumentation）**
-
-使用本仓库推荐的启动方式时，请参阅 **仓库根目录** 的 ``README.md``（例如通过 ``loongsuite-instrument`` 指定导出器与 ``service_name`` 后再执行 ``python your_app.py``）。
-
-若尚未安装探针，请按 `仓库安装说明 <https://github.com/alibaba/loongsuite-python#quick-start>`_
-完成组合安装。若框架或模型 SDK 已自动生成同一次 LLM 调用的 Span，不要再用
-``handler.llm`` 包装相同调用，以免重复计数；可以在外层补充实际的 Entry、Agent
-或业务 Span。util 的手动调用不会自动抑制所有下游探针。
-
-2.2. 使用 OpenTelemetry SDK 直接接入
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-由应用入口初始化 SDK。Trace 只需 TracerProvider 与 SpanExporter；
-Metrics、GenAI Event 分别需要 MeterProvider、LoggerProvider 及对应导出器。
-
-**安装**
+使用标准 OpenTelemetry SDK 配置 Provider 时，安装：
 
 ::
 
     pip install loongsuite-otel-util-genai opentelemetry-sdk
 
+从仓库根目录安装本地源码时：
+
+.. code-block:: console
+
+    pip install -e ./util/opentelemetry-util-genai opentelemetry-sdk
+
+LoongSuite 发行包与社区发行包 ``opentelemetry-util-genai`` 提供相同的 Python
+导入命名空间，应在同一个环境中选择一种实现，避免混装导致文件覆盖或版本冲突。
+
 按需增加导出器，例如 ``opentelemetry-exporter-otlp``。
+
+2.2. 初始化 OpenTelemetry 并创建 Handler
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+在应用初始化阶段配置 Provider 与导出器，然后获取 Handler。
+Trace 需要 TracerProvider 与 SpanExporter；Metrics、GenAI Event 分别需要
+MeterProvider、LoggerProvider 及对应导出器。已有全局 Provider 时直接复用，
+也可以在创建 Handler 时显式传入 Provider。
 
 **可直接运行的本地示例**
 
 先按 2.3 节启用 ``SPAN_ONLY``，将下例保存为 ``your_app.py`` 后运行
 ``python your_app.py``。示例只对合成文档做本地关键词排序，无需模型密钥或后端；
-它验证 util 的手动埋点与本地导出，不代表真实模型或云端入库验收。
+它演示工具库的手动埋点与本地导出。
 
 ::
 
@@ -212,6 +154,11 @@ Metrics、GenAI Event 分别需要 MeterProvider、LoggerProvider 及对应导�
 这两个 documents 属性应消失，计数和上述元数据仍保留。
 Entry 的身份字段要复制为子 Span 属性，还需 5.1 节的 BaggageSpanProcessor。
 
+``get_extended_telemetry_handler()`` 缓存单例，首次创建后的调用不会重新绑定
+Provider，即使再次传入不同的 Provider；应在应用初始化阶段完成配置。
+未传入 ``tracer_provider`` / ``logger_provider`` 时使用全局 Provider。
+仅调用 ``trace.get_tracer_provider()`` 不能证明已配置 SDK 和导出器。
+
 **按需增加 Metrics / Event**
 
 以下代码也需放在首次获取 Handler **之前**，并在应用退出时关闭新增的 Provider。
@@ -247,7 +194,7 @@ MeterProvider 通过全局 API 设置。需要独立 Provider 组合时，可以
         logger_provider=logger_provider,
     )
 
-当前开源实现的直接 Histogram 记录器只处理 LLM；其他扩展操作的直接 Metrics
+当前直接 Histogram 记录器只处理 LLM；其他扩展操作的直接 Metrics
 记录器仍为占位实现。后端从 Span 派生的指标是另一条链路。
 配置 MeterProvider 不表示所有 Span 类型都会产生直接指标。
 Console 导出用于本地检查；生产环境按所需信号配置 OTLP 等导出器。
@@ -257,7 +204,7 @@ Console 导出用于本地检查；生产环境按所需信号配置 OTLP 等导
 
 默认 ``NO_CONTENT`` 不导出受内容开关控制的消息正文。模型、提供方、文档计数、
 已观测到的 usage 等元数据不等于正文，不需要通过开启正文采集来保留。
-配置应在 SDK、Handler 或探针初始化前完成；实验性语义开关在首次使用时缓存，
+配置应在 SDK、Handler 初始化前完成；实验性语义开关在首次使用时缓存，
 修改后请重启进程。
 
 ``OTEL_SEMCONV_STABILITY_OPT_IN``
@@ -425,10 +372,37 @@ LLM 的额外指标维度有单独的 ``metric_attributes``，只能使用低基
 3.3. LLM 与 Agent
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-LLM 的完整调用模式见 2.1 节。消息使用 ``InputMessage``、``OutputMessage`` 与
-``Text`` 等类型，不要把 SDK 原始响应整体传入消息字段。
+**llm**：完成 2.2 节的 Provider 初始化后，通过 Handler 记录模型调用。
+下例中的 ``call_model`` 是业务函数的占位名：接收提示词，返回包含 ``text``、
+``finish_reason`` 的字典，可选包含 SDK 实际返回的 ``input_tokens`` / ``output_tokens``。
+消息使用 ``InputMessage``、``OutputMessage`` 与 ``Text`` 等类型，
+按实际 SDK 响应映射字段，不要把 SDK 原始响应整体传入消息字段。
 ``input_tokens`` / ``output_tokens`` 只从实际 usage 映射；缓存 Token 是细分项，
-不要再叠加到已经包含它们的输入 Token 中。
+不要再叠加到已经包含它们的输入 Token 中；未知 usage 保持 ``None``。
+
+.. code-block:: python
+
+    from opentelemetry.util.genai.extended_handler import get_extended_telemetry_handler
+    from opentelemetry.util.genai.types import InputMessage, LLMInvocation, OutputMessage, Text
+
+    handler = get_extended_telemetry_handler()
+    prompt = "用一句话解释 OpenTelemetry。"
+    invocation = LLMInvocation(
+        provider="example-provider",  # 替换为实际提供方与模型
+        request_model="example-model",
+        input_messages=[InputMessage(role="user", parts=[Text(content=prompt)])],
+    )
+    with handler.llm(invocation) as inv:
+        response = call_model(prompt)
+        inv.output_messages = [
+            OutputMessage(
+                role="assistant",
+                parts=[Text(content=response["text"])],
+                finish_reason=response["finish_reason"],
+            ),
+        ]
+        inv.input_tokens = response.get("input_tokens")
+        inv.output_tokens = response.get("output_tokens")
 
 **invoke_agent**：``call_agent`` 返回 ``{"text": ..., "finish_reason": ...}``。
 Agent 输入描述本次请求，输出只记录最终答案；中间工具结果属于工具调用。
@@ -642,9 +616,11 @@ Python 字段 **没有** ``rerank_`` 前缀。把 Span 属性名的后半段直�
   - ``none``：关闭。
   - ``input`` / ``output`` / ``both``：分别处理请求侧、响应侧或两侧多模态。
 
-- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH``：存储根路径；当 mode 非 ``none`` 时**必须**配置。
+- ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_STORAGE_BASE_PATH``：存储根路径；
+  使用默认 ``fs`` 后端且 mode 非 ``none`` 时必须配置。
 
-**存储协议示例**：``file:///path/to/dir``、``memory://``、``oss://bucket/prefix``、``sls://project/logstore``，以及 fsspec 支持的其它协议。
+**存储协议示例**：``file:///path/to/dir``、``memory://``，以及对应 fsspec
+文件系统实现支持的协议。使用其他存储系统时，由应用安装相应实现并配置访问凭据。
 
 **扩展环境变量**
 
@@ -701,51 +677,17 @@ Python 字段 **没有** ``rerank_`` 前缀。把 Span 属性名的后半段直�
 
 **可选上传记录**：``FsUploader`` 终态成功/失败时会调用全局 ``MultimodalUsageRecorder``（默认 no-op）。需要时可通过 ``set_multimodal_usage_recorder()`` 注册自定义实现。
 
-预授权 OSS 模式（presign）
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+可选上传后端
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-多模态数据落在服务端预授权的 OSS Bucket 里时，应用本地不持有任何 OSS AK/SK：每个对象上传前先用 LicenseKey 申请一个短时有效的预签名 URL，再直接把数据 ``PUT`` 到该 URL。
+上传后端通过 entry point 加载，其配置独立于 Trace、Metrics 和 Logs 的 Provider。
+应用根据所选存储系统配置地址、认证和可选依赖；默认 ``fs`` 后端可用于本地文件
+或相应 fsspec 文件系统支持的存储。
 
-Bucket 由服务端持有和决定，本地不需要（也无法）指定，因此对象地址不含 bucket，与 ``arms`` 模式同构：
-
-::
-
-    sls://{project}/{logstore}[/{prefix}]/{objectName}
-
-这个地址在上传发起前即可本地确定，所以 Span 属性同步写出、上传保持异步，两者不会不一致。实际存储位置为 ``{bucket}/{project}/{logstore}[/{prefix}]/{objectName}``，仅多一个服务端自持的 bucket 前缀。
-
-- hook 名：``presign``（亦接受 ``oss-presign`` / ``oss_presign`` / ``presigned-oss`` / ``presigned_oss`` 别名）。
-- 申请链路：``POST {endpoint}/apm/meta/api/v1/multimodal/upload/presign``，请求头 ``x-arms-license-key``、``x-cms-workspace``，请求体 ``{"project", "logstore", "objectName"}``。响应中的上传 URL 支持 ``uploadUrl`` / ``signedUrl`` / ``url`` 等字段名，可被 ``data`` / ``result`` 包裹，也允许响应体直接是一个裸 URL 文本；``method`` 缺省为 ``PUT``。
-- 上传阶段不自注入 ``Content-Type``：预签名 URL 的签名可能已覆盖该 header，客户端再加会导致 OSS 返回 403 SignatureDoesNotMatch。
-
-- 环境变量：
-
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY``：鉴权用的 LicenseKey，缺省回落到 ``ARMS_LICENSE_KEY``。**必填**，取不到时整条多模态链路降级为关闭。
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_WORKSPACE``：对象归属的 CMS workspace，缺省回落到 ``ARMS_WORKSPACE``；留空时由服务端按 LicenseKey 推导。
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT``：申请预签名 URL 的 endpoint，需填写包含 http:// 或 https:// 的 base URL（不带末尾斜杠），原样追加 presign API 路径。挂载 ARMS 探针时可留空以复用其 OneEndpoint 探活结果，独立使用时\ **需显式配置**\ 。
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_TIMEOUT``：申请与上传超时（秒，默认 ``30``）。
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX``：可选；给本应用所有对象加统一路径前缀，如 ``genai/my-app``。首尾 ``/`` 会被去掉，非法值（空段、``.``、``..``）记 warning 并视为未配置。
-  - ``APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT`` / ``_SLS_LOGSTORE``：对象地址与请求体里的 project / logstore。project 取不到时本模式整体降级；logstore 缺省为 ``logstore-multimodal``，该缺省值同时作用于 URI 与请求体，二者不会分叉。
-  - ``OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_BUCKET`` 在本模式下\ **已废弃且被忽略**\ ，仅对 ``oss`` hook 仍有意义。
-
-出于安全考虑，LicenseKey、workspace 与 endpoint 只从环境变量读取，\ **不允许**\ 通过运行时动态配置改写。
-
-::
-
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOAD_MODE=both
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_UPLOADER=presign
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRE_UPLOADER=presign
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_LICENSE_KEY='<your-license-key>'
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_PRESIGN_ENDPOINT=https://cn-hangzhou.log.aliyuncs.com
-    export OTEL_INSTRUMENTATION_GENAI_MULTIMODAL_OSS_PATH_PREFIX=genai/my-app
-    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_PROJECT=proj-xtrace-xxx-cn-hangzhou
-    export APSARA_APM_COLLECTOR_MULTIMODAL_SLS_LOGSTORE=multimodal
-
-SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploader 与 pre-uploader 同时返回 ``None``，多模态链路整体降级为关闭：消息中的多模态内容保持原样，不会被替换成无法访问的 ``sls://`` URI。这样避开了“属性看起来正常、实际指向不存在的对象”这种更难排查的状态。
-
-反过来也要注意：地址在上传发起前就已写入属性，**属性被替换不代表上传成功**。确认是否真的落地要看上传链路日志里 presign 返回 200 且后续 OSS ``PUT ... 200 OK``。
-
-纯 SDK（手动埋点）方式下没有探针注入身份，presign 所需的 project、endpoint 与 LicenseKey 都必须显式配置。
+包中还提供 ``presign`` 后端，用于连接已部署的兼容预签名上传服务。
+该后端的协议、认证和配置项见
+`presign 后端实现 <https://github.com/alibaba/loongsuite-python/blob/main/util/opentelemetry-util-genai/src/opentelemetry/util/genai/_multimodal_upload/presign_uploader.py>`_。
+其他存储服务也可以通过相同的 uploader / pre-uploader 接口扩展。
 
 ------------------------------------------------------------------------
 5. 上下文与生命周期
@@ -764,7 +706,7 @@ SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploa
 
     pip install opentelemetry-processor-baggage
 
-独立 SDK 接入时，在创建子 Span 前把处理器添加到应用已有的 TracerProvider：
+在创建子 Span 前，把处理器添加到应用已有的 TracerProvider：
 
 .. code-block:: python
 
@@ -776,7 +718,7 @@ SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploa
         ),
     )
 
-使用探针启动时检查其现有配置，避免重复注册。处理器按白名单复制 Baggage；
+在应用初始化阶段注册一次处理器。处理器按白名单复制 Baggage；
 不要把凭据或敏感正文放入 Baggage，它可能被传播到下游服务。
 
 5.2. 异步、并发与流式
@@ -794,11 +736,11 @@ SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploa
 - 包住“创建流对象”的调用只覆盖创建时间。流 Span 应覆盖实际消费直到结束，
   也要处理提前退出、``close`` / ``aclose``、异常和取消。不要为遥测额外拉取 chunk。
   生成器在 ``yield`` 时必须恢复调用方 Context；通用流代理应由经过生命周期验证的
-  instrumentor 实现，不能直接在跨 ``yield`` 的 ``with`` 中长期激活 Context。
+  流式适配器实现，不能直接在跨 ``yield`` 的 ``with`` 中长期激活 Context。
 
 这些约束用于设计和排查，不能仅通过改成显式 Invocation 就证明时序问题已经修复。
 样本若出现子 Span 在父 Span 结束后才开始，应继续核对 task 创建/等待、流消费位置、
-父 Context、Span 时间戳和兼容桥版本；父子 ID 相连本身不能证明生命周期正确。
+父 Context 和 Span 时间戳；父子 ID 相连本身不能证明生命周期正确。
 
 5.3. 显式生命周期与错误处理
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -815,10 +757,9 @@ SLS project 无法解析、LicenseKey 缺失或 endpoint 无法解析时，uploa
 当前管理器仅捕获 ``Exception``，不能据此承诺所有取消等 ``BaseException``
 路径都已自动清理。自建异步/回调适配器需要单独验证取消、部分初始化失败和上下文恢复。
 
-Handler 是底层遥测 API，不是任意业务代码的通用错误隔离器。探针开发者只在
-自有解析、记录与清理步骤使用 ``hook_advice`` / ``async_hook_advice`` 或窄的
-``try/except Exception``，业务调用与流迭代放在该隔离边界外。收尾失败不得覆盖
-原业务异常，更不能重试业务调用；需要注入遥测失败验证清理和后续调用。
+Handler 管理遥测生命周期。自建集成时，将异常隔离限制在遥测解析、记录与清理
+步骤，业务调用与流迭代保留原有的错误处理语义。收尾失败不得覆盖原业务异常，
+更不能重试业务调用；需要验证遥测失败时的清理和后续调用。
 
 5.4. 进程退出与上传收尾
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -841,7 +782,7 @@ Provider。不要在每个请求或每个 chunk 后调用 shutdown/force_flush�
 ------------------------------------------------------------------------
 
 **先验证本地导出**：运行 2.2 节，在 ``SPAN_ONLY`` / ``NO_CONTENT`` 两个新进程中
-对照属性，再接入 Collector/CMS/ARMS。控制台可见只证明本地导出；后端是否收到，
+对照属性，再按需接入 OpenTelemetry Collector 或兼容后端。控制台可见只证明本地导出；后端是否收到，
 需要按本次服务名、trace ID 和时间窗口读回验证。
 
 .. list-table:: 常见现象
@@ -867,7 +808,7 @@ Provider。不要在每个请求或每个 chunk 后调用 shutdown/force_flush�
    * - 有父子 ID，但时间范围异常
      - 按 5.2 节核对异步/流式生命周期，不能用修改字段名推断修复。
    * - Token 或 Span 重复
-     - 自动探针与手动埋点是否覆盖同一次 LLM 操作、是否重复收尾、是否重复合计缓存 Token。
+     - 同一次 LLM 调用是否被多次记录、是否重复收尾、是否重复合计缓存 Token。
 
 **记录实际运行版本与导入来源**：在运行应用的同一个 Python 环境中执行：
 
@@ -887,15 +828,8 @@ Provider。不要在每个请求或每个 chunk 后调用 shutdown/force_flush�
     print("handler:", extended_handler.__file__)
     print("types:", extended_types.__file__)
 
-这段输出供本地排查；对外提交时隐藏用户名等机器路径，并另记探针发行版本。
+这段输出供本地排查；对外提交时隐藏用户名等机器路径。
 包版本存在不证明实际加载了它提供的文件，要结合导入来源判断。
-
-**兼容桥问题独立验证**：本文统一显式传入 Invocation，使开始时的字段就绪，
-并减少对无参工厂和对象转换的依赖。当前仓库 Handler 支持无参用法；不能据此
-推断其他发行版的兼容桥也正确保留块内赋值。若在某个探针/util 组合中发现
-provider、模型或响应赋值丢失，保存最小合成样本，对照显式/无参两条路径的
-对象类型、导入来源及导出属性，按该组合单独登记修复与回归。
-文档写法调整不代表兼容桥代码或父子 Span 时序问题已解决。
 
 ------------------------------------------------------------------------
 7. 参考
@@ -908,4 +842,5 @@ provider、模型或响应赋值丢失，保存最小合成样本，对照显式
 - OpenTelemetry GenAI Utils 设计说明：`Design Document <https://docs.google.com/document/d/1w9TbtKjuRX_wymS8DRSwPA03_VhrGlyx65hHAdNik1E/edit?tab=t.qneb4vabc1wc#heading=h.kh4j6stirken>`_
 - `OpenTelemetry 项目 <https://opentelemetry.io/>`_
 - `OpenTelemetry GenAI 语义约定 <https://github.com/open-telemetry/semantic-conventions-genai>`_
-- LoongSuite Python Agent 仓库：`loongsuite-python <https://github.com/alibaba/loongsuite-python>`_（仓库根目录 ``README.md``：安装 Instrumentation 与 ``loongsuite-instrument`` 的 Quick start）
+- `LoongSuite GenAI 语义规范 <https://github.com/alibaba/loongsuite-semantic-conventions-genai>`_
+- `GenAI Utils 源码与包信息 <https://github.com/alibaba/loongsuite-python/tree/main/util/opentelemetry-util-genai>`_

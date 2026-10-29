@@ -3,7 +3,7 @@ OpenTelemetry Util for GenAI
 
 .. note::
 
-   LoongSuite Extension: For LoongSuite installation, explicit Invocation
+   LoongSuite Extension: For standalone installation, explicit Invocation
    examples, custom attributes, and lifecycle guidance, use the
    `LoongSuite manual instrumentation guide <README-loongsuite.rst>`_.
    The published LoongSuite distribution is ``loongsuite-otel-util-genai``;
@@ -72,8 +72,11 @@ References
 Standalone runtime
 ------------------
 
-GenAI utilities do not require ``opentelemetry-instrumentation``. Configure
-``OTEL_SEMCONV_STABILITY_OPT_IN`` before SDK or instrumentor startup; the GenAI
-opt-in is cached on first use. Changing it after startup is unsupported.
-Internal HTTP suppression shares the OpenTelemetry Context suppression key
-with HTTP instrumentors and restores the previous context when the scope exits.
+.. LoongSuite Extension: describe the library's independent SDK configuration.
+
+GenAI utilities can be installed and imported directly. The application configures
+OpenTelemetry SDK providers and exporters, which the telemetry handler uses to
+produce spans, metrics, and events. Configure ``OTEL_SEMCONV_STABILITY_OPT_IN``
+before creating the handler; the GenAI opt-in is cached on first use. Changing
+it after startup is unsupported. Internal HTTP suppression uses OpenTelemetry
+Context and restores the previous context when the scope exits.
