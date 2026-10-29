@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Propagate trace context to child CoPaw and QwenPaw agent-chat subprocesses
+  launched through AgentScope shell tools, and suppress duplicate Entry spans in
+  those child processes. ([#164](https://github.com/alibaba/loongsuite-python/pull/164))
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Fixed
