@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Test on Python 3.15 and add the Python 3.15 classifier.
+
 ### Fixed
 
 - Correct rerank field names and standardize manual instrumentation examples on
