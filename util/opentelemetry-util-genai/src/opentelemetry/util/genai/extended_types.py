@@ -206,7 +206,9 @@ class InvokeAgentInvocation:
     monotonic_start_s: float | None = None
     monotonic_end_s: float | None = None
     monotonic_first_token_s: float | None = None
-    """Streaming: first-token time; TTFT attribute derived like ``LLMInvocation``."""
+    """Monotonic time when the first token of a streaming response arrived.
+    The time-to-first-token attribute is derived from it as for
+    ``LLMInvocation``."""
 
 
 @dataclass
