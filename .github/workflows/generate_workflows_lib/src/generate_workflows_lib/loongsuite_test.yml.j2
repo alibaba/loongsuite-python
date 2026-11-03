@@ -40,8 +40,11 @@ jobs:
       packages: ${% raw %}{{ steps.detect.outputs.packages }}{% endraw %}
       degraded: ${% raw %}{{ steps.detect.outputs.degraded }}{% endraw %}
       reason: ${% raw %}{{ steps.detect.outputs.reason }}{% endraw %}
-      has_jobs: ${% raw %}{{ steps.matrix.outputs.has_jobs }}{% endraw %}
-      matrix: ${% raw %}{{ steps.matrix.outputs.matrix }}{% endraw %}
+      {%- for chunk in job_chunks %}
+      {%- set suffix = "" if loop.first else "_" ~ loop.index0 %}
+      has_jobs{{ suffix }}: ${% raw %}{{ steps.matrix{% endraw %}{{ suffix }}{% raw %}.outputs.has_jobs }}{% endraw %}
+      matrix{{ suffix }}: ${% raw %}{{ steps.matrix{% endraw %}{{ suffix }}{% raw %}.outputs.matrix }}{% endraw %}
+      {%- endfor %}
     steps:
       - name: Checkout repo @ SHA - ${% raw %}{{ github.sha }}{% endraw %}
         uses: actions/checkout@v4
@@ -79,12 +82,15 @@ jobs:
             run_detector "$detector"
           fi
 
-      - name: Select LoongSuite test matrix
-        id: matrix
+      {%- for chunk in job_chunks %}
+      {%- set suffix = "" if loop.first else "_" ~ loop.index0 %}
+
+      - name: Select LoongSuite test matrix{{ "" if loop.first else " " ~ loop.index0 }}
+        id: matrix{{ suffix }}
         shell: bash
         env:
           LOONGSUITE_ALL_JOBS: >-
-            {{ job_datas | tojson }}
+            {{ chunk | tojson }}
           LOONGSUITE_FULL: ${% raw %}{{ steps.detect.outputs.full }}{% endraw %}
           LOONGSUITE_PACKAGES: ${% raw %}{{ steps.detect.outputs.packages }}{% endraw %}
         run: |
@@ -100,17 +106,20 @@ jobs:
           else
             run_selector "$selector"
           fi
+      {%- endfor %}
+{%- for chunk in job_chunks %}
+{%- set suffix = "" if loop.first else "_" ~ loop.index0 %}
 
-  loongsuite_test:
+  loongsuite_test{{ suffix }}:
     name: LoongSuite ${% raw %}{{ matrix.ui_name }}{% endraw %}
     needs: loongsuite_changes
-    if: ${% raw %}{{ needs.loongsuite_changes.outputs.has_jobs == 'true' }}{% endraw %}
+    if: ${% raw %}{{ needs.loongsuite_changes.outputs.has_jobs{% endraw %}{{ suffix }}{% raw %} == 'true' }}{% endraw %}
     runs-on: ${% raw %}{{ matrix.os }}{% endraw %}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       max-parallel: 20
-      matrix: ${% raw %}{{ fromJSON(needs.loongsuite_changes.outputs.matrix) }}{% endraw %}
+      matrix: ${% raw %}{{ fromJSON(needs.loongsuite_changes.outputs.matrix{% endraw %}{{ suffix }}{% raw %}) }}{% endraw %}
     steps:
       - name: Checkout repo @ SHA - ${% raw %}{{ github.sha }}{% endraw %}
         uses: actions/checkout@v4
@@ -130,12 +139,16 @@ jobs:
 
       - name: Run tests
         run: tox -c tox-loongsuite.ini -e ${% raw %}{{ matrix.tox_env }}{% endraw %} -- -ra
+{%- endfor %}
 
   loongsuite_test_result:
     name: LoongSuite Test {{ file_number }} result
     needs:
       - loongsuite_changes
       - loongsuite_test
+      {%- for chunk in job_chunks[1:] %}
+      - loongsuite_test_{{ loop.index }}
+      {%- endfor %}
     if: ${% raw %}{{ always() }}{% endraw %}
     runs-on: {{ control_runner }}
     steps:
@@ -145,6 +158,10 @@ jobs:
           changes_result="${% raw %}{{ needs.loongsuite_changes.result }}{% endraw %}"
           test_result="${% raw %}{{ needs.loongsuite_test.result }}{% endraw %}"
           has_jobs="${% raw %}{{ needs.loongsuite_changes.outputs.has_jobs }}{% endraw %}"
+          {%- for chunk in job_chunks[1:] %}
+          test_result_{{ loop.index }}="${% raw %}{{ needs.loongsuite_test_{% endraw %}{{ loop.index }}{% raw %}.result }}{% endraw %}"
+          has_jobs_{{ loop.index }}="${% raw %}{{ needs.loongsuite_changes.outputs.has_jobs_{% endraw %}{{ loop.index }}{% raw %} }}{% endraw %}"
+          {%- endfor %}
           detector_degraded="${% raw %}{{ needs.loongsuite_changes.outputs.degraded }}{% endraw %}"
           detector_reason="${% raw %}{{ needs.loongsuite_changes.outputs.reason }}{% endraw %}"
           echo "::notice::LoongSuite detector degraded=$detector_degraded reason=$detector_reason"
@@ -160,4 +177,14 @@ jobs:
             echo "::error::loongsuite_test ended with $test_result"
             exit 1
           fi
+          {%- for chunk in job_chunks[1:] %}
+          if [[ "$test_result_{{ loop.index }}" == "skipped" && "$has_jobs_{{ loop.index }}" != "false" ]]; then
+            echo "::error::loongsuite_test_{{ loop.index }} skipped unexpectedly with has_jobs_{{ loop.index }}=$has_jobs_{{ loop.index }}"
+            exit 1
+          fi
+          if [[ "$test_result_{{ loop.index }}" != "success" && "$test_result_{{ loop.index }}" != "skipped" ]]; then
+            echo "::error::loongsuite_test_{{ loop.index }} ended with $test_result_{{ loop.index }}"
+            exit 1
+          fi
+          {%- endfor %}
           echo "LoongSuite test matrix completed with $test_result"
