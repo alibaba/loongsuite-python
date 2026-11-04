@@ -327,7 +327,7 @@ For applications where you can edit code and want explicit control over OpenTele
   ```bash
   pip install loongsuite-instrumentation-agentscope
   ```
-  
+
   > **Note:** If you need packages under [`instrumentation-genai/`](instrumentation-genai), use **Option A or B** together with **`loongsuite-distro`** / **`loongsuite-bootstrap`**. Relying only on manual `pip` can cause **dependency resolution conflicts** when [**loongsuite-otel-util-genai**](https://pypi.org/project/loongsuite-otel-util-genai/) and the community **opentelemetry-util-genai** are both pulled in or pinned differently.
 
 **Step 2 — Initialize the OpenTelemetry SDK** before anything emits telemetry. You are wiring the same exporters as in [Configure telemetry export](#configure-telemetry-export).
@@ -406,7 +406,7 @@ For applications where you can edit code and want explicit control over OpenTele
 
 Run **without** changing codes or bootstrap commands: a **`.pth` hook** loads LoongSuite’s distro early (see [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md)).
 
-**Step 1 - Install LoongSuite Site Bootstrap** 
+**Step 1 - Install LoongSuite Site Bootstrap**
 
   ```bash
   pip install loongsuite-site-bootstrap

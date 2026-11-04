@@ -26,7 +26,7 @@ pip install opentelemetry-exporter-otlp loongsuite-instrumentation-langchain
 
 ## 配置优先级
 
-1. **进程环境变量**（导出、容器 env、启动参数等）：已存在的键**不会被** `bootstrap-config.json` 覆盖。  
+1. **进程环境变量**（导出、容器 env、启动参数等）：已存在的键**不会被** `bootstrap-config.json` 覆盖。
 2. **`~/.loongsuite/bootstrap-config.json`**：仅在 **`LOONGSUITE_PYTHON_SITE_BOOTSTRAP` 实际处于开启状态**时才会读取；对文件中出现的键，仅当环境中**尚未设置**时写入 `os.environ`（便于默认带上 OTLP、exporter 等，子进程可继承）。若环境中已显式设置该开关且为“关闭”含义，则**不读** JSON、也不做自动注入。
 
 JSON 根节点须为对象；键必须为字符串。值的类型会转成字符串再写入环境变量：`bool` → `true` / `false`，`int` / `float` → 十进制字符串，`str` → 原样，`null` 跳过，其它类型 → 紧凑 JSON 字符串。
