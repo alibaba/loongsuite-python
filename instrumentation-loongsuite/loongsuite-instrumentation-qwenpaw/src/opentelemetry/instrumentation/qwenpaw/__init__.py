@@ -44,6 +44,10 @@ from opentelemetry.instrumentation.qwenpaw._dream import (
     instrument_dream,
     uninstrument_dream,
 )
+from opentelemetry.instrumentation.qwenpaw._shell_patch import (
+    _MODULE_SHELL,
+    make_execute_shell_command_wrapper,
+)
 from opentelemetry.instrumentation.qwenpaw.package import (
     _instruments_any,
     get_installed_instrumentation_dependencies,
@@ -67,6 +71,7 @@ class QwenPawInstrumentor(BaseInstrumentor):
     def __init__(self) -> None:
         super().__init__()
         self._handler: ExtendedTelemetryHandler | None = None
+        self._shell_command_wrapped = False
 
     def instrumentation_dependencies(self) -> Collection[str]:
         installed = get_installed_instrumentation_dependencies()
@@ -110,11 +115,34 @@ class QwenPawInstrumentor(BaseInstrumentor):
         if any(target.wrapper_kind == "runtime" for target in runtime_targets):
             self._dream_class = instrument_dream()
 
+        try:
+            wrap_function_wrapper(
+                _MODULE_SHELL,
+                "execute_shell_command",
+                make_execute_shell_command_wrapper(),
+            )
+            self._shell_command_wrapped = True
+            logger.debug("Instrumented AgentScope execute_shell_command")
+        except ImportError:
+            logger.debug(
+                "agentscope shell module unavailable; skipping shell hook"
+            )
+
     def _uninstrument(self, **kwargs: Any) -> None:
         del kwargs
         self._handler = None
         uninstrument_dream(getattr(self, "_dream_class", None))
         self._dream_class = None
+        if self._shell_command_wrapped:
+            self._shell_command_wrapped = False
+            try:
+                shell_module = import_module(_MODULE_SHELL)
+                unwrap(shell_module, "execute_shell_command")
+                logger.debug("Uninstrumented AgentScope execute_shell_command")
+            except Exception as exc:
+                logger.warning(
+                    "Failed to uninstrument execute_shell_command: %s", exc
+                )
         for target in get_installed_runtime_targets():
             try:
                 runtime_module = import_module(target.module_name)
