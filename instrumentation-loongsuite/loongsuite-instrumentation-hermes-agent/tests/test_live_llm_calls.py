@@ -102,7 +102,10 @@ def test_sync_llm_call_records_single_llm_span_and_metric(
     assert llm_input_messages[0]["role"] in {"system", "user"}
     assert all("parts" in message for message in llm_input_messages)
     assert span.attributes["gen_ai.response.model"]
-    assert span.attributes["gen_ai.response.id"]
+    assert (
+        span.attributes["gen_ai.response.id"]
+        == "chatcmpl-16b2e5f0-ebac-9b6a-b1f8-6cdf99efa597"
+    )
     assert span.attributes["gen_ai.usage.input_tokens"] > 0
     assert span.attributes["gen_ai.usage.output_tokens"] > 0
     assert span.attributes["gen_ai.response.finish_reasons"]
@@ -169,6 +172,14 @@ def test_streaming_llm_call_records_ttft(
     assert len(llm_spans) == 1
     assert step_spans[0].attributes["gen_ai.react.finish_reason"] == "stop"
     assert llm_spans[0].attributes["gen_ai.response.time_to_first_token"] > 0
+    assert (
+        llm_spans[0].attributes["gen_ai.response.id"]
+        == "chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b"
+    )
+    assert (
+        agent_spans[0].attributes["gen_ai.response.id"]
+        == "chatcmpl-2d34edbc-ab63-9129-944b-df41352dfa4b"
+    )
     assert agent_spans[0].attributes["gen_ai.response.time_to_first_token"] > 0
     assert agent_spans[0].parent is None
     _assert_parent(step_spans[0], agent_spans[0])
