@@ -21,9 +21,14 @@ through ``BaseTool.run`` instead of ``ToolUsage._use``. The OpenAI-compatible
 chat completions are mocked with respx, so these tests need no cassette.
 """
 
+import contextvars
 import json
 import os
+from datetime import date
+from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
 
 import httpx
 import respx
@@ -32,12 +37,14 @@ from crewai.agents import step_executor
 from crewai.agents.agent_executor import AgentExecutor
 from crewai.tools import tool
 from crewai.tools.base_tool import BaseTool, Tool
+from crewai.tools.tool_calling import ToolCalling
 from crewai.tools.tool_failure import ToolFailure
+from crewai.tools.tool_usage import ToolUsage
 from pydantic import BaseModel
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.crewai import (
     CrewAIInstrumentor,
-    _run_arguments,
     _ToolUseWrapper,
 )
 from opentelemetry.test.test_base import TestBase
@@ -109,6 +116,59 @@ class StructuredForecastTool(BaseTool):
     def _run(self, location: str) -> Forecast:
         """Execute the tool."""
         return Forecast(location=location, summary="Sunny")
+
+
+class AccountTool(BaseTool):
+    """Sample tool whose output is rewritten before the agent gets it."""
+
+    name: str = "get_account"
+    description: str = "Get the account of a customer"
+
+    def _run(self, customer: str) -> str:
+        """Execute the tool."""
+        return f"{customer} pays with card 4111-1111-1111-1111"
+
+    def format_output_for_agent(self, raw_result: Any) -> str:
+        """Mask the card number."""
+        masked = str(raw_result).replace("4111-1111-1111-", "****-****-****-")
+        return f"Masked: {masked}"
+
+
+class ReportTool(BaseTool):
+    """Sample tool whose formatter returns data, which crewAI makes text."""
+
+    name: str = "get_report"
+    description: str = "Get the sales report of a quarter"
+
+    def _run(self, quarter: str) -> dict:
+        """Execute the tool."""
+        return {"quarter": quarter, "deals": 12}
+
+    def format_output_for_agent(self, raw_result: Any) -> Any:
+        """Add the report date."""
+        return {**raw_result, "as_of": date(2024, 3, 31)}
+
+
+class MeetingTool(BaseTool):
+    """Sample tool that takes values JSON can't encode as they are."""
+
+    name: str = "book_meeting"
+    description: str = "Book a meeting on a day"
+
+    def _run(self, day: date, attendees: Any = None) -> str:
+        """Execute the tool."""
+        return f"Booked on {day.isoformat()}"
+
+
+class FullyBookedTool(BaseTool):
+    """Sample tool that fails for a day it is given."""
+
+    name: str = "book_room"
+    description: str = "Book a room on a day"
+
+    def _run(self, day: date) -> str:
+        """Execute the tool."""
+        raise RuntimeError(f"No room left on {day.isoformat()}")
 
 
 @tool("lookup_capital")
@@ -219,11 +279,40 @@ class TestNativeToolCalls(TestBase):
 
         return self.memory_exporter.get_finished_spans()
 
+    def react_llm(self):
+        """An LLM without function calling: tools go through ``ToolUsage``."""
+        llm = LLM(
+            model="openai/qwen-turbo",
+            base_url=BASE_URL,
+            api_key="fake-key",
+            is_litellm=True,
+        )
+        self.assertFalse(llm.supports_function_calling())
+        return llm
+
     @staticmethod
     def spans_of_kind(spans, kind):
         return [
             s for s in spans if s.attributes.get("gen_ai.span.kind") == kind
         ]
+
+    def finished_tool_spans(self):
+        return self.spans_of_kind(
+            self.memory_exporter.get_finished_spans(), "TOOL"
+        )
+
+    @staticmethod
+    def call_in_new_context(function, *args, **kwargs):
+        """Call ``function`` in a copy of the current context.
+
+        Returns its result and the span current there after the call, so a
+        span left current cannot leak into other tests.
+        """
+
+        def call():
+            return function(*args, **kwargs), trace.get_current_span()
+
+        return contextvars.copy_context().run(call)
 
     def test_native_tool_call_creates_tool_span(self):
         """A native tool call gets one TOOL span under the AGENT span."""
@@ -365,14 +454,6 @@ class TestNativeToolCalls(TestBase):
 
     def test_react_tool_returning_tool_failure_creates_same_error_span(self):
         """The ReAct path (``ToolUsage._use``) reports it the same way."""
-        react_llm = LLM(
-            model="openai/qwen-turbo",
-            base_url=BASE_URL,
-            api_key="fake-key",
-            is_litellm=True,
-        )
-        self.assertFalse(react_llm.supports_function_calling())
-
         spans = self.kickoff(
             [ForecastTool()],
             chat_completion(
@@ -388,7 +469,7 @@ class TestNativeToolCalls(TestBase):
                     "Final Answer: There is no forecast for Atlantis."
                 )
             ),
-            llm=react_llm,
+            llm=self.react_llm(),
         )
 
         (tool_span,) = self.spans_of_kind(spans, "TOOL")
@@ -406,6 +487,51 @@ class TestNativeToolCalls(TestBase):
             tool_span.attributes.get("gen_ai.tool.call.result"), message
         )
         self.assertEqual(len(tool_span.events), 0)
+
+    def test_native_tool_string_result_is_recorded_as_the_agent_gets_it(self):
+        """A string result goes through the tool's formatter too."""
+        spans = self.kickoff(
+            [AccountTool()],
+            chat_completion(
+                tool_calls=[
+                    tool_call("call_1", "get_account", {"customer": "Ann"})
+                ]
+            ),
+        )
+
+        (tool_span,) = self.spans_of_kind(spans, "TOOL")
+        self.assert_masked_account_span(tool_span)
+
+    def test_react_tool_result_is_not_formatted_again(self):
+        """``ToolUsage._use`` returns the text the agent gets, as is."""
+        spans = self.kickoff(
+            [AccountTool()],
+            chat_completion(
+                content=(
+                    "Thought: I need the account.\n"
+                    "Action: get_account\n"
+                    'Action Input: {"customer": "Ann"}'
+                )
+            ),
+            chat_completion(
+                content=(
+                    "Thought: I now know the final answer\n"
+                    "Final Answer: Ann pays by card."
+                )
+            ),
+            llm=self.react_llm(),
+        )
+
+        (tool_span,) = self.spans_of_kind(spans, "TOOL")
+        self.assert_masked_account_span(tool_span)
+
+    def assert_masked_account_span(self, tool_span):
+        self.assertEqual(tool_span.name, "execute_tool get_account")
+        self.assertEqual(tool_span.status.status_code, StatusCode.OK)
+        self.assertEqual(
+            tool_span.attributes.get("gen_ai.tool.call.result"),
+            "Masked: Ann pays with card ****-****-****-1111",
+        )
 
     def test_native_tool_returning_model_records_text_result(self):
         """A non-JSON result (a pydantic model) still ends the span."""
@@ -440,15 +566,115 @@ class TestNativeToolCalls(TestBase):
             tool_span.attributes.get("gen_ai.tool.call.id"), "get_weather"
         )
 
-    def test_run_arguments_keep_positional_and_keyword_arguments(self):
-        """``run`` arguments are recorded without dropping any of them."""
+    def test_tool_run_records_arguments_json_cannot_encode_as_text(self):
+        """Positional and keyword arguments keep their structure."""
+        day = date(2024, 1, 1)
+        for args, kwargs, recorded in (
+            ((day,), {}, ["2024-01-01"]),
+            ((), {"day": day}, {"day": "2024-01-01"}),
+            (
+                (day,),
+                {"attendees": ("Ann", Decimal("1.5"))},
+                {
+                    "args": ["2024-01-01"],
+                    "kwargs": {"attendees": ["Ann", "1.5"]},
+                },
+            ),
+        ):
+            with self.subTest(args=args, kwargs=kwargs):
+                self.memory_exporter.clear()
+
+                result, current_span = self.call_in_new_context(
+                    MeetingTool().run, *args, **kwargs
+                )
+
+                self.assertEqual(result, "Booked on 2024-01-01")
+                (tool_span,) = self.finished_tool_spans()
+                self.assertEqual(tool_span.status.status_code, StatusCode.OK)
+                self.assertEqual(
+                    json.loads(
+                        tool_span.attributes["gen_ai.tool.call.arguments"]
+                    ),
+                    recorded,
+                )
+                self.assertIs(current_span, trace.INVALID_SPAN)
+
+    def test_failing_tool_run_with_a_date_argument_ends_error_span(self):
+        """Its ERROR span ends, and the tool's exception reaches the caller."""
+
+        def book_room():
+            with self.assertRaises(RuntimeError) as raised:
+                FullyBookedTool().run(day=date(2024, 1, 1))
+            return raised.exception
+
+        error, current_span = self.call_in_new_context(book_room)
+
+        self.assertEqual(str(error), "No room left on 2024-01-01")
+        (tool_span,) = self.finished_tool_spans()
+        self.assertEqual(tool_span.status.status_code, StatusCode.ERROR)
         self.assertEqual(
-            _run_arguments(("Paris",), {"unit": "C"}),
-            {"args": ["Paris"], "kwargs": {"unit": "C"}},
+            json.loads(tool_span.attributes["gen_ai.tool.call.arguments"]),
+            {"day": "2024-01-01"},
         )
-        self.assertEqual(_run_arguments(("Paris",), {}), ["Paris"])
-        self.assertEqual(_run_arguments((), {"unit": "C"}), {"unit": "C"})
-        self.assertIsNone(_run_arguments((), {}))
+        self.assertIs(current_span, trace.INVALID_SPAN)
+
+    def test_tool_usage_records_arguments_json_cannot_encode_as_text(self):
+        """The ReAct path (``ToolUsage._use``) records them the same way."""
+        usage = ToolUsage(
+            tools_handler=None,
+            tools=[MeetingTool().to_structured_tool()],
+            task=None,
+            function_calling_llm=self.llm,
+        )
+        calling = ToolCalling(
+            tool_name="book_meeting", arguments={"day": date(2024, 1, 1)}
+        )
+
+        result, current_span = self.call_in_new_context(
+            usage.use, calling, "book_meeting"
+        )
+
+        self.assertEqual(result, "Booked on 2024-01-01")
+        (tool_span,) = self.finished_tool_spans()
+        self.assertEqual(tool_span.status.status_code, StatusCode.OK)
+        self.assertEqual(
+            json.loads(tool_span.attributes["gen_ai.tool.call.arguments"]),
+            {"day": "2024-01-01"},
+        )
+        self.assertIs(current_span, trace.INVALID_SPAN)
+
+    def test_tool_result_formatted_as_data_is_recorded_as_text(self):
+        """A formatter may return data: crewAI gives the agent its text."""
+        result, current_span = self.call_in_new_context(
+            ReportTool().run, quarter="Q1"
+        )
+
+        self.assertEqual(result, {"quarter": "Q1", "deals": 12})
+        (tool_span,) = self.finished_tool_spans()
+        self.assertEqual(tool_span.status.status_code, StatusCode.OK)
+        self.assertEqual(
+            tool_span.attributes["gen_ai.tool.call.result"],
+            "{'quarter': 'Q1', 'deals': 12, "
+            "'as_of': datetime.date(2024, 3, 31)}",
+        )
+        self.assertIs(current_span, trace.INVALID_SPAN)
+
+    def test_tool_result_is_not_formatted_without_content_capture(self):
+        """The span records no result, so the formatter is not run for it."""
+        no_content = {
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT"
+        }
+        with (
+            patch.dict(os.environ, no_content),
+            patch.object(
+                StructuredForecastTool, "format_output_for_agent"
+            ) as format_output,
+        ):
+            StructuredForecastTool().run(location="Paris")
+
+        format_output.assert_not_called()
+        (tool_span,) = self.finished_tool_spans()
+        self.assertNotIn("gen_ai.tool.call.result", tool_span.attributes)
 
     def test_tool_run_inside_traced_tool_use_is_not_traced_again(self):
         """``run`` inside a traced ``ToolUsage._use`` of that tool: one span."""

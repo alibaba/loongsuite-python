@@ -28,6 +28,7 @@ from opentelemetry.instrumentation.crewai.utils import (
     OP_NAME_CREW,
     OP_NAME_FLOW,
     GenAIHookHelper,
+    _should_capture_content,
     apply_usage_metrics,
     create_agent_invocation,
     create_entry_invocation,
@@ -378,12 +379,19 @@ def _finish_tool_success(
     result: Any,
     instance: Any,
     tool: Any,
+    *,
+    formatted: bool,
 ) -> None:
     error: RuntimeError | None = None
 
     def post_process() -> None:
         nonlocal error
-        invocation.tool_call_result = _tool_result_for_agent(tool, result)
+        # The span records the result only with content capture; only then
+        # is it worth running the tool's formatter for it.
+        if _should_capture_content():
+            invocation.tool_call_result = _tool_result_for_agent(
+                tool, result, formatted=formatted
+            )
         if _is_tool_parsing_error(instance):
             error = RuntimeError(
                 "CrewAI tool parsing attempts exceeded for "
@@ -435,18 +443,29 @@ def _fail_tool(
     )
 
 
-def _tool_result_for_agent(tool: Any, result: Any) -> Any:
-    """``result`` as the text the agent gets, as ``ToolUsage._use`` returns.
+def _tool_result_for_agent(
+    tool: Any, result: Any, *, formatted: bool
+) -> str | None:
+    """``result`` as the text the agent gets.
 
+    ``ToolUsage._use`` returns that text already (``formatted``).
     ``BaseTool.run`` returns the raw result, which need not be JSON
-    serializable: a pydantic model or a ``ToolFailure``, for instance.
+    serializable (a pydantic model, for instance); it is formatted as
+    crewAI's native tool dispatch does: a ``ToolFailure`` gives its agent
+    message, and any other result, a string too, goes through the tool's
+    ``format_output_for_agent``, which may rewrite or redact it.
     """
-    if result is None or isinstance(result, str):
-        return result
+    if result is None:
+        return None
+    if formatted:
+        return str(result)
+    failure = _returned_tool_failure(result, None)
+    if failure is not None:
+        return failure.as_agent_message()
     format_output = getattr(tool, "format_output_for_agent", None)
     if callable(format_output):
         try:
-            return format_output(result)
+            return str(format_output(result))
         except Exception:  # pylint: disable=broad-exception-caught
             logger.debug(
                 "Could not format a CrewAI tool result", exc_info=True
@@ -992,6 +1011,7 @@ class _ToolUseWrapper:
             result,
             instance,
             tool,
+            formatted=True,
         )
         return result
 
@@ -1039,7 +1059,13 @@ class _ToolRunWrapper:
             _ACTIVE_TOOL.reset(tool_token)
 
         _finish_tool_success(
-            self._handler, invocation, started, result, None, instance
+            self._handler,
+            invocation,
+            started,
+            result,
+            None,
+            instance,
+            formatted=False,
         )
         return result
 
