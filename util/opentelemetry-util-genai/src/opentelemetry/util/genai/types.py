@@ -178,7 +178,7 @@ class InputMessage:
 class OutputMessage:
     role: str
     parts: list[MessagePart]
-    finish_reason: str | FinishReason
+    finish_reason: str | FinishReason | None
 
 
 # LoongSuite Extension

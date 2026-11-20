@@ -194,6 +194,8 @@ def test_sync_messages_create_token_usage(
     span = spans[0]
     assert GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS in span.attributes
     assert GenAIAttributes.GEN_AI_USAGE_OUTPUT_TOKENS in span.attributes
+    assert span.attributes["gen_ai.usage.cache_creation.input_tokens"] == 0
+    assert span.attributes["gen_ai.usage.cache_read.input_tokens"] == 0
     assert (
         span.attributes[GenAIAttributes.GEN_AI_USAGE_INPUT_TOKENS]
         == response.usage.input_tokens
