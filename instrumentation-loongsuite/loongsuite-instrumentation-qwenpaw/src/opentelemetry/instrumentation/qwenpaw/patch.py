@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable
 
 from opentelemetry import context as otel_context
-from opentelemetry import propagate
+from opentelemetry import propagate, trace
 from opentelemetry.context import Context
 from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
@@ -292,16 +292,33 @@ async def _entry_stream(
             _finish_entry(state)
 
 
+def _child_parent_context() -> Context | None:
+    if not is_copaw_child_agent_process():
+        return None
+    try:
+        parent = propagate.extract(
+            {}, context=Context(), getter=EnvironmentGetter()
+        )
+        if trace.get_current_span(parent).get_span_context().is_valid:
+            return parent
+    except Exception:
+        logger.debug("Failed to extract child trace context", exc_info=True)
+    return None
+
+
 async def _child_stream(
     wrapped: Any,
     args: Any,
     kwargs: Any,
+    parent_context: Context,
 ) -> AsyncIterator[Any]:
     """Run a child agent under its propagated parent without another Entry."""
 
-    parent_context = propagate.extract({}, getter=EnvironmentGetter())
-    business_stream = wrapped(*args, **kwargs)
-    iterator = business_stream.__aiter__()
+    token = otel_context.attach(parent_context)
+    try:
+        iterator = wrapped(*args, **kwargs).__aiter__()
+    finally:
+        _safe_detach(token)
     try:
         while True:
             token = otel_context.attach(parent_context)
@@ -312,7 +329,7 @@ async def _child_stream(
             finally:
                 _safe_detach(token)
             yield item
-    except GeneratorExit:
+    except (GeneratorExit, asyncio.CancelledError):
         token = otel_context.attach(parent_context)
         try:
             await _close_iterator(iterator)
@@ -333,12 +350,9 @@ def make_query_handler_wrapper(
         args: Any,
         kwargs: Any,
     ) -> Any:
-        if is_copaw_child_agent_process():
-            logger.debug(
-                "Using propagated parent for child %s.AgentRunner.query_handler",
-                module_name,
-            )
-            return _child_stream(wrapped, args, kwargs)
+        parent = _child_parent_context()
+        if parent is not None:
+            return _child_stream(wrapped, args, kwargs, parent)
         invocation = _build_entry(
             _build_query_handler_entry,
             instance,
@@ -373,6 +387,9 @@ def make_runtime_wrapper(
         args: Any,
         kwargs: Any,
     ) -> Any:
+        parent = _child_parent_context()
+        if parent is not None:
+            return _child_stream(wrapped, args, kwargs, parent)
         invocation = _build_entry(
             _build_runtime_entry,
             instance,

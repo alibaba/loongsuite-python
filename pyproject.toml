@@ -178,6 +178,8 @@ ignore = [
 "docs/**/*.*" = ["A001"]
 # The benchmark integrations in PR #200 build fake optional dependency modules
 # inside tests and import several optional targets lazily inside patch paths.
+"instrumentation-loongsuite/loongsuite-instrumentation-a2a/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-a2a/tests/**/*.py" = ["E402", "F811"]
 "instrumentation-loongsuite/loongsuite-instrumentation-algotune/**/*.py" = ["PLC0415"]
 "instrumentation-loongsuite/loongsuite-instrumentation-algotune/tests/**/*.py" = ["E402", "F811"]
 "instrumentation-loongsuite/loongsuite-instrumentation-bfclv4/**/*.py" = ["PLC0415"]
@@ -185,6 +187,8 @@ ignore = [
 "instrumentation-loongsuite/loongsuite-instrumentation-claw-eval/**/*.py" = ["PLC0415"]
 "instrumentation-loongsuite/loongsuite-instrumentation-claw-eval/src/opentelemetry/instrumentation/claw_eval/internal/wrappers.py" = ["E402"]
 "instrumentation-loongsuite/loongsuite-instrumentation-claw-eval/tests/**/*.py" = ["E402", "F811"]
+"instrumentation-loongsuite/loongsuite-instrumentation-llama-index/**/*.py" = ["PLC0415"]
+"instrumentation-loongsuite/loongsuite-instrumentation-llama-index/tests/**/*.py" = ["E402", "F811"]
 "instrumentation-loongsuite/loongsuite-instrumentation-minisweagent/**/*.py" = ["PLC0415"]
 "instrumentation-loongsuite/loongsuite-instrumentation-minisweagent/tests/**/*.py" = ["E402", "F811"]
 "instrumentation-loongsuite/loongsuite-instrumentation-openhands/**/*.py" = ["PLC0415"]

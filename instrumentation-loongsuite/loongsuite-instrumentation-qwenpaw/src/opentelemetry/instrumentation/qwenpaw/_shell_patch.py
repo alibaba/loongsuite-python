@@ -12,35 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Inject trace context into AgentScope shell-command subprocesses."""
+"""Propagate the active trace into the framework shell tool's child process."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-from typing import Any, Callable
+from importlib import import_module
 
-from opentelemetry import propagate
+from wrapt import ObjectProxy
 
-from ._constants import (
-    COPAW_OTEL_CHILD_AGENT,
-    COPAW_OTEL_INJECT_SHELL_TRACE,
-)
+from opentelemetry import propagate, trace
+
+from ._constants import COPAW_OTEL_CHILD_AGENT, COPAW_OTEL_INJECT_SHELL_TRACE
 from ._env_carrier import EnvironmentSetter
 
 logger = logging.getLogger(__name__)
 
-_MODULE_SHELL = "agentscope.tool._coding._shell"
-_PATCH_TARGET = "execute_shell_command"
-
-
-def _truthy_env(name: str) -> bool:
-    return os.environ.get(name, "").lower() in ("1", "true", "yes", "on")
-
 
 def should_inject_trace_for_shell_command(command: str) -> bool:
-    if _truthy_env(COPAW_OTEL_INJECT_SHELL_TRACE):
+    if os.environ.get(COPAW_OTEL_INJECT_SHELL_TRACE, "").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    ):
         return True
     command = command.lower()
     return (
@@ -50,98 +46,67 @@ def should_inject_trace_for_shell_command(command: str) -> bool:
     )
 
 
-async def _run_shell_command_with_env(
-    command: str,
-    timeout: int,
-    env: dict[str, str],
-) -> Any:
-    from agentscope.message import TextBlock  # noqa: PLC0415
-    from agentscope.tool._response import ToolResponse  # noqa: PLC0415
-
-    proc = await asyncio.create_subprocess_shell(
-        command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        bufsize=0,
-        env=env,
-    )
+def _build_subprocess_env(command, env):
+    if not should_inject_trace_for_shell_command(command):
+        return env
+    if not trace.get_current_span().get_span_context().is_valid:
+        return env
+    delta = {}
     try:
-        await asyncio.wait_for(proc.wait(), timeout=timeout)
-        stdout, stderr = await proc.communicate()
-        stdout_str = stdout.decode("utf-8")
-        stderr_str = stderr.decode("utf-8")
-        returncode = proc.returncode
-    except asyncio.TimeoutError:
-        suffix = (
-            "TimeoutError: The command execution exceeded "
-            f"the timeout of {timeout} seconds."
-        )
-        returncode = -1
-        try:
-            proc.terminate()
-            stdout, stderr = await proc.communicate()
-            stdout_str = stdout.decode("utf-8")
-            stderr_str = stderr.decode("utf-8")
-            stderr_str = f"{stderr_str}\n{suffix}" if stderr_str else suffix
-        except ProcessLookupError:
-            stdout_str = ""
-            stderr_str = suffix
-
-    return ToolResponse(
-        content=[
-            TextBlock(
-                type="text",
-                text=(
-                    f"<returncode>{returncode}</returncode>"
-                    f"<stdout>{stdout_str}</stdout>"
-                    f"<stderr>{stderr_str}</stderr>"
-                ),
-            )
-        ]
-    )
-
-
-def _build_subprocess_env() -> dict[str, str]:
-    merged = os.environ.copy()
-    delta: dict[str, str] = {}
-    try:
-        propagate.get_global_textmap().inject(
-            delta, setter=EnvironmentSetter()
-        )
+        propagate.inject(delta, setter=EnvironmentSetter())
     except Exception:
-        logger.debug("Failed to inject trace into env", exc_info=True)
-        return merged
-    merged.update(delta)
-    merged[COPAW_OTEL_CHILD_AGENT] = "1"
-    return merged
-
-
-def make_execute_shell_command_wrapper() -> Callable[..., Any]:
-    async def execute_shell_command_wrapper(
-        wrapped: Any,
-        instance: Any,
-        args: Any,
-        kwargs: Any,
-    ) -> Any:
-        del instance
-        command = str(args[0]) if args else str(kwargs.get("command", ""))
-        timeout = (
-            int(args[1]) if len(args) >= 2 else int(kwargs.get("timeout", 300))
+        logger.debug(
+            "Failed to inject trace into shell environment", exc_info=True
         )
-        if not should_inject_trace_for_shell_command(command):
-            return await wrapped(*args, **kwargs)
+        return env
+    if not delta:
+        return env
+    return {
+        **(os.environ if env is None else env),
+        **delta,
+        COPAW_OTEL_CHILD_AGENT: "1",
+    }
 
-        try:
-            return await _run_shell_command_with_env(
-                command, timeout, _build_subprocess_env()
-            )
-        except Exception:
-            logger.debug(
-                "%s.%s inject path failed; falling back to original",
-                _MODULE_SHELL,
-                _PATCH_TARGET,
-                exc_info=True,
-            )
-            return await wrapped(*args, **kwargs)
 
-    return execute_shell_command_wrapper
+class _ShellAsyncio(ObjectProxy):
+    """Intercept only process creation in the framework's own shell module."""
+
+    def __init__(self, module):
+        super().__init__(module.asyncio)
+        self._self_windows_runner = getattr(
+            module, "_execute_subprocess_sync", None
+        )
+
+    async def create_subprocess_shell(self, cmd, *args, **kwargs):
+        kwargs["env"] = _build_subprocess_env(cmd, kwargs.get("env"))
+        return await self.__wrapped__.create_subprocess_shell(
+            cmd, *args, **kwargs
+        )
+
+    async def to_thread(self, func, *args, **kwargs):
+        if func is self._self_windows_runner and len(args) >= 4:
+            cmd, cwd, timeout, env, *rest = args
+            args = (cmd, cwd, timeout, _build_subprocess_env(cmd, env), *rest)
+        return await self.__wrapped__.to_thread(func, *args, **kwargs)
+
+
+def instrument_shell(distribution):
+    try:
+        module = import_module(f"{distribution}.agents.tools.shell")
+    except ImportError:
+        logger.debug(
+            "Shell tool is unavailable in %s", distribution, exc_info=True
+        )
+        return None
+    if not hasattr(module, "asyncio"):
+        return None
+    proxy = _ShellAsyncio(module)
+    module.asyncio = proxy
+    return module, proxy
+
+
+def uninstrument_shell(binding):
+    if binding is not None:
+        module, proxy = binding
+        if module.asyncio is proxy:
+            module.asyncio = proxy.__wrapped__

@@ -182,7 +182,7 @@ spans carry the same request identity.
 
 ## Child agent trace propagation
 
-When an AgentScope shell tool launches `copaw agents chat` or
+When the QwenPaw or CoPaw shell tool launches `copaw agents chat` or
 `qwenpaw agents chat`, this instrumentation injects the current OpenTelemetry
 context into the subprocess environment. The child continues the parent trace
 without creating a second application Entry span. Set
