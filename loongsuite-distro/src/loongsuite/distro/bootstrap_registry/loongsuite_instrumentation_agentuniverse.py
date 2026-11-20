@@ -24,7 +24,7 @@ REGISTRY = {
     "package": "loongsuite-instrumentation-agentuniverse",
     "instrumentation": "loongsuite-instrumentation-agentuniverse==0.10.0.dev",
     "libraries": [
-        "agentUniverse >= 0.0.19",
+        "agentUniverse == 0.1.0a2",
     ],
     "default": False,
 }

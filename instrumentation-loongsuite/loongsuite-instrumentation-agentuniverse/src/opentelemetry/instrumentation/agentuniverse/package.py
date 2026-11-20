@@ -12,5 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-_instruments = ("agentUniverse >= 0.0.19.1",)
+_instruments = ("agentUniverse == 0.1.0a2",)
 _supports_metrics = True

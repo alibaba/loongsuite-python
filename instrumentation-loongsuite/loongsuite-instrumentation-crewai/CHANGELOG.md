@@ -9,9 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Trace the tools that crewAI calls by native function calling: it runs them
+  through `BaseTool.run` instead of `ToolUsage._use`, so they had no TOOL
+  span. Their spans carry the model's tool call id, and their result is the
+  text the agent gets from the tool's `format_output_for_agent`. A tool that
+  returns a `ToolFailure` instead of raising now gets an ERROR span, on the
+  ReAct path too. Tool arguments that JSON cannot encode, such as a
+  `datetime.date`, are recorded as text: they left the TOOL span unfinished
+  and current.
+  ([#292](https://github.com/alibaba/loongsuite-python/pull/292))
 - Keep incidental provider requests out of the CrewAI VCR cassettes so a
   first-use model-metadata fetch cannot fail the recorded tests.
   ([#270](https://github.com/alibaba/loongsuite-python/pull/270))
+- Keep the CrewAI tests off the network: turn off crewAI's telemetry and
+  version check, stop VCR from passing requests through to real hosts, and
+  block real connections. A telemetry export in flight let concurrent LLM
+  calls skip their cassettes, so tests failed at random.
+  ([#287](https://github.com/alibaba/loongsuite-python/pull/287))
+- Fix the CrewAI tests on crewAI 1.15.31 and later: its LiteLLM fallback, which
+  serves the tests' `openai/qwen-turbo` model, needs litellm 1.97.0 or later,
+  and the tests' `aiohttp<3.12` cap held litellm at 1.95.0.
+  ([#290](https://github.com/alibaba/loongsuite-python/pull/290))
 
 ## Version 0.9.0 (2026-09-07)
 

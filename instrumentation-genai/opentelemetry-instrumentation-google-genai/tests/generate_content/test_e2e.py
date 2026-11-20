@@ -40,16 +40,6 @@ import yaml
 from google.genai import types
 from vcr.record_mode import RecordMode
 
-try:
-    # These modules are only supported in python >= 3.10
-    from aiohttp import StreamReader
-    from aiohttp.client_exceptions import ClientConnectionError
-    from vcr.stubs import aiohttp_stubs
-except ImportError:
-    StreamReader = None
-    ClientConnectionError = None
-    aiohttp_stubs = None
-
 from opentelemetry.instrumentation._semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN,
     _OpenTelemetrySemanticConventionStability,
@@ -327,54 +317,6 @@ def setup_vcr(vcr):
     vcr.register_serializer("yaml", _PrettyPrintJSONBody)
     vcr.serializer = "yaml"
     return vcr
-
-
-@pytest.fixture(name="patch_vcr_aiohttp_stream", scope="module", autouse=True)
-def fixture_patch_vcr_aiohttp_stream():
-    # Allows the async tests to not be stuck in infinite loop when streaming
-    # a VCR cassette with aiohttp stubs.
-    # https://github.com/kevin1024/vcrpy/issues/927
-    if ClientConnectionError is None or aiohttp_stubs is None:
-        return
-    # vcrpy releases that include https://github.com/kevin1024/vcrpy/pull/1055
-    # fix this themselves: a replayed response keeps a single aiohttp
-    # StreamReader as its content. The patch below is not needed there, and
-    # would break replaying.
-    if issubclass(aiohttp_stubs.MockStream, StreamReader):
-        return
-
-    class _ReplayMockStream(aiohttp_stubs.MockStream):
-        # Keep vcrpy's stream behavior, but ignore aiohttp's
-        # close-time ClientConnectionError("Connection closed") during
-        # cassette replay, where the full response is already buffered
-        # and this condition should be treated as normal EOF.
-        def set_exception(self, exc):
-            if isinstance(exc, ClientConnectionError) and exc.args == (
-                "Connection closed",
-            ):
-                return
-            super().set_exception(exc)
-
-    class _ReplayMockClientResponse(aiohttp_stubs.MockClientResponse):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self._mock_content_stream = None
-
-        @property
-        def content(self):
-            # vcrpy's aiohttp MockClientResponse.content creates a fresh stream object
-            # on every property access. google-genai async streaming repeatedly reads
-            # response.content.readline() and expects the same stream instance until EOF is
-            # reached.
-            if self._mock_content_stream is None:
-                body = self._body or b""
-                stream = _ReplayMockStream()
-                stream.feed_data(body)
-                stream.feed_eof()
-                self._mock_content_stream = stream
-            return self._mock_content_stream
-
-    aiohttp_stubs.MockClientResponse = _ReplayMockClientResponse
 
 
 @pytest.fixture(name="instrumentor")
