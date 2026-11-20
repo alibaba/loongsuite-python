@@ -30,12 +30,16 @@
 # the crewai latest supported version of external dependencies.
 
 crewai>=0.80.0
-litellm>=1.79.0
+# crewAI runs "openai/qwen-turbo" through its LiteLLM fallback, which since
+# crewAI 1.15.31 needs litellm 1.97.0+ and otherwise reports LiteLLM as not
+# installed. Such litellm releases need aiohttp 3.14.2+, so aiohttp is not
+# capped. Not crewai[litellm]: it pins litellm 1.100.4, which fails to
+# import on Python 3.10.
+litellm>=1.97.0
 openai>=2.0.0
 respx>=0.20.0
 pysqlite3
 vcrpy>=6.0.0
-aiohttp<3.12
 opentelemetry-test-utils
 pytest-recording>=0.13.0
 opentelemetry-api

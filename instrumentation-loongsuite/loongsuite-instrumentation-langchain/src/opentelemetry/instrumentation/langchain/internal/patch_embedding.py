@@ -27,9 +27,12 @@ subclass overrides them.  We use the same strategy as ``patch_rerank.py``:
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import logging
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
+from weakref import WeakSet
 
 import wrapt
 
@@ -53,7 +56,7 @@ _EMBEDDING_CALL_DEPTH: contextvars.ContextVar[int] = contextvars.ContextVar(
 
 # Module-level state for uninstrumentation.
 _original_init_subclass: Any = None
-_patched_classes: set[type] = set()
+_patched_classes: WeakSet[type] = WeakSet()
 _already_instrumented: bool = False
 
 _WRAPPER_TAG = "_loongsuite_embedding_wrapped"
@@ -187,81 +190,58 @@ def _build_invocation(instance: Any) -> EmbeddingInvocation:
     )
 
 
-def _make_sync_wrapper(handler: "ExtendedTelemetryHandler") -> Any:
-    """Return a ``wrapt``-style wrapper for sync embedding methods.
+@contextmanager
+def _embedding_call(handler, instance):
+    parent_depth = _EMBEDDING_CALL_DEPTH.get()
+    if parent_depth:
+        yield
+        return
 
-    Used for both ``embed_documents`` and ``embed_query`` since their
-    instrumentation logic is identical.
-    """
-
-    def wrapper(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
-        parent_depth = _EMBEDDING_CALL_DEPTH.get()
-        depth_token = _EMBEDDING_CALL_DEPTH.set(parent_depth + 1)
+    token = _EMBEDDING_CALL_DEPTH.set(parent_depth + 1)
+    try:
         try:
-            if parent_depth > 0:
-                return wrapped(*args, **kwargs)
-
             invocation = _build_invocation(instance)
+            handler.start_embedding(invocation)
+        except Exception:
+            logger.debug("Failed to start embedding span", exc_info=True)
+            yield
+            return
 
+        try:
+            yield
+        except (Exception, asyncio.CancelledError) as exc:
             try:
-                handler.start_embedding(invocation)
-            except Exception:
-                logger.debug("Failed to start embedding span", exc_info=True)
-                return wrapped(*args, **kwargs)
-
-            try:
-                result = wrapped(*args, **kwargs)
-                handler.stop_embedding(invocation)
-                return result
-            except Exception as exc:
                 handler.fail_embedding(
                     invocation, Error(message=str(exc), type=type(exc))
                 )
-                raise
-        finally:
-            _EMBEDDING_CALL_DEPTH.reset(depth_token)
+            except Exception:
+                logger.debug(
+                    "Failed to finalize embedding error", exc_info=True
+                )
+            raise
+        else:
+            try:
+                handler.stop_embedding(invocation)
+            except Exception:
+                logger.debug("Failed to stop embedding span", exc_info=True)
+    finally:
+        _EMBEDDING_CALL_DEPTH.reset(token)
+
+
+def _make_sync_wrapper(handler: "ExtendedTelemetryHandler") -> Any:
+    def wrapper(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
+        with _embedding_call(handler, instance):
+            return wrapped(*args, **kwargs)
 
     return wrapper
 
 
 def _make_async_wrapper(handler: "ExtendedTelemetryHandler") -> Any:
-    """Return a ``wrapt``-style wrapper for async embedding methods.
-
-    Used for both ``aembed_documents`` and ``aembed_query`` since their
-    instrumentation logic is identical.
-    """
-
-    def wrapper(wrapped: Any, instance: Any, args: Any, kwargs: Any) -> Any:
-        async def _instrumented() -> Any:
-            parent_depth = _EMBEDDING_CALL_DEPTH.get()
-            depth_token = _EMBEDDING_CALL_DEPTH.set(parent_depth + 1)
-            try:
-                if parent_depth > 0:
-                    return await wrapped(*args, **kwargs)
-
-                invocation = _build_invocation(instance)
-
-                try:
-                    handler.start_embedding(invocation)
-                except Exception:
-                    logger.debug(
-                        "Failed to start embedding span", exc_info=True
-                    )
-                    return await wrapped(*args, **kwargs)
-
-                try:
-                    result = await wrapped(*args, **kwargs)
-                    handler.stop_embedding(invocation)
-                    return result
-                except Exception as exc:
-                    handler.fail_embedding(
-                        invocation, Error(message=str(exc), type=type(exc))
-                    )
-                    raise
-            finally:
-                _EMBEDDING_CALL_DEPTH.reset(depth_token)
-
-        return _instrumented()
+    async def wrapper(
+        wrapped: Any, instance: Any, args: Any, kwargs: Any
+    ) -> Any:
+        with _embedding_call(handler, instance):
+            return await wrapped(*args, **kwargs)
 
     return wrapper
 
@@ -298,7 +278,7 @@ def _patch_class(
     Only wraps methods that are defined directly in *cls* (i.e. present
     in ``cls.__dict__``).  Skips classes that are already wrapped.
     """
-    if getattr(cls, _WRAPPER_TAG, False):
+    if cls.__dict__.get(_WRAPPER_TAG, False):
         return
 
     _method_wrappers = {

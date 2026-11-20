@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.embeddings import Embeddings
@@ -345,6 +346,14 @@ class TestEmbeddingDeduplication:
 
 
 class TestEmbeddingInitSubclassHook:
+    def test_overridden_method_on_late_child(self, instrument, span_exporter):
+        class ChildEmbeddings(FakeEmbeddings):
+            def embed_query(self, text):
+                return [0.5]
+
+        assert ChildEmbeddings().embed_query("query") == [0.5]
+        assert len(_find_embedding_spans(span_exporter)) == 1
+
     def test_post_instrumentation_subclass_creates_span(
         self, instrument, span_exporter
     ):
@@ -481,3 +490,41 @@ class TestEmbeddingModelFallback:
         # Span name must not end with a trailing space from an empty model.
         assert spans[0].name.strip() == spans[0].name
         assert "NoModelAttrEmbeddings" in spans[0].name
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("provider_error", [False, True])
+def test_telemetry_failure_preserves_provider_outcome(
+    asynchronous, provider_error
+):
+    handler = Mock()
+    handler.stop_embedding.side_effect = ArithmeticError()
+    handler.fail_embedding.side_effect = ArithmeticError()
+    error = ValueError("provider error")
+    vector = [0.5]
+
+    def provider():
+        if provider_error:
+            raise error
+        return vector
+
+    async def async_provider():
+        return provider()
+
+    def call():
+        if asynchronous:
+            wrapper = patch_embedding._make_async_wrapper(handler)
+            return asyncio.run(
+                wrapper(async_provider, FakeEmbeddings(), (), {})
+            )
+        wrapper = patch_embedding._make_sync_wrapper(handler)
+        return wrapper(provider, FakeEmbeddings(), (), {})
+
+    if provider_error:
+        with pytest.raises(ValueError) as caught:
+            call()
+        assert caught.value is error
+        handler.fail_embedding.assert_called_once()
+    else:
+        assert call() is vector
+        handler.stop_embedding.assert_called_once()
