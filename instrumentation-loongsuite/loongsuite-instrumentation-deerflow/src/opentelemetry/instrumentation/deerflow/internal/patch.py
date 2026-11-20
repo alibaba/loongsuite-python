@@ -24,8 +24,9 @@ import timeit
 import uuid
 from collections.abc import Generator, Iterator
 from contextvars import Context, ContextVar, Token, copy_context
+from threading import RLock
 from typing import Any, Callable
-from weakref import WeakKeyDictionary
+from weakref import ReferenceType, ref
 
 from wrapt import wrap_function_wrapper
 
@@ -72,10 +73,10 @@ _LEGACY_GRAPH_ATTRS = (
 
 _patched_locations: list[tuple[str, str]] = []
 _owned_gateway_wrappers: list[Any] = []
-_original_graph_markers: WeakKeyDictionary[Any, dict[str, Any]] = (
-    WeakKeyDictionary()
-)
-_strong_graph_markers: list[tuple[Any, dict[str, Any]]] = []
+_graph_lock = RLock()
+_original_graph_markers: dict[
+    int, tuple[ReferenceType[Any], dict[str, Any]]
+] = {}
 
 
 class DeerFlowRunError(RuntimeError):
@@ -90,38 +91,40 @@ class DeerFlowRunInterrupted(InterruptedError):
     """A DeerFlow Gateway run was interrupted."""
 
 
-def _track_graph(graph: Any, original_markers: dict[str, Any]) -> None:
-    try:
-        if graph not in _original_graph_markers:
-            _original_graph_markers[graph] = original_markers
-        return
-    except TypeError:
-        pass
-
-    if not any(existing is graph for existing, _ in _strong_graph_markers):
-        _strong_graph_markers.append((graph, original_markers))
-
-
 def mark_deerflow_graph(graph: Any) -> Any:
-    """Mark a graph with DeerFlow semantics and no legacy ReAct flags."""
-    marker_attrs = (
-        AGENT_FRAMEWORK_ATTR,
-        AGENT_STEP_NODE_ATTR,
-        *_LEGACY_GRAPH_ATTRS,
-    )
-    original_markers = {
-        name: getattr(graph, name, _MISSING) for name in marker_attrs
-    }
-    try:
-        setattr(graph, AGENT_FRAMEWORK_ATTR, DEERFLOW_AGENT_FRAMEWORK)
-        setattr(graph, AGENT_STEP_NODE_ATTR, DEERFLOW_AGENT_STEP_NODE)
-        for legacy_attr in _LEGACY_GRAPH_ATTRS:
-            if hasattr(graph, legacy_attr):
-                delattr(graph, legacy_attr)
-    except Exception:  # noqa: BLE001
-        logger.debug("Could not mark DeerFlow graph", exc_info=True)
-        return graph
-    _track_graph(graph, original_markers)
+    """Mark a graph and keep only a weak reference for restoring its state."""
+    identity = id(graph)
+
+    def forget_graph(graph_ref: ReferenceType[Any]) -> None:
+        with _graph_lock:
+            entry = _original_graph_markers.get(identity)
+            if entry is not None and entry[0] is graph_ref:
+                del _original_graph_markers[identity]
+
+    with _graph_lock:
+        if identity in _original_graph_markers:
+            return graph
+        try:
+            graph_ref = ref(graph, forget_graph)
+        except TypeError:
+            return graph
+        original_markers = {
+            name: getattr(graph, name, _MISSING)
+            for name in (
+                AGENT_FRAMEWORK_ATTR,
+                AGENT_STEP_NODE_ATTR,
+                *_LEGACY_GRAPH_ATTRS,
+            )
+        }
+        _original_graph_markers[identity] = graph_ref, original_markers
+        try:
+            setattr(graph, AGENT_FRAMEWORK_ATTR, DEERFLOW_AGENT_FRAMEWORK)
+            setattr(graph, AGENT_STEP_NODE_ATTR, DEERFLOW_AGENT_STEP_NODE)
+            for legacy_attr in _LEGACY_GRAPH_ATTRS:
+                if hasattr(graph, legacy_attr):
+                    delattr(graph, legacy_attr)
+        except Exception:  # noqa: BLE001
+            logger.debug("Could not mark DeerFlow graph", exc_info=True)
     return graph
 
 
@@ -708,25 +711,26 @@ def _resolve_patch_owner(module_name: str, target: str) -> tuple[Any, str]:
 
 
 def _restore_graphs() -> None:
-    tracked = [
-        *_original_graph_markers.items(),
-        *_strong_graph_markers,
-    ]
-    for graph, original_markers in tracked:
-        for attr_name, original_value in original_markers.items():
-            try:
-                if original_value is _MISSING:
-                    if hasattr(graph, attr_name):
-                        delattr(graph, attr_name)
-                else:
-                    setattr(graph, attr_name, original_value)
-            except Exception:  # noqa: BLE001
-                logger.debug(
-                    "Could not restore DeerFlow graph marker",
-                    exc_info=True,
-                )
-    _original_graph_markers.clear()
-    _strong_graph_markers.clear()
+    with _graph_lock:
+        for graph_ref, original_markers in list(
+            _original_graph_markers.values()
+        ):
+            graph = graph_ref()
+            if graph is None:
+                continue
+            for attr_name, original_value in original_markers.items():
+                try:
+                    if original_value is _MISSING:
+                        if hasattr(graph, attr_name):
+                            delattr(graph, attr_name)
+                    else:
+                        setattr(graph, attr_name, original_value)
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        "Could not restore DeerFlow graph marker",
+                        exc_info=True,
+                    )
+        _original_graph_markers.clear()
 
 
 def _restore_late_gateway_aliases() -> None:

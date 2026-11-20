@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Test LoongSuite instrumentation packages and `loongsuite-distro` on Python
+  3.14 and add the Python 3.14 classifier. CrewAI, LangChain, OpenHands and
+  QwenPaw stay on Python 3.13 and older: `crewai`, `openhands-ai` and `qwenpaw`
+  require Python < 3.14, and the LangChain tests use `langchain` 0.3, whose
+  `langchain.chains` does not import on Python 3.14.
+- Test LoongSuite instrumentation packages and `loongsuite-distro` on Python
+  3.15 and add the Python 3.15 classifier. LiteLLM, Google ADK (whose tests
+  install `litellm`) and Vita stay on Python 3.14 and older: `litellm` requires
+  Python < 3.15, its older releases need `fastuuid`, which has no Python 3.15
+  wheels and does not build there, and `vita` has no Python 3.15 wheels.
+
+### Changed
+
+- Upgrade the vulnerable packages in the development `uv.lock` and the
+  `uv-pre-commit` hook.
+  ([#288](https://github.com/alibaba/loongsuite-python/pull/288))
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Added

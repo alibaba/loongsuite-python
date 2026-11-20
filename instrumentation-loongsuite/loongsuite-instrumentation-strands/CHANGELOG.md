@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Normalize public Strands reasoning text as GenAI reasoning parts on model
+  spans and conversation history, excluding signatures and redacted content.
+- Keep agent output limited to the final response while retaining reasoning
+  and tool transcripts on the corresponding model and tool spans.
+- Tolerate the framework-owned baggage context detach that runs when an
+  application closes a strand stream from another context, so `strands-agents`
+  1.60.0 and later no longer surface a spurious `Failed to detach context`
+  error while the instrumentation's own context hygiene is unchanged.
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Added

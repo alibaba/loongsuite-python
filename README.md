@@ -548,6 +548,12 @@ our [DingTalk group](https://qr.dingtalk.com/action/joingroup?code=v1,k1,mexukXI
 |----|----|
 | <img src="docs/_assets/img/loongsuite-go-sig-dingtalk.png" height="150"> | <img src="docs/_assets/img/loongsuite-java-sig-dingtalk.jpg" height="150"> |
 
+### Maintainers
+
+- [sipercai](https://github.com/sipercai), Alibaba
+- [123liuziming](https://github.com/123liuziming), Alibaba
+- [RichardoMrMu](https://github.com/RichardoMrMu), ByteDance
+
 ## Resources
 * AgentScope: https://github.com/modelscope/agentscope
 * Observability Community: https://observability.cn

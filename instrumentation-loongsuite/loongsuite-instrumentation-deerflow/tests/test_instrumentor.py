@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import gc
 import importlib
 import inspect
 import subprocess
@@ -27,6 +28,7 @@ from importlib.metadata import (
     version as distribution_version,
 )
 from types import ModuleType
+from weakref import ref
 
 import pytest
 from packaging.version import Version
@@ -354,6 +356,19 @@ def test_create_agent_alias_marks_only_deerflow_semantics():
     assert not hasattr(graph, AGENT_FRAMEWORK_ATTR)
     assert not hasattr(graph, AGENT_STEP_NODE_ATTR)
     assert graph._loongsuite_react_agent is True
+
+
+def test_unhashable_graph_can_be_collected_while_instrumented():
+    class UnhashableGraph(_Graph):
+        __hash__ = None
+
+    graph = UnhashableGraph()
+    mark_deerflow_graph(graph)
+    assert getattr(graph, AGENT_FRAMEWORK_ATTR) == "deerflow"
+    graph_ref = ref(graph)
+    del graph
+    gc.collect()
+    assert graph_ref() is None
 
 
 def test_uninstrument_restores_previous_graph_semantics():

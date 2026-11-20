@@ -7,11 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Test on Python 3.15 and add the Python 3.15 classifier.
+
 ### Fixed
 
 - Preserve an internal ENTRY-active context marker across nested spans so
   framework adapters can honor an existing host application entry without
   creating duplicate ENTRY spans.
+
+- Correct rerank field names and standardize manual instrumentation examples on
+  explicit Invocation objects. Document custom attribute boundaries, content and
+  event coverage, Provider setup, context lifetimes, and version troubleshooting.
+  Present GenAI Utils as a standalone library configured through the OpenTelemetry
+  SDK, with optional storage backends separate from the setup guide.
+- Fix the API docs build: Sphinx read the "Streaming:" prefix of the
+  `InvokeAgentInvocation.monotonic_first_token_s` docstring as a type and
+  failed on the missing `Streaming` class.
+- `ExtendedTelemetryHandler` now always detaches the context and ends the span
+  in its `stop_*` and `fail_*` methods, as `stop_llm` and `fail_llm` do, even
+  when applying attributes, events or metrics raises; the error still reaches
+  the caller. For example, a tool argument that JSON cannot encode, such as a
+  `datetime.date`, left the TOOL span unfinished and current, so later spans
+  became its children.
 
 ## Version 0.9.0 (2026-09-07)
 

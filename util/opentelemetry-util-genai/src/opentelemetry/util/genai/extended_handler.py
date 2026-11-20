@@ -139,6 +139,40 @@ def is_entry_context_active(context: Context | None = None) -> bool:
     )
 
 
+@contextmanager
+def _detach_and_end(
+    invocation: Union[
+        CreateAgentInvocation,
+        EmbeddingInvocation,
+        EntryInvocation,
+        ExecuteToolInvocation,
+        InvokeAgentInvocation,
+        MemoryInvocation,
+        ReactStepInvocation,
+        RerankInvocation,
+        RetrievalInvocation,
+    ],
+) -> Iterator[None]:
+    """Detach the invocation's context and end its span after the block.
+
+    LoongSuite Extension: cleanup must survive probe-owned failures, as in
+    ``TelemetryHandler.stop_llm``. If applying attributes, events or metrics
+    raises, the context is still detached and the span still ended, and the
+    exception still reaches the caller.
+    """
+    try:
+        yield
+    finally:
+        token = invocation.context_token
+        invocation.context_token = None
+        try:
+            _safe_detach(token)
+        finally:
+            span = invocation.span
+            if span is not None and span.is_recording():
+                span.end()
+
+
 class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # pylint: disable=too-many-public-methods
     """
     Extended Telemetry Handler that supports additional GenAI operations.
@@ -285,11 +319,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_create_agent_finish_attributes(invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_create_agent_finish_attributes(invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_create_agent(  # pylint: disable=no-self-use
@@ -299,14 +331,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_create_agent_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        self._record_extended_metrics(
-            invocation.span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_create_agent_finish_attributes(invocation.span, invocation)
+            _apply_error_attributes(invocation.span, error)
+            self._record_extended_metrics(
+                invocation.span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
@@ -357,11 +387,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_embedding_finish_attributes(invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_embedding_finish_attributes(invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_embedding(  # pylint: disable=no-self-use
@@ -371,14 +399,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_embedding_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        self._record_extended_metrics(
-            invocation.span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_embedding_finish_attributes(invocation.span, invocation)
+            _apply_error_attributes(invocation.span, error)
+            self._record_extended_metrics(
+                invocation.span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
@@ -429,11 +455,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_execute_tool_finish_attributes(invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_execute_tool_finish_attributes(invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_execute_tool(  # pylint: disable=no-self-use
@@ -443,14 +467,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_execute_tool_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        self._record_extended_metrics(
-            invocation.span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_execute_tool_finish_attributes(invocation.span, invocation)
+            _apply_error_attributes(invocation.span, error)
+            self._record_extended_metrics(
+                invocation.span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
@@ -520,14 +542,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
             return invocation
 
         # No multimodal: sync path
-        _apply_invoke_agent_finish_attributes(invocation.span, invocation)
-        _maybe_emit_invoke_agent_event(
-            self._logger, invocation.span, invocation
-        )
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_invoke_agent_finish_attributes(invocation.span, invocation)
+            _maybe_emit_invoke_agent_event(
+                self._logger, invocation.span, invocation
+            )
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_invoke_agent(  # pylint: disable=no-self-use
@@ -548,15 +568,15 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
 
         # No multimodal: sync path
         span = invocation.span
-        _apply_invoke_agent_finish_attributes(span, invocation)
-        _apply_error_attributes(span, error)
-        _maybe_emit_invoke_agent_event(self._logger, span, invocation, error)  # pylint: disable=too-many-function-args
-        self._record_extended_metrics(
-            span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        span.end()
+        with _detach_and_end(invocation):
+            _apply_invoke_agent_finish_attributes(span, invocation)
+            _apply_error_attributes(span, error)
+            _maybe_emit_invoke_agent_event(  # pylint: disable=too-many-function-args
+                self._logger, span, invocation, error
+            )
+            self._record_extended_metrics(
+                span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
@@ -607,11 +627,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_retrieval_finish_attributes(invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_retrieval_finish_attributes(invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_retrieval(  # pylint: disable=no-self-use
@@ -621,14 +639,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_retrieval_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        self._record_extended_metrics(
-            invocation.span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_retrieval_finish_attributes(invocation.span, invocation)
+            _apply_error_attributes(invocation.span, error)
+            self._record_extended_metrics(
+                invocation.span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
@@ -677,11 +693,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_rerank_finish_attributes(invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_rerank_finish_attributes(invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_rerank(  # pylint: disable=no-self-use
@@ -691,14 +705,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_rerank_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        self._record_extended_metrics(
-            invocation.span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_rerank_finish_attributes(invocation.span, invocation)
+            _apply_error_attributes(invocation.span, error)
+            self._record_extended_metrics(
+                invocation.span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
@@ -750,12 +762,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_memory_finish_attributes(invocation.span, invocation)
-        _maybe_emit_memory_event(self._logger, invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_memory_finish_attributes(invocation.span, invocation)
+            _maybe_emit_memory_event(self._logger, invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_memory(  # pylint: disable=no-self-use
@@ -766,11 +776,10 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
             return invocation
 
         span = invocation.span
-        _apply_memory_finish_attributes(span, invocation)
-        _apply_error_attributes(span, error)
-        _maybe_emit_memory_event(self._logger, span, invocation, error)  # pylint: disable=too-many-function-args
-        _safe_detach(invocation.context_token)
-        span.end()
+        with _detach_and_end(invocation):
+            _apply_memory_finish_attributes(span, invocation)
+            _apply_error_attributes(span, error)
+            _maybe_emit_memory_event(self._logger, span, invocation, error)  # pylint: disable=too-many-function-args
         return invocation
 
     @contextmanager
@@ -840,11 +849,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_entry_finish_attributes(invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_entry_finish_attributes(invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_entry(
@@ -854,14 +861,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_entry_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        self._record_extended_metrics(
-            invocation.span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_entry_finish_attributes(invocation.span, invocation)
+            _apply_error_attributes(invocation.span, error)
+            self._record_extended_metrics(
+                invocation.span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
@@ -914,11 +919,9 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_react_step_finish_attributes(invocation.span, invocation)
-        self._record_extended_metrics(invocation.span, invocation)
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_react_step_finish_attributes(invocation.span, invocation)
+            self._record_extended_metrics(invocation.span, invocation)
         return invocation
 
     def fail_react_step(
@@ -928,14 +931,12 @@ class ExtendedTelemetryHandler(MultimodalProcessingMixin, TelemetryHandler):  # 
         if invocation.context_token is None or invocation.span is None:
             return invocation
 
-        _apply_react_step_finish_attributes(invocation.span, invocation)
-        _apply_error_attributes(invocation.span, error)
-        self._record_extended_metrics(
-            invocation.span, invocation, error_type=error.type.__qualname__
-        )
-
-        _safe_detach(invocation.context_token)
-        invocation.span.end()
+        with _detach_and_end(invocation):
+            _apply_react_step_finish_attributes(invocation.span, invocation)
+            _apply_error_attributes(invocation.span, error)
+            self._record_extended_metrics(
+                invocation.span, invocation, error_type=error.type.__qualname__
+            )
         return invocation
 
     @contextmanager
