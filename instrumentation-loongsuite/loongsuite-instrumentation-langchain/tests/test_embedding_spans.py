@@ -20,6 +20,7 @@ import asyncio
 from unittest.mock import Mock
 
 import pytest
+import wrapt
 from langchain_core.embeddings import Embeddings
 
 from opentelemetry.instrumentation.langchain.internal import patch_embedding
@@ -528,3 +529,27 @@ def test_telemetry_failure_preserves_provider_outcome(
     else:
         assert call() is vector
         handler.stop_embedding.assert_called_once()
+
+
+def test_unpatch_preserves_wrappers_installed_by_other_libraries():
+    def passthrough(wrapped, instance, args, kwargs):
+        return wrapped(*args, **kwargs)
+
+    class Provider:
+        def embed_query(self, text):
+            return text
+
+        def embed_documents(self, texts):
+            return texts
+
+    before = wrapt.FunctionWrapper(Provider.embed_query, passthrough)
+    Provider.embed_query = before
+    owned = Mock(side_effect=passthrough)
+    patch_embedding._patch_class(Provider, owned, owned)
+    after = wrapt.FunctionWrapper(Provider.embed_documents, passthrough)
+    Provider.embed_documents = after
+    patch_embedding._unpatch_class(Provider)
+    assert Provider.__dict__["embed_query"] is before
+    assert Provider.__dict__["embed_documents"] is after
+    assert Provider().embed_documents(["doc"]) == ["doc"]
+    owned.assert_not_called()

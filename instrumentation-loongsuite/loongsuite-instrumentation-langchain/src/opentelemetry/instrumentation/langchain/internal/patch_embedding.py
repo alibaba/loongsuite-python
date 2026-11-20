@@ -61,8 +61,7 @@ _already_instrumented: bool = False
 
 _WRAPPER_TAG = "_loongsuite_embedding_wrapped"
 
-_SYNC_METHODS = ("embed_documents", "embed_query")
-_ASYNC_METHODS = ("aembed_documents", "aembed_query")
+_installed_init_subclass: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +277,7 @@ def _patch_class(
     Only wraps methods that are defined directly in *cls* (i.e. present
     in ``cls.__dict__``).  Skips classes that are already wrapped.
     """
-    if cls.__dict__.get(_WRAPPER_TAG, False):
+    if _WRAPPER_TAG in cls.__dict__:
         return
 
     _method_wrappers = {
@@ -288,26 +287,30 @@ def _patch_class(
         "aembed_query": async_wrapper,
     }
 
+    installed = {}
+
+    def active():
+        return cls.__dict__.get(_WRAPPER_TAG) is installed
+
     for method_name, wrapper_fn in _method_wrappers.items():
         if method_name in cls.__dict__:
             original = cls.__dict__[method_name]
             if not isinstance(original, wrapt.FunctionWrapper):
-                setattr(
-                    cls,
-                    method_name,
-                    wrapt.FunctionWrapper(original, wrapper_fn),
+                patched = wrapt.FunctionWrapper(
+                    original, wrapper_fn, enabled=active
                 )
+                setattr(cls, method_name, patched)
+                installed[method_name] = patched
 
-    setattr(cls, _WRAPPER_TAG, True)
+    setattr(cls, _WRAPPER_TAG, installed)
     _patched_classes.add(cls)
 
 
 def _unpatch_class(cls: type) -> None:
     """Restore original methods on *cls*."""
-    for method_name in (*_SYNC_METHODS, *_ASYNC_METHODS):
-        method = cls.__dict__.get(method_name)
-        if isinstance(method, wrapt.FunctionWrapper):
-            setattr(cls, method_name, method.__wrapped__)
+    for method_name, installed in cls.__dict__.get(_WRAPPER_TAG, {}).items():
+        if cls.__dict__.get(method_name) is installed:
+            setattr(cls, method_name, installed.__wrapped__)
 
     try:
         delattr(cls, _WRAPPER_TAG)
@@ -325,7 +328,7 @@ def instrument_embeddings(
     against losing the true ``__init_subclass__`` original to the
     already-patched hook on a re-instrument.
     """
-    global _original_init_subclass, _already_instrumented  # noqa: PLW0603
+    global _original_init_subclass, _already_instrumented, _installed_init_subclass  # noqa: PLW0603
 
     if _already_instrumented:
         return
@@ -350,17 +353,21 @@ def instrument_embeddings(
     #    patched automatically.
     _original_init_subclass = Embeddings.__dict__.get("__init_subclass__")
 
+    original_hook = _original_init_subclass
+
     @classmethod  # type: ignore[misc]
     def _patched_init_subclass(cls: type, **kwargs: Any) -> None:
-        if _original_init_subclass is not None:
-            if isinstance(_original_init_subclass, classmethod):
-                _original_init_subclass.__func__(cls, **kwargs)
+        if original_hook is not None:
+            if isinstance(original_hook, classmethod):
+                original_hook.__func__(cls, **kwargs)
             else:
-                _original_init_subclass(**kwargs)
+                original_hook(**kwargs)
         else:
             super(Embeddings, cls).__init_subclass__(**kwargs)
-        _patch_class(cls, sync_wrapper, async_wrapper)
+        if _installed_init_subclass is _patched_init_subclass:
+            _patch_class(cls, sync_wrapper, async_wrapper)
 
+    _installed_init_subclass = _patched_init_subclass
     Embeddings.__init_subclass__ = _patched_init_subclass  # type: ignore[assignment]
     _already_instrumented = True
 
@@ -372,7 +379,7 @@ def instrument_embeddings(
 
 def uninstrument_embeddings() -> None:
     """Restore original methods on all patched embeddings classes."""
-    global _original_init_subclass, _already_instrumented  # noqa: PLW0603
+    global _original_init_subclass, _already_instrumented, _installed_init_subclass  # noqa: PLW0603
 
     if not _already_instrumented:
         return
@@ -380,10 +387,13 @@ def uninstrument_embeddings() -> None:
     try:
         from langchain_core.embeddings import Embeddings  # noqa: PLC0415
 
-        if _original_init_subclass is not None:
-            Embeddings.__init_subclass__ = _original_init_subclass  # type: ignore[assignment]
-        else:
-            if "__init_subclass__" in Embeddings.__dict__:
+        if (
+            Embeddings.__dict__.get("__init_subclass__")
+            is _installed_init_subclass
+        ):
+            if _original_init_subclass is not None:
+                Embeddings.__init_subclass__ = _original_init_subclass  # type: ignore[assignment]
+            else:
                 delattr(Embeddings, "__init_subclass__")
     except Exception:
         logger.debug(
@@ -398,6 +408,7 @@ def uninstrument_embeddings() -> None:
             logger.debug("Failed to unpatch %s", cls, exc_info=True)
     _patched_classes.clear()
     _original_init_subclass = None
+    _installed_init_subclass = None
     _already_instrumented = False
 
     logger.debug("Restored Embeddings subclasses")
