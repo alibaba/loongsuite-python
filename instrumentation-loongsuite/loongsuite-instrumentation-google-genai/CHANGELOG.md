@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Keep the Interactions test mocks working with google-genai 2.34, which
+  copies the interaction that `interactions.create` returns with
+  `model_copy` to merge automatic continuation hops.
+
 ## Version 0.9.0 (2026-09-07)
 
 ### Added
