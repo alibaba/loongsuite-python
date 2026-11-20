@@ -229,7 +229,7 @@ class _ContentBlockAccumulator:
             OutputMessage(
                 role="assistant",
                 parts=parts,
-                finish_reason=stop_reason or "error",
+                finish_reason=stop_reason,
             )
         ]
 
@@ -364,24 +364,27 @@ class AnthropicStreamWrapper:
         self.invocation.input_tokens = self._input_tokens
         self.invocation.output_tokens = self._output_tokens
 
-        if self._cache_creation_input_tokens:
+        if self._cache_creation_input_tokens is not None:
             self.invocation.usage_cache_creation_input_tokens = (
                 self._cache_creation_input_tokens
             )
-        if self._cache_read_input_tokens:
+        if self._cache_read_input_tokens is not None:
             self.invocation.usage_cache_read_input_tokens = (
                 self._cache_read_input_tokens
             )
 
-        if self._stop_reason:
-            self.invocation.finish_reasons = [self._stop_reason]
+        finish_reason = self._stop_reason
+        if finish_reason is None and error is not None:
+            finish_reason = "error"
+        if finish_reason is not None:
+            self.invocation.finish_reasons = [finish_reason]
 
         if self.capture_content:
             self.invocation.output_messages = (
-                self._accumulator.build_output_messages(self._stop_reason)
+                self._accumulator.build_output_messages(finish_reason)
             )
 
-        if error:
+        if error is not None:
             self.handler.fail_llm(
                 self.invocation,
                 Error(type=type(error), message=str(error)),
@@ -520,24 +523,27 @@ class AsyncAnthropicStreamWrapper:
         self.invocation.input_tokens = self._input_tokens
         self.invocation.output_tokens = self._output_tokens
 
-        if self._cache_creation_input_tokens:
+        if self._cache_creation_input_tokens is not None:
             self.invocation.usage_cache_creation_input_tokens = (
                 self._cache_creation_input_tokens
             )
-        if self._cache_read_input_tokens:
+        if self._cache_read_input_tokens is not None:
             self.invocation.usage_cache_read_input_tokens = (
                 self._cache_read_input_tokens
             )
 
-        if self._stop_reason:
-            self.invocation.finish_reasons = [self._stop_reason]
+        finish_reason = self._stop_reason
+        if finish_reason is None and error is not None:
+            finish_reason = "error"
+        if finish_reason is not None:
+            self.invocation.finish_reasons = [finish_reason]
 
         if self.capture_content:
             self.invocation.output_messages = (
-                self._accumulator.build_output_messages(self._stop_reason)
+                self._accumulator.build_output_messages(finish_reason)
             )
 
-        if error:
+        if error is not None:
             self.handler.fail_llm(
                 self.invocation,
                 Error(type=type(error), message=str(error)),

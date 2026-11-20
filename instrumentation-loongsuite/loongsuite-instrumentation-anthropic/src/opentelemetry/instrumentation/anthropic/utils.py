@@ -154,20 +154,16 @@ def populate_response(
         if hasattr(usage, "output_tokens"):
             invocation.output_tokens = usage.output_tokens
         # Cache token usage (Anthropic-specific)
-        if (
-            hasattr(usage, "cache_creation_input_tokens")
-            and usage.cache_creation_input_tokens
-        ):
+        cache_creation_tokens = getattr(
+            usage, "cache_creation_input_tokens", None
+        )
+        cache_read_tokens = getattr(usage, "cache_read_input_tokens", None)
+        if cache_creation_tokens is not None:
             invocation.usage_cache_creation_input_tokens = (
-                usage.cache_creation_input_tokens
+                cache_creation_tokens
             )
-        if (
-            hasattr(usage, "cache_read_input_tokens")
-            and usage.cache_read_input_tokens
-        ):
-            invocation.usage_cache_read_input_tokens = (
-                usage.cache_read_input_tokens
-            )
+        if cache_read_tokens is not None:
+            invocation.usage_cache_read_input_tokens = cache_read_tokens
 
     # Output messages (content blocks)
     if capture_content:
@@ -318,7 +314,7 @@ def _convert_content_blocks_to_output(
             OutputMessage(
                 role="assistant",
                 parts=parts,
-                finish_reason=stop_reason or "error",
+                finish_reason=stop_reason,
             )
         ]
     return []
