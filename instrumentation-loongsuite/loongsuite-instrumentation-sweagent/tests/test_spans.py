@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -29,8 +31,11 @@ from opentelemetry.instrumentation.sweagent.patch import (
     tool_call_arguments_from_sweagent_step,
     tool_name_from_sweagent_step,
     wrap_combined_agent_hook_on_run_done,
+    wrap_combined_agent_hook_on_run_start,
     wrap_combined_agent_hook_on_step_done,
+    wrap_combined_agent_hook_on_step_start,
     wrap_combined_run_hooks_on_instance_completed,
+    wrap_combined_run_hooks_on_instance_start,
     wrap_default_agent_handle_action,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -276,34 +281,106 @@ def test_nested_hook_hierarchy(instrumented_sweagent, span_exporter):
 
 
 @pytest.mark.parametrize(
-    "wrapper,attribute",
+    "start,done",
     [
         (
-            wrap_combined_run_hooks_on_instance_completed,
-            "_loongsuite_entry_invocation",
-        ),
-        (
-            wrap_combined_agent_hook_on_run_done,
-            "_loongsuite_invoke_invocation",
-        ),
-        (
+            wrap_combined_agent_hook_on_step_start,
             wrap_combined_agent_hook_on_step_done,
-            "_loongsuite_react_invocation",
+        ),
+        (
+            wrap_combined_agent_hook_on_run_start,
+            wrap_combined_agent_hook_on_run_done,
+        ),
+        (
+            wrap_combined_run_hooks_on_instance_start,
+            wrap_combined_run_hooks_on_instance_completed,
         ),
     ],
 )
 @pytest.mark.parametrize("paired", [False, True])
-def test_completion_preserves_hook_outcome(wrapper, attribute, paired):
-    hooks = SimpleNamespace()
+def test_completion_preserves_hook_outcome(start, done, paired):
     handler = MagicMock()
-    if paired:
-        setattr(hooks, attribute, SimpleNamespace())
+    hooks = SimpleNamespace()
+    for stage in ("entry", "invoke_agent", "react_step"):
+        getattr(handler, f"stop_{stage}").side_effect = ArithmeticError()
+        getattr(handler, f"fail_{stage}").side_effect = ArithmeticError()
     expected = object()
-    assert wrapper(handler, lambda: expected, hooks, (), {}) is expected
     if paired:
-        setattr(hooks, attribute, SimpleNamespace())
+        start(handler, lambda: None, hooks, (), {})
+    assert done(handler, lambda: expected, hooks, (), {}) is expected
+    if paired:
+        start(handler, lambda: None, hooks, (), {})
     error = LookupError("hook failed")
     with pytest.raises(LookupError) as caught:
-        wrapper(handler, MagicMock(side_effect=error), hooks, (), {})
+        done(handler, MagicMock(side_effect=error), hooks, (), {})
     assert caught.value is error
-    assert not hasattr(hooks, attribute)
+
+
+@pytest.mark.parametrize(
+    "wrapper,stage",
+    [
+        (wrap_combined_agent_hook_on_step_start, "react_step"),
+        (wrap_combined_agent_hook_on_run_start, "invoke_agent"),
+        (wrap_combined_run_hooks_on_instance_start, "entry"),
+        (wrap_default_agent_handle_action, "execute_tool"),
+    ],
+)
+@pytest.mark.parametrize("start_failure", [False, True])
+def test_start_and_tool_preserve_business_errors(
+    wrapper, stage, start_failure
+):
+    hooks, handler = SimpleNamespace(), MagicMock()
+    if start_failure:
+        getattr(handler, f"start_{stage}").side_effect = ArithmeticError()
+    getattr(handler, f"fail_{stage}").side_effect = ArithmeticError()
+    getattr(handler, f"stop_{stage}").side_effect = ArithmeticError()
+    if start_failure or stage == "execute_tool":
+        expected = object()
+        assert wrapper(handler, lambda: expected, hooks, (), {}) is expected
+    error = LookupError("operation failed")
+    operation = MagicMock(side_effect=error)
+    with pytest.raises(LookupError) as caught:
+        wrapper(handler, operation, hooks, (), {})
+    operation.assert_called_once()
+    assert caught.value is error
+
+
+def test_shared_batch_hooks_keep_workers_separate(
+    instrumented_sweagent, span_exporter
+):
+    hooks = CombinedRunHooks()
+    barrier = Barrier(2)
+
+    def worker(name):
+        problem = SimpleNamespace(id=name, get_problem_statement=lambda: name)
+        hooks.on_instance_start(index=0, env=None, problem_statement=problem)
+        barrier.wait(timeout=5)
+        hooks.on_instance_completed(
+            result=AgentRunResult(info=AgentInfo(), trajectory=[])
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(worker, ["first", "second"]))
+    assert sorted(
+        s.attributes[GEN_AI_SESSION_ID]
+        for s in span_exporter.get_finished_spans()
+    ) == ["first", "second"]
+
+
+def test_sdk_step_error_ends_span_in_same_thread(
+    instrumented_sweagent, span_exporter
+):
+    from sweagent.agent.agents import DefaultAgent  # noqa: PLC0415
+
+    from opentelemetry import trace  # noqa: PLC0415
+
+    agent = DefaultAgent.__new__(DefaultAgent)
+    agent._env = object()
+    agent._chook = CombinedAgentHook()
+    caller = trace.get_current_span()
+    with pytest.raises(AttributeError):
+        agent.step()
+    assert trace.get_current_span() is caller
+    (span,) = span_exporter.get_finished_spans()
+    assert span.name == REACT_SPAN_NAME
+    assert span.status.status_code.name == "ERROR"

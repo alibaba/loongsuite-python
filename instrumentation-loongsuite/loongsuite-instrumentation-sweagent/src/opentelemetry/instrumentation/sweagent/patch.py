@@ -20,8 +20,10 @@ import json
 import logging
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
+from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
 from opentelemetry.util.genai.extended_types import (
     EntryInvocation,
@@ -45,10 +47,6 @@ SWEAGENT_AGENT_DESCRIPTION = (
 )
 SWEAGENT_BASH_TOOL_NAME = "sweagent_bash"
 _PROBLEM_TEXT_MAX_LEN = 4096
-
-# Links CombinedRunHooks.on_instance_start(problem_statement=...) to
-# CombinedAgentHook.on_run_start() on the same thread (no PS in hook kwargs).
-_instance_tls = threading.local()
 
 
 def _tool_name_from_tool_call_item(call: Any) -> str | None:
@@ -253,7 +251,7 @@ def _completion(handler_stop, handler_fail, invocation):
     """Finalize telemetry without replacing a hook's return value or exception."""
     try:
         yield
-    except Exception as exc:
+    except BaseException as exc:
         try:
             handler_fail(invocation, Error(message=str(exc), type=type(exc)))
         except Exception:
@@ -266,12 +264,27 @@ def _completion(handler_stop, handler_fail, invocation):
             logger.debug("Failed to end hook span", exc_info=True)
 
 
-def wrap_combined_run_hooks_on_instance_start(
-    handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
-):
-    instance_id, body = _problem_statement_id_and_text(
-        kwargs.get("problem_statement")
-    )
+@dataclass
+class _HookSpan:
+    owner: Any
+    invocation: Any
+    stop: Any
+    fail: Any
+    problem_statement: Any = None
+
+
+class _WorkerState(threading.local):
+    def __init__(self):
+        self.spans = []
+
+
+_worker = _WorkerState()
+
+
+@hook_advice("sweagent", "start_entry")
+def _start_entry(handler, instance, kwargs):
+    problem = kwargs.get("problem_statement")
+    instance_id, body = _problem_statement_id_and_text(problem)
     inv = EntryInvocation(
         session_id=str(instance_id) if instance_id is not None else None,
         input_messages=[
@@ -279,53 +292,22 @@ def wrap_combined_run_hooks_on_instance_start(
         ],
     )
     handler.start_entry(inv)
-    setattr(instance, "_loongsuite_entry_invocation", inv)
-    _instance_tls.problem_statement = kwargs.get("problem_statement")
-    try:
-        return wrapped(*args, **kwargs)
-    except Exception as exc:
-        handler.fail_entry(inv, Error(message=str(exc), type=type(exc)))
-        delattr(instance, "_loongsuite_entry_invocation")
-        _instance_tls.problem_statement = None
-        raise
+    return _HookSpan(
+        instance, inv, handler.stop_entry, handler.fail_entry, problem
+    )
 
 
-def wrap_combined_run_hooks_on_instance_completed(
-    handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
-):
-    inv = getattr(instance, "_loongsuite_entry_invocation", None)
-    if inv is None:
-        return wrapped(*args, **kwargs)
-    try:
-        with _completion(handler.stop_entry, handler.fail_entry, inv):
-            outcome = wrapped(*args, **kwargs)
-            try:
-                result = kwargs.get("result")
-                inv.output_messages = [
-                    OutputMessage(
-                        role="assistant",
-                        parts=[
-                            Text(content=_build_entry_output_summary(result))
-                        ],
-                        finish_reason=_finish_reason(
-                            getattr(result, "info", None)
-                        ),
-                    )
-                ]
-            except Exception:
-                logger.debug("Failed to read instance result", exc_info=True)
-            return outcome
-    finally:
-        delattr(instance, "_loongsuite_entry_invocation")
-        _instance_tls.problem_statement = None
-
-
-def wrap_combined_agent_hook_on_run_start(
-    handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
-):
-    # Same user message shape as ``EntryInvocation`` (``on_instance_start``).
-    ps = getattr(_instance_tls, "problem_statement", None)
-    instance_id, body = _problem_statement_id_and_text(ps)
+@hook_advice("sweagent", "start_agent")
+def _start_agent(handler, instance, _kwargs):
+    problem = next(
+        (
+            s.problem_statement
+            for s in reversed(_worker.spans)
+            if isinstance(s.invocation, EntryInvocation)
+        ),
+        None,
+    )
+    instance_id, body = _problem_statement_id_and_text(problem)
     inv = InvokeAgentInvocation(
         provider=SWEAGENT_PROVIDER,
         agent_name=SWEAGENT_AGENT_NAME,
@@ -336,106 +318,161 @@ def wrap_combined_agent_hook_on_run_start(
         ],
     )
     handler.start_invoke_agent(inv)
-    setattr(instance, "_loongsuite_invoke_invocation", inv)
-    try:
-        return wrapped(*args, **kwargs)
-    except Exception as exc:
-        handler.fail_invoke_agent(inv, Error(message=str(exc), type=type(exc)))
-        delattr(instance, "_loongsuite_invoke_invocation")
-        raise
+    return _HookSpan(
+        instance, inv, handler.stop_invoke_agent, handler.fail_invoke_agent
+    )
 
 
-def wrap_combined_agent_hook_on_run_done(
-    handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
-):
-    inv = getattr(instance, "_loongsuite_invoke_invocation", None)
-    if inv is None:
-        return wrapped(*args, **kwargs)
-    try:
-        with _completion(
-            handler.stop_invoke_agent, handler.fail_invoke_agent, inv
-        ):
-            outcome = wrapped(*args, **kwargs)
-            try:
-                info = kwargs.get("info")
-                summary = _build_agent_run_summary(
-                    info, kwargs.get("trajectory")
-                )
-                inv.output_messages = [
-                    OutputMessage(
-                        role="assistant",
-                        parts=[Text(content=summary)],
-                        finish_reason=_finish_reason(info),
-                    )
-                ]
-                _apply_agent_info_to_invocation(inv, info)
-            except Exception:
-                logger.debug("Failed to read run result", exc_info=True)
-            return outcome
-    finally:
-        delattr(instance, "_loongsuite_invoke_invocation")
-
-
-def wrap_combined_agent_hook_on_step_start(
-    handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
-):
+@hook_advice("sweagent", "start_step")
+def _start_step(handler, instance, _kwargs):
     round_no = getattr(instance, "_loongsuite_react_round", 0) + 1
-    setattr(instance, "_loongsuite_react_round", round_no)
+    instance._loongsuite_react_round = round_no
     inv = ReactStepInvocation(round=round_no)
     handler.start_react_step(inv)
-    setattr(instance, "_loongsuite_react_invocation", inv)
-    try:
-        return wrapped(*args, **kwargs)
-    except Exception as exc:
-        handler.fail_react_step(inv, Error(message=str(exc), type=type(exc)))
-        delattr(instance, "_loongsuite_react_invocation")
-        raise
+    return _HookSpan(
+        instance, inv, handler.stop_react_step, handler.fail_react_step
+    )
 
 
-def wrap_combined_agent_hook_on_step_done(
-    handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
-):
-    inv = getattr(instance, "_loongsuite_react_invocation", None)
-    if inv is None:
-        return wrapped(*args, **kwargs)
-    try:
-        with _completion(
-            handler.stop_react_step, handler.fail_react_step, inv
+def _start_hook(start):
+    def wrapper(handler, wrapped, instance, args, kwargs):
+        state = start(handler, instance, kwargs)
+        if state is None:
+            return wrapped(*args, **kwargs)
+        depth = len(_worker.spans)
+        _worker.spans.append(state)
+        try:
+            return wrapped(*args, **kwargs)
+        except BaseException as exc:
+            _finish_open_hooks(depth, exc)
+            raise
+
+    return wrapper
+
+
+@hook_advice("sweagent", "fail_hook")
+def _fail(state, exc):
+    state.fail(state.invocation, Error(message=str(exc), type=type(exc)))
+
+
+@hook_advice("sweagent", "finish_entry")
+def _entry_result(inv, kwargs):
+    result = kwargs.get("result")
+    inv.output_messages = [
+        OutputMessage(
+            role="assistant",
+            parts=[Text(content=_build_entry_output_summary(result))],
+            finish_reason=_finish_reason(getattr(result, "info", None)),
+        )
+    ]
+
+
+@hook_advice("sweagent", "finish_agent")
+def _agent_result(inv, kwargs):
+    info = kwargs.get("info")
+    summary = _build_agent_run_summary(info, kwargs.get("trajectory"))
+    inv.output_messages = [
+        OutputMessage(
+            role="assistant",
+            parts=[Text(content=summary)],
+            finish_reason=_finish_reason(info),
+        )
+    ]
+    _apply_agent_info_to_invocation(inv, info)
+
+
+@hook_advice("sweagent", "finish_step")
+def _step_result(inv, kwargs):
+    status = getattr(kwargs.get("step"), "exit_status", None)
+    inv.finish_reason = str(status) if status is not None else None
+
+
+def _end_hook(invocation_type, collect):
+    def wrapper(handler, wrapped, instance, args, kwargs):
+        if not _worker.spans:
+            return wrapped(*args, **kwargs)
+        state = _worker.spans[-1]
+        if state.owner is not instance or not isinstance(
+            state.invocation, invocation_type
         ):
-            outcome = wrapped(*args, **kwargs)
-            try:
-                status = getattr(kwargs.get("step"), "exit_status", None)
-                inv.finish_reason = str(status) if status is not None else None
-            except Exception:
-                logger.debug("Failed to read step result", exc_info=True)
-            return outcome
-    finally:
-        delattr(instance, "_loongsuite_react_invocation")
+            return wrapped(*args, **kwargs)
+        _worker.spans.pop()
+        with _completion(state.stop, state.fail, state.invocation):
+            result = wrapped(*args, **kwargs)
+            collect(state.invocation, kwargs)
+            return result
+
+    return wrapper
 
 
-def wrap_default_agent_handle_action(
-    handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
-):
-    """Wrap ``handle_action`` so tool spans end on error paths (not always paired hooks)."""
-    step = args[0] if args else kwargs.get("step")
-    resolved_tool = tool_name_from_sweagent_step(step)
+wrap_combined_run_hooks_on_instance_start = _start_hook(_start_entry)
+wrap_combined_agent_hook_on_run_start = _start_hook(_start_agent)
+wrap_combined_agent_hook_on_step_start = _start_hook(_start_step)
+wrap_combined_run_hooks_on_instance_completed = _end_hook(
+    EntryInvocation, _entry_result
+)
+wrap_combined_agent_hook_on_run_done = _end_hook(
+    InvokeAgentInvocation, _agent_result
+)
+wrap_combined_agent_hook_on_step_done = _end_hook(
+    ReactStepInvocation, _step_result
+)
+
+
+@hook_advice("sweagent", "stop_hook")
+def _stop(state):
+    state.stop(state.invocation)
+
+
+def _finish_open_hooks(depth, error=None):
+    while len(_worker.spans) > depth:
+        state = _worker.spans.pop()
+        if error is None:
+            _stop(state)
+        else:
+            _fail(state, error)
+
+
+def wrap_hook_scope(wrapped, instance, args, kwargs):
+    """Finish spans when the SDK exits without firing their matching callbacks."""
+    depth = len(_worker.spans)
+    try:
+        result = wrapped(*args, **kwargs)
+    except BaseException as exc:
+        _finish_open_hooks(depth, exc)
+        raise
+    _finish_open_hooks(depth)
+    return result
+
+
+@hook_advice("sweagent", "start_tool")
+def _start_tool(handler, step):
     inv = ExecuteToolInvocation(
-        tool_name=resolved_tool,
+        tool_name=tool_name_from_sweagent_step(step),
         provider=SWEAGENT_PROVIDER,
         tool_type="function",
     )
-    if step is not None:
-        inv.tool_call_arguments = tool_call_arguments_from_sweagent_step(step)
+    inv.tool_call_arguments = tool_call_arguments_from_sweagent_step(step)
     handler.start_execute_tool(inv)
-    try:
+    return inv
+
+
+@hook_advice("sweagent", "tool_result")
+def _tool_result(inv, step):
+    inv.tool_call_result = getattr(step, "observation", None)
+
+
+def wrap_default_agent_handle_action(handler, wrapped, instance, args, kwargs):
+    step = args[0] if args else kwargs.get("step")
+    inv = _start_tool(handler, step)
+    if inv is None:
+        return wrapped(*args, **kwargs)
+    with _completion(
+        handler.stop_execute_tool, handler.fail_execute_tool, inv
+    ):
         result = wrapped(*args, **kwargs)
-    except Exception as exc:
-        handler.fail_execute_tool(inv, Error(message=str(exc), type=type(exc)))
-        raise
-    if step is not None:
-        inv.tool_call_result = getattr(step, "observation", None)
-    handler.stop_execute_tool(inv)
-    return result
+        _tool_result(inv, step)
+        return result
 
 
 def bind_extended_handler(handler: ExtendedTelemetryHandler, fn):

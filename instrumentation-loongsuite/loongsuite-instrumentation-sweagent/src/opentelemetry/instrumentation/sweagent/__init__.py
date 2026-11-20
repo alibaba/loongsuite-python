@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+from importlib import import_module
 from typing import Any, Collection
 
 from wrapt import wrap_function_wrapper
@@ -35,6 +36,7 @@ from opentelemetry.instrumentation.sweagent.patch import (
     wrap_combined_run_hooks_on_instance_completed,
     wrap_combined_run_hooks_on_instance_start,
     wrap_default_agent_handle_action,
+    wrap_hook_scope,
 )
 from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
@@ -51,6 +53,14 @@ _COMBINED_AGENT_HOOK_PATCHES: tuple[tuple[str, Any], ...] = (
     ("on_run_done", wrap_combined_agent_hook_on_run_done),
     ("on_step_start", wrap_combined_agent_hook_on_step_start),
     ("on_step_done", wrap_combined_agent_hook_on_step_done),
+)
+
+_HOOK_SCOPES = (
+    ("sweagent.run.run_single", "RunSingle", "run"),
+    ("sweagent.run.run_batch", "RunBatch", "_run_instance"),
+    (_AGENTS_MODULE, "DefaultAgent", "run"),
+    (_AGENTS_MODULE, "DefaultAgent", "step"),
+    (_AGENTS_MODULE, "RetryAgent", "run"),
 )
 
 __all__ = ["SweagentInstrumentor"]
@@ -77,6 +87,18 @@ class SweagentInstrumentor(BaseInstrumentor):
             logger_provider=logger_provider,
         )
         handler = self._handler
+        self._scopes = []
+        for module, classname, method in _HOOK_SCOPES:
+            try:
+                owner = getattr(import_module(module), classname)
+                wrap_function_wrapper(
+                    module, f"{classname}.{method}", wrap_hook_scope
+                )
+                self._scopes.append((owner, method))
+            except Exception:
+                logger.debug(
+                    "Failed to wrap %s.%s", classname, method, exc_info=True
+                )
 
         for name, fn in _COMBINED_RUN_HOOK_PATCHES:
             try:
@@ -118,6 +140,9 @@ class SweagentInstrumentor(BaseInstrumentor):
 
     def _uninstrument(self, **kwargs: Any) -> None:
         del kwargs
+        for owner, method in self._scopes:
+            unwrap(owner, method)
+        self._scopes.clear()
         try:
             import sweagent.agent.agents as agent_mod  # noqa: PLC0415
 
