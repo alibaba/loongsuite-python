@@ -295,12 +295,11 @@ def _patch_class(
     for method_name, wrapper_fn in _method_wrappers.items():
         if method_name in cls.__dict__:
             original = cls.__dict__[method_name]
-            if not isinstance(original, wrapt.FunctionWrapper):
-                patched = wrapt.FunctionWrapper(
-                    original, wrapper_fn, enabled=active
-                )
-                setattr(cls, method_name, patched)
-                installed[method_name] = patched
+            patched = wrapt.FunctionWrapper(
+                original, wrapper_fn, enabled=active
+            )
+            setattr(cls, method_name, patched)
+            installed[method_name] = patched
 
     setattr(cls, _WRAPPER_TAG, installed)
     _patched_classes.add(cls)

@@ -544,12 +544,25 @@ def test_unpatch_preserves_wrappers_installed_by_other_libraries():
 
     before = wrapt.FunctionWrapper(Provider.embed_query, passthrough)
     Provider.embed_query = before
-    owned = Mock(side_effect=passthrough)
+    handler = Mock()
+    owned = patch_embedding._make_sync_wrapper(handler)
     patch_embedding._patch_class(Provider, owned, owned)
+    assert Provider().embed_query("doc") == "doc"
+    handler.start_embedding.assert_called_once()
+    handler.stop_embedding.assert_called_once()
     after = wrapt.FunctionWrapper(Provider.embed_documents, passthrough)
     Provider.embed_documents = after
     patch_embedding._unpatch_class(Provider)
     assert Provider.__dict__["embed_query"] is before
     assert Provider.__dict__["embed_documents"] is after
+    handler.reset_mock()
     assert Provider().embed_documents(["doc"]) == ["doc"]
-    owned.assert_not_called()
+    handler.start_embedding.assert_not_called()
+    patch_embedding._patch_class(Provider, owned, owned)
+    try:
+        assert Provider().embed_documents(["doc"]) == ["doc"]
+        handler.start_embedding.assert_called_once()
+        handler.stop_embedding.assert_called_once()
+    finally:
+        patch_embedding._unpatch_class(Provider)
+    assert Provider.__dict__["embed_documents"] is after
