@@ -1,0 +1,19 @@
+interactions:
+- request:
+    body: '{"max_tokens":4,"messages":[{"role":"user","content":"hello"}],"model":"test-model","stream":true}'
+    headers:
+      content-type: [application/json]
+    method: POST
+    uri: https://api.anthropic.com/v1/messages
+  response:
+    body:
+      string: |
+        event: message_stop
+        data: {"type":"message_stop"}
+
+    headers:
+      content-type: [text/event-stream]
+    status:
+      code: 200
+      message: OK
+version: 1

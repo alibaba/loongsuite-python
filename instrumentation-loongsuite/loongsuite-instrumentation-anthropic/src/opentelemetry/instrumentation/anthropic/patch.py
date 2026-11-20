@@ -16,7 +16,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import timeit
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -37,9 +39,20 @@ from .utils import (
     populate_response,
 )
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from anthropic.resources.messages import AsyncMessages, Messages
     from anthropic.types import Message
+
+
+def _fail_llm(handler, invocation, error):
+    try:
+        handler.fail_llm(
+            invocation, Error(type=type(error), message=str(error))
+        )
+    except Exception:
+        logger.debug("Could not record Anthropic error", exc_info=True)
 
 
 def messages_create(
@@ -55,27 +68,35 @@ def messages_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> "Message":
-        invocation = handler.start_llm(
-            create_anthropic_invocation(kwargs, instance, capture_content)
-        )
+        try:
+            invocation = handler.start_llm(
+                create_anthropic_invocation(kwargs, instance, capture_content)
+            )
+        except Exception:
+            logger.debug("Could not start Anthropic telemetry", exc_info=True)
+            return wrapped(*args, **kwargs)
 
         try:
             result = wrapped(*args, **kwargs)
+        except (Exception, asyncio.CancelledError) as error:
+            _fail_llm(handler, invocation, error)
+            raise
 
-            if is_streaming(kwargs):
-                return AnthropicStreamWrapper(
-                    result, handler, invocation, capture_content
-                )
+        if is_streaming(kwargs):
+            handler.detach_llm_context(invocation)
+            return AnthropicStreamWrapper(
+                result, handler, invocation, capture_content
+            )
 
+        try:
             populate_response(invocation, result, capture_content)
             handler.stop_llm(invocation)
-            return result
-
-        except Exception as error:
-            handler.fail_llm(
-                invocation, Error(type=type(error), message=str(error))
+        except Exception:
+            handler.abandon_llm(invocation)
+            logger.debug(
+                "Could not finalize Anthropic telemetry", exc_info=True
             )
-            raise
+        return result
 
     return traced_method
 
@@ -93,27 +114,35 @@ def async_messages_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> "Message":
-        invocation = handler.start_llm(
-            create_anthropic_invocation(kwargs, instance, capture_content)
-        )
+        try:
+            invocation = handler.start_llm(
+                create_anthropic_invocation(kwargs, instance, capture_content)
+            )
+        except Exception:
+            logger.debug("Could not start Anthropic telemetry", exc_info=True)
+            return await wrapped(*args, **kwargs)
 
         try:
             result = await wrapped(*args, **kwargs)
+        except (Exception, asyncio.CancelledError) as error:
+            _fail_llm(handler, invocation, error)
+            raise
 
-            if is_streaming(kwargs):
-                return AsyncAnthropicStreamWrapper(
-                    result, handler, invocation, capture_content
-                )
+        if is_streaming(kwargs):
+            handler.detach_llm_context(invocation)
+            return AsyncAnthropicStreamWrapper(
+                result, handler, invocation, capture_content
+            )
 
+        try:
             populate_response(invocation, result, capture_content)
             handler.stop_llm(invocation)
-            return result
-
-        except Exception as error:
-            handler.fail_llm(
-                invocation, Error(type=type(error), message=str(error))
+        except Exception:
+            handler.abandon_llm(invocation)
+            logger.debug(
+                "Could not finalize Anthropic telemetry", exc_info=True
             )
-            raise
+        return result
 
     return traced_method
 
@@ -233,9 +262,10 @@ class AnthropicStreamWrapper:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        error = exc_val if exc_type else None
-        self._cleanup(error)
-        return False
+        try:
+            return self.stream.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._cleanup(exc_val)
 
     def __iter__(self):
         return self
@@ -243,19 +273,25 @@ class AnthropicStreamWrapper:
     def __next__(self):
         try:
             event = next(self.stream)
-            self._process_event(event)
+            try:
+                self._process_event(event)
+            except Exception:
+                logger.debug(
+                    "Could not record Anthropic stream event", exc_info=True
+                )
             return event
         except StopIteration:
             self._cleanup()
             raise
-        except Exception as error:
+        except (Exception, asyncio.CancelledError) as error:
             self._cleanup(error)
             raise
 
     def close(self):
-        if hasattr(self.stream, "close"):
+        try:
             self.stream.close()
-        self._cleanup()
+        finally:
+            self._cleanup()
 
     def _process_event(self, event: Any) -> None:
         """Process a single streaming event."""
@@ -314,7 +350,15 @@ class AnthropicStreamWrapper:
         if not self._started:
             return
         self._started = False
+        try:
+            self._finish(error)
+        except Exception:
+            self.handler.abandon_llm(self.invocation)
+            logger.debug(
+                "Could not finalize Anthropic stream telemetry", exc_info=True
+            )
 
+    def _finish(self, error: Optional[BaseException]) -> None:
         self.invocation.response_model_name = self._response_model
         self.invocation.response_id = self._response_id
         self.invocation.input_tokens = self._input_tokens
@@ -378,9 +422,10 @@ class AsyncAnthropicStreamWrapper:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        error = exc_val if exc_type else None
-        self._cleanup(error)
-        return False
+        try:
+            return await self.stream.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._cleanup(exc_val)
 
     def __aiter__(self):
         return self
@@ -388,19 +433,25 @@ class AsyncAnthropicStreamWrapper:
     async def __anext__(self):
         try:
             event = await self.stream.__anext__()
-            self._process_event(event)
+            try:
+                self._process_event(event)
+            except Exception:
+                logger.debug(
+                    "Could not record Anthropic stream event", exc_info=True
+                )
             return event
         except StopAsyncIteration:
             self._cleanup()
             raise
-        except Exception as error:
+        except (Exception, asyncio.CancelledError) as error:
             self._cleanup(error)
             raise
 
     async def close(self):
-        if hasattr(self.stream, "close"):
+        try:
             await self.stream.close()
-        self._cleanup()
+        finally:
+            self._cleanup()
 
     def _process_event(self, event: Any) -> None:
         """Process a single streaming event - same logic as sync."""
@@ -455,7 +506,15 @@ class AsyncAnthropicStreamWrapper:
         if not self._started:
             return
         self._started = False
+        try:
+            self._finish(error)
+        except Exception:
+            self.handler.abandon_llm(self.invocation)
+            logger.debug(
+                "Could not finalize Anthropic stream telemetry", exc_info=True
+            )
 
+    def _finish(self, error: Optional[BaseException]) -> None:
         self.invocation.response_model_name = self._response_model
         self.invocation.response_id = self._response_id
         self.invocation.input_tokens = self._input_tokens

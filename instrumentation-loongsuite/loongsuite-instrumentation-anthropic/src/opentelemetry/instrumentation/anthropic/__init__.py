@@ -40,11 +40,13 @@ Usage
 Configuration
 -------------
 
-Message content capture can be enabled by setting the environment variable:
-``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true``
+To capture messages on spans, set both environment variables before startup:
 
-Or via the ``OTEL_INSTRUMENTATION_GENAI_EXPERIMENTAL_CONTENT_CAPTURING_MODE``
-environment variable (values: ``none``, ``span``, ``event``, ``all``).
+.. code-block:: shell
+
+    export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
+
 
 API
 ---

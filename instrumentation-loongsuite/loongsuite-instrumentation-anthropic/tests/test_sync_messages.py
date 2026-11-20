@@ -18,6 +18,7 @@ import inspect
 
 import pytest
 from anthropic import Anthropic, APIConnectionError, NotFoundError
+from anthropic.resources.messages import AsyncMessages, Messages
 
 from opentelemetry.instrumentation.anthropic import AnthropicInstrumentor
 from opentelemetry.semconv._incubating.attributes import (
@@ -95,7 +96,7 @@ def assert_span_attributes(
 
 @pytest.mark.vcr()
 def test_sync_messages_create_basic(
-    span_exporter, anthropic_client, instrument_no_content
+    span_exporter, anthropic_client, instrument_with_content
 ):
     """Test basic sync message creation produces correct span."""
     model = "claude-sonnet-4-20250514"
@@ -109,6 +110,14 @@ def test_sync_messages_create_basic(
 
     spans = span_exporter.get_finished_spans()
     assert len(spans) == 1
+    assert (
+        "Say hello in one word."
+        in spans[0].attributes["gen_ai.input.messages"]
+    )
+    assert (
+        response.content[0].text
+        in spans[0].attributes["gen_ai.output.messages"]
+    )
 
     assert_span_attributes(
         spans[0],
@@ -274,6 +283,8 @@ def test_uninstrument_removes_patching(
     span_exporter, tracer_provider, logger_provider, meter_provider
 ):
     """Test that uninstrument() removes the patching."""
+    original_sync = Messages.create
+    original_async = AsyncMessages.create
     instrumentor = AnthropicInstrumentor()
     instrumentor.instrument(
         tracer_provider=tracer_provider,
@@ -281,14 +292,11 @@ def test_uninstrument_removes_patching(
         meter_provider=meter_provider,
     )
 
-    # Uninstrument
+    assert Messages.create is not original_sync
+    assert AsyncMessages.create is not original_async
     instrumentor.uninstrument()
-
-    # Create a new client after uninstrumenting
-    # The actual API call won't work without a real API key,
-    # but we can verify no spans are created for a mocked scenario
-    # For this test, we'll just verify uninstrument doesn't raise
-    assert True
+    assert Messages.create is original_sync
+    assert AsyncMessages.create is original_async
 
 
 def test_multiple_instrument_uninstrument_cycles(

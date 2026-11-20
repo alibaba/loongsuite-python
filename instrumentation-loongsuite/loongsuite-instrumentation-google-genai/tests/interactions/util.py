@@ -21,6 +21,24 @@ import unittest.mock
 from typing import Any
 
 
+def create_mock_model(**fields: Any) -> Any:
+    """Mock a pydantic model of the Interactions API with these fields.
+
+    Since google-genai 2.34, ``interactions.create`` copies the interaction
+    it returns, and its usage, with ``model_copy(update=...)`` (to merge
+    automatic continuation hops, even for a single hop). On a plain
+    ``MagicMock`` that copy would be a new mock without these fields.
+    """
+    mock = unittest.mock.MagicMock()
+    mock.configure_mock(**fields)
+
+    def model_copy(update: Any = None, **kwargs: Any) -> Any:
+        return create_mock_model(**{**fields, **(update or {})})
+
+    mock.model_copy.side_effect = model_copy
+    return mock
+
+
 def create_mock_interaction(
     interaction_id: str = "test-id",
     model_name: str = "test-model",
@@ -29,11 +47,12 @@ def create_mock_interaction(
     input_tokens: int = 10,
     output_tokens: int = 20,
 ) -> Any:
-    mock_usage = unittest.mock.MagicMock()
-    mock_usage.total_input_tokens = input_tokens
-    mock_usage.total_output_tokens = output_tokens
-    mock_usage.total_thought_tokens = 0
-    mock_usage.total_cached_tokens = 0
+    mock_usage = create_mock_model(
+        total_input_tokens=input_tokens,
+        total_output_tokens=output_tokens,
+        total_thought_tokens=0,
+        total_cached_tokens=0,
+    )
 
     mock_user_step = unittest.mock.MagicMock()
     mock_user_step.type = "user_input"
@@ -47,14 +66,13 @@ def create_mock_interaction(
     mock_model_part.text = output_text
     mock_model_step.content = [mock_model_part]
 
-    mock_interaction = unittest.mock.MagicMock()
-    mock_interaction.id = interaction_id
-    mock_interaction.model = model_name
-    mock_interaction.usage = mock_usage
-    mock_interaction.steps = [mock_user_step, mock_model_step]
-    mock_interaction.output_text = output_text
-
-    return mock_interaction
+    return create_mock_model(
+        id=interaction_id,
+        model=model_name,
+        usage=mock_usage,
+        steps=[mock_user_step, mock_model_step],
+        output_text=output_text,
+    )
 
 
 def create_mock_completed_event(interaction: Any) -> Any:
