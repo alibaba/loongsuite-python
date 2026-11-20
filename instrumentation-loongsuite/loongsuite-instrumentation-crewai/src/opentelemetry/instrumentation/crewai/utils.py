@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from typing import Any
 
 from opentelemetry.semconv._incubating.attributes import (
@@ -574,6 +575,32 @@ def _tool_arguments(tool_calling: Any) -> Any:
     return getattr(tool_calling, "arguments", None)
 
 
+def _json_key(key: Any) -> Any:
+    """``key`` as a key JSON can encode: a string, a number or None."""
+    return (
+        key if key is None or isinstance(key, (str, int, float)) else str(key)
+    )
+
+
+def _to_jsonable(value: Any) -> Any:
+    """``value`` as data that util-genai's JSON encoder can encode.
+
+    Mappings, lists and tuples keep their structure; other values JSON
+    cannot encode, such as a ``datetime.date`` or a set, become text:
+    ``{"day": date(2024, 1, 1), "rooms": ("A", 2)}`` becomes
+    ``{"day": "2024-01-01", "rooms": ["A", 2]}``. The encoder handles bytes.
+    """
+    if value is None or isinstance(value, (str, int, float, bytes)):
+        return value
+    if isinstance(value, Mapping):
+        return {
+            _json_key(key): _to_jsonable(item) for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_to_jsonable(item) for item in value]
+    return str(value)
+
+
 def create_tool_invocation(
     tool: Any,
     tool_calling: Any,
@@ -583,16 +610,19 @@ def create_tool_invocation(
     tool_name = (
         _non_empty_string(getattr(tool, "name", None)) or "unknown_tool"
     )
+    if tool_call_arguments is None:
+        tool_call_arguments = _tool_arguments(tool_calling)
     invocation = ExecuteToolInvocation(
         provider=CREWAI_PROVIDER,
         tool_name=tool_name,
         tool_call_id=_tool_call_id(tool_name, tool_calling),
         tool_description=_non_empty_string(getattr(tool, "description", None)),
         tool_type="function",
+        # The span records the arguments, as JSON, only with content capture.
         tool_call_arguments=(
-            tool_call_arguments
-            if tool_call_arguments is not None
-            else _tool_arguments(tool_calling)
+            _to_jsonable(tool_call_arguments)
+            if _should_capture_content()
+            else None
         ),
         attributes={
             CREWAI_OPERATION: OP_NAME_TOOL,

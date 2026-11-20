@@ -81,6 +81,18 @@ def _is_stream_close(exc: BaseException) -> bool:
     return isinstance(exc, (GeneratorExit, StopIteration, StopAsyncIteration))
 
 
+def _close_stream(stream: Any) -> None:
+    close = getattr(stream, "close", None)
+    if close is not None:
+        close()
+
+
+async def _aclose_stream(stream: Any) -> None:
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        await aclose()
+
+
 @dataclass
 class _AgnoRunState:
     handler: ExtendedTelemetryHandler
@@ -279,6 +291,7 @@ class AgnoAgentWrapper:
             error = None
             state = None
             state_token = None
+            stream = None
             self._handler.start_invoke_agent(
                 invocation, context=parent_context
             )
@@ -336,6 +349,10 @@ class AgnoAgentWrapper:
                 finalized = True
             except BaseException as exc:
                 error = exc
+                # Close the Agno stream before this run's spans end, so its
+                # cleanup runs now rather than whenever the garbage collector
+                # frees the suspended generator.
+                _close_stream(stream)
                 raise
             finally:
                 try:
@@ -450,6 +467,7 @@ class AgnoAgentWrapper:
         error = None
         state = None
         state_token = None
+        stream = None
         self._handler.start_invoke_agent(invocation, context=parent_context)
         identity_token = None
         state = _AgnoRunState(
@@ -505,6 +523,10 @@ class AgnoAgentWrapper:
             finalized = True
         except BaseException as exc:
             error = exc
+            # Close the Agno stream before this run's spans end, so its
+            # cleanup runs now rather than whenever the garbage collector
+            # frees the suspended generator.
+            await _aclose_stream(stream)
             raise
         finally:
             try:

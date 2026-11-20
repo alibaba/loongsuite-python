@@ -16,9 +16,15 @@
 
 import os
 
+import pytest
+
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
-from agents.tracing.span_data import AgentSpanData
+from agents.tracing.span_data import (
+    AgentSpanData,
+    FunctionSpanData,
+    GenerationSpanData,
+)
 from tests.test_processor import FakeSpan, FakeTrace
 
 from opentelemetry.instrumentation.openai_agents import (
@@ -42,9 +48,13 @@ class TestInstrumentor:
         instrumentor.instrument(tracer_provider=tracer_provider)
         assert OpenAIAgentsInstrumentor._processor is not None
 
+        dispatcher = instrumentor._provider._multi_processor
+        registration = instrumentor._processor
+        assert registration in dispatcher._processors
         instrumentor.uninstrument()
+        assert registration not in dispatcher._processors
         assert OpenAIAgentsInstrumentor._processor is None
-        assert OpenAIAgentsInstrumentor._handler is None
+        assert OpenAIAgentsInstrumentor._provider is None
 
     def test_end_to_end_with_instrumentor(self, instrument, span_exporter):
         """Simulate an agent run via the processor
@@ -73,3 +83,38 @@ class TestInstrumentor:
         instrumentor = OpenAIAgentsInstrumentor()
         deps = instrumentor.instrumentation_dependencies()
         assert any("openai-agents" in d for d in deps)
+
+
+@pytest.mark.parametrize(
+    "mode", ["NO_CONTENT", "EVENT_ONLY", "SPAN_ONLY", "SPAN_AND_EVENT"]
+)
+def test_capture_policy_on_exported_spans(
+    mode, monkeypatch, tracer_provider, span_exporter
+):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", mode
+    )
+    instrumentor = OpenAIAgentsInstrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+    try:
+        processor = instrumentor._processor
+        for data in (
+            GenerationSpanData(
+                model="test", input=[{"role": "user", "content": "secret"}]
+            ),
+            FunctionSpanData(
+                name="lookup",
+                input="private argument",
+                output="private result",
+            ),
+        ):
+            span = FakeSpan(data)
+            processor.on_span_start(span)
+            processor.on_span_end(span)
+    finally:
+        instrumentor.uninstrument()
+    generation, tool = span_exporter.get_finished_spans()
+    capture = mode in ("SPAN_ONLY", "SPAN_AND_EVENT")
+    assert ("gen_ai.input.messages" in generation.attributes) == capture
+    assert ("gen_ai.tool.call.arguments" in tool.attributes) == capture
+    assert ("gen_ai.tool.call.result" in tool.attributes) == capture

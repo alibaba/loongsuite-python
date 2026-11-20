@@ -42,7 +42,6 @@ points are automatically captured without monkey-patching.
 """
 
 import logging
-import os
 from typing import Any, Collection, Optional
 
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
@@ -52,18 +51,19 @@ from opentelemetry.instrumentation.openai_agents.package import (
 from opentelemetry.instrumentation.openai_agents.version import (
     __version__,
 )
-from opentelemetry.util.genai.extended_handler import (
-    ExtendedTelemetryHandler,
-)
+from opentelemetry.trace import get_tracer
+from opentelemetry.util.genai._configuration import is_experimental_mode
+from opentelemetry.util.genai.types import ContentCapturingMode
+from opentelemetry.util.genai.utils import get_content_capturing_mode
 
 logger = logging.getLogger(__name__)
 
-_ENV_CAPTURE_CONTENT = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
-
 
 def _should_capture_content() -> bool:
-    val = os.environ.get(_ENV_CAPTURE_CONTENT, "").strip().lower()
-    return val not in ("false", "0", "no", "off", "")
+    return is_experimental_mode() and get_content_capturing_mode() in (
+        ContentCapturingMode.SPAN_ONLY,
+        ContentCapturingMode.SPAN_AND_EVENT,
+    )
 
 
 class OpenAIAgentsInstrumentor(BaseInstrumentor):
@@ -75,7 +75,7 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
     exported as an OTel span.
     """
 
-    _handler: Optional[ExtendedTelemetryHandler] = None
+    _provider: Optional[Any] = None
     _processor: Optional[Any] = None
 
     def instrumentation_dependencies(self) -> Collection[str]:
@@ -83,55 +83,43 @@ class OpenAIAgentsInstrumentor(BaseInstrumentor):
 
     def _instrument(self, **kwargs: Any) -> None:
         tracer_provider = kwargs.get("tracer_provider")
-        meter_provider = kwargs.get("meter_provider")
-        logger_provider = kwargs.get("logger_provider")
-
-        OpenAIAgentsInstrumentor._handler = ExtendedTelemetryHandler(
-            tracer_provider=tracer_provider,
-            meter_provider=meter_provider,
-            logger_provider=logger_provider,
-        )
-
-        capture_content = _should_capture_content()
-
-        from agents.tracing import (  # noqa: PLC0415
-            add_trace_processor,
-        )
+        # The target SDK is optional until instrumentation is enabled.
+        from agents.tracing import setup  # noqa: PLC0415
 
         from opentelemetry.instrumentation.openai_agents._processor import (  # noqa: PLC0415
             OTelTracingProcessor,
         )
 
-        processor = OTelTracingProcessor(
-            handler=OpenAIAgentsInstrumentor._handler,
-            capture_content=capture_content,
+        provider = (
+            setup.get_trace_provider()
+            if hasattr(setup, "get_trace_provider")
+            else setup.GLOBAL_TRACE_PROVIDER
         )
+        tracer = get_tracer(__name__, __version__, tracer_provider)
+        processor = OTelTracingProcessor(tracer, _should_capture_content())
+        provider.register_processor(processor)
+        OpenAIAgentsInstrumentor._provider = provider
         OpenAIAgentsInstrumentor._processor = processor
-        add_trace_processor(processor)
 
     def _uninstrument(self, **kwargs: Any) -> None:
         processor = OpenAIAgentsInstrumentor._processor
-        if processor is None:
+        provider = OpenAIAgentsInstrumentor._provider
+        if processor is None or provider is None:
             return
 
-        try:
-            from agents.tracing.setup import (  # noqa: PLC0415
-                get_trace_provider,
-            )
-
-            provider = get_trace_provider()
-            if hasattr(provider, "_multi_processor"):
-                mp = provider._multi_processor
-                if hasattr(mp, "_processors"):
-                    procs = mp._processors
-                    if processor in procs:
-                        procs.remove(processor)
-        except Exception as e:
-            logger.debug("Failed to remove processor: %s", e)
-
+        # The SDK has no public remove API. Its default dispatcher uses a
+        # locked tuple on both the oldest and latest supported releases.
+        dispatcher = getattr(provider, "_multi_processor", None)
+        if dispatcher is not None:
+            with dispatcher._lock:
+                dispatcher._processors = tuple(
+                    item
+                    for item in dispatcher._processors
+                    if item is not processor
+                )
         processor.shutdown()
         OpenAIAgentsInstrumentor._processor = None
-        OpenAIAgentsInstrumentor._handler = None
+        OpenAIAgentsInstrumentor._provider = None
 
 
 __all__ = [

@@ -40,10 +40,8 @@ from opentelemetry.trace import (
 from opentelemetry.trace import (
     SpanKind,
     StatusCode,
+    Tracer,
     set_span_in_context,
-)
-from opentelemetry.util.genai.extended_handler import (
-    ExtendedTelemetryHandler,
 )
 from opentelemetry.util.genai.handler import _safe_detach
 
@@ -88,10 +86,11 @@ class OTelTracingProcessor(TracingProcessor):
 
     def __init__(
         self,
-        handler: ExtendedTelemetryHandler,
+        tracer: Tracer,
         capture_content: bool = True,
     ):
-        self._handler = handler
+        self._tracer = tracer
+        self._enabled = True
         self._capture_content = capture_content
         # SDK span_id -> (OTel span, context token)
         self._span_map: dict[str, tuple[OTelSpan, object | None]] = {}
@@ -104,8 +103,10 @@ class OTelTracingProcessor(TracingProcessor):
 
     @_dont_throw
     def on_trace_start(self, trace: Trace) -> None:
+        if not self._enabled:
+            return
         span_name = f"invoke_workflow {trace.name}"
-        otel_span = self._handler._tracer.start_span(
+        otel_span = self._tracer.start_span(
             name=span_name, kind=SpanKind.INTERNAL
         )
         otel_span.set_attribute(GenAI.GEN_AI_OPERATION_NAME, "invoke_workflow")
@@ -130,6 +131,8 @@ class OTelTracingProcessor(TracingProcessor):
 
     @_dont_throw
     def on_span_start(self, span: Span[Any]) -> None:
+        if not self._enabled:
+            return
         span_data = span.span_data
         parent_ctx = None
 
@@ -197,7 +200,7 @@ class OTelTracingProcessor(TracingProcessor):
         span_name = (
             f"{GenAI.GenAiOperationNameValues.INVOKE_AGENT.value} {data.name}"
         )
-        span = self._handler._tracer.start_span(
+        span = self._tracer.start_span(
             name=span_name,
             kind=SpanKind.INTERNAL,
             context=parent_ctx,
@@ -217,7 +220,7 @@ class OTelTracingProcessor(TracingProcessor):
     ) -> OTelSpan:
         model_name = data.model or "unknown"
         span_name = f"chat {model_name}"
-        span = self._handler._tracer.start_span(
+        span = self._tracer.start_span(
             name=span_name,
             kind=SpanKind.CLIENT,
             context=parent_ctx,
@@ -239,7 +242,7 @@ class OTelTracingProcessor(TracingProcessor):
         if data.response and hasattr(data.response, "model"):
             model_name = data.response.model or "unknown"
         span_name = f"chat {model_name}"
-        span = self._handler._tracer.start_span(
+        span = self._tracer.start_span(
             name=span_name,
             kind=SpanKind.CLIENT,
             context=parent_ctx,
@@ -258,7 +261,7 @@ class OTelTracingProcessor(TracingProcessor):
         span_name = (
             f"{GenAI.GenAiOperationNameValues.EXECUTE_TOOL.value} {data.name}"
         )
-        span = self._handler._tracer.start_span(
+        span = self._tracer.start_span(
             name=span_name,
             kind=SpanKind.INTERNAL,
             context=parent_ctx,
@@ -280,7 +283,7 @@ class OTelTracingProcessor(TracingProcessor):
         from_name = data.from_agent or "unknown"
         to_name = data.to_agent or "unknown"
         span_name = f"{from_name} -> {to_name}"
-        span = self._handler._tracer.start_span(
+        span = self._tracer.start_span(
             name=span_name,
             kind=SpanKind.INTERNAL,
             context=parent_ctx,
@@ -298,7 +301,7 @@ class OTelTracingProcessor(TracingProcessor):
         parent_ctx: Any | None,
     ) -> OTelSpan:
         span_name = f"guardrail {data.name}"
-        span = self._handler._tracer.start_span(
+        span = self._tracer.start_span(
             name=span_name,
             kind=SpanKind.INTERNAL,
             context=parent_ctx,
@@ -314,7 +317,7 @@ class OTelTracingProcessor(TracingProcessor):
     ) -> OTelSpan:
         span_type = getattr(span_data, "type", "unknown")
         span_name = getattr(span_data, "name", span_type)
-        span = self._handler._tracer.start_span(
+        span = self._tracer.start_span(
             name=span_name,
             kind=SpanKind.INTERNAL,
             context=parent_ctx,
@@ -476,7 +479,8 @@ class OTelTracingProcessor(TracingProcessor):
     # ------------------------------------------------------------------
 
     @_dont_throw
-    def shutdown(self) -> None:
+    def shutdown(self, **kwargs: Any) -> None:
+        self._enabled = False
         for otel_span, ctx_token in self._span_map.values():
             otel_span.end()
             if ctx_token is not None:

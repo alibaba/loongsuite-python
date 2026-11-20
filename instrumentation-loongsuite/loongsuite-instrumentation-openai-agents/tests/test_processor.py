@@ -37,9 +37,6 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
-from opentelemetry.util.genai.extended_handler import (
-    ExtendedTelemetryHandler,
-)
 
 # -----------------------------------------------------------
 # Helpers: lightweight fakes for the SDK's Trace / Span ABCs
@@ -98,8 +95,9 @@ def setup():
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
-    handler = ExtendedTelemetryHandler(tracer_provider=provider)
-    processor = OTelTracingProcessor(handler=handler, capture_content=True)
+    processor = OTelTracingProcessor(
+        provider.get_tracer(__name__), capture_content=True
+    )
     return processor, exporter
 
 
