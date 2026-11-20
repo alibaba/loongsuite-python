@@ -63,6 +63,7 @@ from ._step import (
     remove_react_step_hooks,
 )
 from ._tool import ToolLayer
+from .package import _instruments
 from .version import __version__
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,7 @@ class AgentUniverseInstrumentor(BaseInstrumentor):
     _install_failed = False
 
     def instrumentation_dependencies(self) -> Sequence[str]:
-        return ("agentUniverse >= 0.0.19.1",)
+        return _instruments
 
     # -- install ------------------------------------------------------
 

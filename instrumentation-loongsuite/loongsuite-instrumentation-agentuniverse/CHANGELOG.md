@@ -10,12 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Independent Agent, LLM and Tool instrumentation using the framework's six
   wrapper extension points, with shared GenAI attributes and 26 native metric
   families. Existing framework wrappers are restored on uninstrumentation.
-- Stable agentUniverse 0.0.19.1 API compatibility for sync/async calls and the
-  native LangChain ReAct executor. Optional alpha round and dispatcher hooks
-  are not required to enable the three core layers.
-- Representative stable runtime coverage: two user turns per session, four
-  model decisions and three actual tools per turn, concurrent full-stream
-  conversations, public reasoning enabled/disabled and usage-only SSE tails.
+- Instrumentation for the published agentUniverse 0.1.0a2 preview on Python
+  3.10–3.12. The installer, bootstrap registry and test matrix target the same
+  framework version.
 
 ### Fixed
 
@@ -33,12 +30,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Keep the name-preserving proxy compatible with the OpenTelemetry Span API,
   preserving trace/span correlation for GenAI events.
 - Apply content controls to both native and GenAI content attributes.
-
-### Release blocker
-
-- The published agentUniverse 0.0.19.1 wheel pins `grpcio==1.63.0`, conflicting
-  with the aligned OTel exporter's `grpcio>=1.63.2` requirement. Runtime tests
-  with unchanged stable source and a visibly versioned metadata-only dependency
-  correction are diagnostic evidence. Normal installation and release remain
-  blocked until upstream supplies a compatible stable package. No dependency
-  bypass is advertised as supported installation.

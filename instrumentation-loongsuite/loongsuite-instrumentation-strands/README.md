@@ -55,6 +55,12 @@ invoke_agent <agent_name>       (INTERNAL, gen_ai.span.kind=AGENT)
   suppress model-provider instrumentation.
 - Standard LoongSuite content-capture settings control prompt and response
   attributes; content is not captured by default.
+- With content capture enabled, model spans and model-input history represent
+  public reasoning text as `type=reasoning` parts. Reasoning signatures and
+  encrypted or redacted reasoning are omitted from telemetry.
+- Agent output contains the final response, excluding intermediate reasoning,
+  tool plans, and tool results. Model and tool spans retain their own content;
+  the application's Strands messages and results are unchanged.
 - Stream cleanup failures are isolated from application control flow. If an
   invocation closes before Strands emits its normal after-events, unfinished
   spans use a synthetic `RuntimeError` describing that incomplete lifecycle.
@@ -70,4 +76,3 @@ invoke_agent <agent_name>       (INTERNAL, gen_ai.span.kind=AGENT)
   instrumentation tolerates that framework-owned detach and keeps its own
   context tokens strictly paired, so closing a stream does not surface a
   spurious `Failed to detach context` error.
-

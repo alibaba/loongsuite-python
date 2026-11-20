@@ -21,37 +21,21 @@ instrumentation uses -- and produces the Agent, LLM and Tool telemetry itself:
   instrumentation uses.
 
 One agent call tree carries one span per agent, LLM request and tool call.
-Stable text ReAct uses the framework's LangChain executor; its Agent, LLM and
-Tool calls are recorded without requiring the alpha-only round hooks. The layer spans carry
-both the `au.*` and the `gen_ai.*` namespaces.
+The layer spans carry both the `au.*` and `gen_ai.*` attributes.
 
-## Requirements
+## Requirements and installation
 
-The compatibility target is **agentUniverse 0.0.19.1**, Python 3.10-3.12.
-Agent/LLM/Tool wrappers, native text ReAct, OpenAI JSON/SSE responses and public
-reasoning use this stable release's actual APIs. Optional newer hooks do not
-prevent stable activation. The alpha release is not required.
+This integration supports the published **agentUniverse 0.1.0a2 preview** on
+Python 3.10–3.12. The framework's NumPy and PyArrow requirements limit the
+supported Python versions. Its stable 0.0.19.1 release pins an incompatible
+version of gRPC.
 
-**Release blocker: the published 0.0.19.1 package cannot currently be installed
-with this integration's OpenTelemetry dependencies.** It requires
-`grpcio==1.63.0`, while the aligned OTel gRPC exporter requires
-`grpcio>=1.63.2`. The framework requires both the gRPC and HTTP exporter
-distributions, so choosing HTTP does not remove the dependency conflict.
-An upstream dependency correction and a new compatible stable package are
-required before normal installation can be accepted.
+From the LoongSuite repository root, install the instrumentation and its
+supported framework version together:
 
-Runtime diagnostic tests use unchanged stable framework source with a visibly
-versioned, metadata-only local dependency correction. This establishes API
-behavior, not compatibility of the unmodified published wheel. Neither
-`--no-deps` nor `skip_dep_check=True` is a supported installation workaround.
-The framework's numpy/pyarrow requirements limit this matrix to Python 3.10-3.12.
-
-## Installation
-
-Normal installation is blocked as described above. The `instruments` extra
-and runtime version check target `agentUniverse==0.0.19.1`; they do not silently
-select a prerelease. Do not treat this unreleased candidate as ready to install
-until the dependency blocker is resolved.
+```bash
+python -m pip install ./util/opentelemetry-util-genai './instrumentation-loongsuite/loongsuite-instrumentation-agentuniverse[instruments]'
+```
 
 ## Usage
 
@@ -214,7 +198,7 @@ This deliberate difference is covered in both the native baseline and complex ru
 
 The explicit `session_id` on an Agent run is recorded as `gen_ai.session.id`
 on that Agent and its nested LLM and Tool spans. This context remains isolated
-through the stable native ReAct executor and concurrent async conversations,
+across nested calls and concurrent async conversations,
 without changing global providers or propagators.
 
 
@@ -305,38 +289,14 @@ layer that cannot even be constructed calls the original function directly.
 
 ## Tests
 
-The suite runs against the declared real framework version. Fast wrapper,
-coexistence, privacy, error and lifecycle checks are supplemented by
-`tests/runtime_app.py` and `tests/stable_runtime_provider.py`:
-
-- One native sync and two concurrent streaming conversations, each with two
-  user turns and four model decisions per turn.
-- The stable native ReAct/AgentExecutor dispatches stock, price and
-  multiplication tools, then produces the final answer. Arguments, actual
-  results and second-turn history are verified in real SDK traffic and spans.
-  Text ReAct does not supply provider tool-call IDs or parallel calls within
-  one model round; telemetry does not invent either capability.
-- Nonempty synthetic public reasoning with `reasoning_effort=high`, reasoning
-  disabled, fragmented text/reasoning and usage-only SSE tails. Only the
-  provider HTTP boundary is deterministic; SDK parsing, framework loops,
-  tool dispatch and telemetry are real.
-- Separate real stable-channel SDK calls verify raw tool-call JSON and
-  fragmented tool arguments in SSE. This checks model-output mapping, without
-  claiming that native text ReAct dispatch supplies provider tool-call IDs.
-- `SPAN_ONLY` and `NO_CONTENT`, correct inclusive Token totals and metrics,
-  original business result identity, isolated sessions and parent trees.
-- Atomic installation failure/retry, later hook ownership, unread stream close,
-  cross-task consumption, cancellation, collector faults and clean siblings.
+The suite installs the published framework version through the same
+`instruments` extra used by applications. It covers hook ownership and
+restoration, sync and async calls, content controls, usage aggregation,
+stream cleanup, and cancellation. Framework-version-specific tests are
+selected based on the available APIs.
 
 Run from the repository root:
 
 ```bash
 tox -c tox-loongsuite.ini -e py312-test-loongsuite-instrumentation-agentuniverse
 ```
-
-The test matrix uses the exporters from the same pinned OpenTelemetry core
-revision as the SDK. Published exporters constrain released SDK versions and
-cannot be mixed with that development SDK. The normal tox installation remains
-blocked on the official framework dependency conflict; diagnostic runs are
-reported separately. Six alpha-API checks are inapplicable to the stable
-release and do not count as executed stable feature coverage.
