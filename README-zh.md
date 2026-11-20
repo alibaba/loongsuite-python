@@ -543,6 +543,26 @@ loongsuite-instrument \
 
 ![Trace view in Jaeger](docs/_assets/img/quickstart-results.png)
 
+## 参与贡献
+
+请参阅[贡献指南](CONTRIBUTING-loongsuite-zh.md)。
+
+### 维护者
+
+- [Huxing Zhang](https://github.com/ralf0131), Alibaba
+- [Liu Ziming](https://github.com/123liuziming), Alibaba
+- [RichardoMu](https://github.com/RichardoMrMu), ByteDance
+- [sipercai](https://github.com/sipercai), Alibaba
+
+### 荣誉成员（Emeritus）
+
+- [Minghui Zhang](https://github.com/Cirilla-zmh), Alibaba
+- [Lurious](https://github.com/lyred193)
+
+### 感谢所有贡献者！
+
+感谢每一位为 LoongSuite Python 和上游 [OpenTelemetry Python Contrib](https://github.com/open-telemetry/opentelemetry-python-contrib) 项目作出贡献的社区成员！
+
 ## 社区
 
 欢迎你的反馈与建议。你可以加入我们的[钉钉群](https://qr.dingtalk.com/action/joingroup?code=v1,k1,mexukXI88tZ1uiuLYkKhdaETUx/K59ncyFFFG5Voe9s=&_dt_no_comment=1&origin=11?)，或扫描下方二维码与我们交流。
@@ -554,12 +574,6 @@ loongsuite-instrument \
 | LoongCollector Go SIG | LoongSuite Java SIG |
 |----|----|
 | <img src="docs/_assets/img/loongsuite-go-sig-dingtalk.png" height="150"> | <img src="docs/_assets/img/loongsuite-java-sig-dingtalk.jpg" height="150"> |
-
-### 维护者
-
-- [sipercai](https://github.com/sipercai), Alibaba
-- [123liuziming](https://github.com/123liuziming), Alibaba
-- [RichardoMrMu](https://github.com/RichardoMrMu), ByteDance
 
 ## 资源
 * AgentScope: https://github.com/modelscope/agentscope
