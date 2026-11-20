@@ -547,7 +547,7 @@ loongsuite-instrument \
 
 请参阅[贡献指南](CONTRIBUTING-loongsuite-zh.md)。
 
-### 维护者（Maintainers）
+### 维护者
 
 - [Huxing Zhang](https://github.com/ralf0131), Alibaba
 - [Liu Ziming](https://github.com/123liuziming), Alibaba
