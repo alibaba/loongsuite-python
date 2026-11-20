@@ -44,6 +44,7 @@ from opentelemetry.util.genai.types import (
     InputMessage,
     LLMInvocation,
     OutputMessage,
+    Reasoning,
     Text,
     ToolCall,
     ToolCallResponse,
@@ -270,7 +271,7 @@ class LoongsuiteHook:
             if result is not None:
                 reason = _finish_reason(result.stop_reason)
                 state.agent.finish_reasons = [reason]
-                state.agent.output_messages = _convert_output_message(
+                state.agent.output_messages = _convert_agent_output_message(
                     result.message, reason
                 )
                 _apply_usage(
@@ -645,6 +646,19 @@ def _convert_output_message(message: Any, reason: str) -> list[OutputMessage]:
     ]
 
 
+def _convert_agent_output_message(
+    message: Any, reason: str
+) -> list[OutputMessage]:
+    messages = _convert_output_message(message, reason)
+    for output in messages:
+        output.parts = [
+            part
+            for part in output.parts
+            if not isinstance(part, (Reasoning, ToolCall, ToolCallResponse))
+        ]
+    return [output for output in messages if output.parts]
+
+
 def _convert_content(blocks: Any) -> list[Any]:
     if isinstance(blocks, str):
         return [Text(content=blocks)]
@@ -654,6 +668,14 @@ def _convert_content(blocks: Any) -> list[Any]:
             parts.append(Text(content=block))
         elif isinstance(block, dict) and "text" in block:
             parts.append(Text(content=block["text"]))
+        elif isinstance(block, dict) and "reasoningContent" in block:
+            reasoning = block["reasoningContent"]
+            if isinstance(reasoning, dict):
+                reasoning_text = reasoning.get("reasoningText")
+                if isinstance(reasoning_text, dict):
+                    text = reasoning_text.get("text")
+                    if isinstance(text, str) and text:
+                        parts.append(Reasoning(content=text))
         elif isinstance(block, dict) and "toolUse" in block:
             tool_use = block["toolUse"]
             parts.append(

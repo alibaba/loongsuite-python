@@ -15,8 +15,10 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from sweagent.agent.hooks.abstract import CombinedAgentHook
 from sweagent.run.hooks.abstract import CombinedRunHooks
 from sweagent.types import AgentInfo, AgentRunResult, StepOutput
@@ -26,6 +28,9 @@ from opentelemetry.instrumentation.sweagent.patch import (
     SWEAGENT_BASH_TOOL_NAME,
     tool_call_arguments_from_sweagent_step,
     tool_name_from_sweagent_step,
+    wrap_combined_agent_hook_on_run_done,
+    wrap_combined_agent_hook_on_step_done,
+    wrap_combined_run_hooks_on_instance_completed,
     wrap_default_agent_handle_action,
 )
 from opentelemetry.semconv._incubating.attributes import (
@@ -268,3 +273,37 @@ def test_nested_hook_hierarchy(instrumented_sweagent, span_exporter):
     )
     in_msgs = json.loads(invoke_span.attributes[GenAI.GEN_AI_INPUT_MESSAGES])
     assert in_msgs[0]["parts"][0]["content"] == "task"
+
+
+@pytest.mark.parametrize(
+    "wrapper,attribute",
+    [
+        (
+            wrap_combined_run_hooks_on_instance_completed,
+            "_loongsuite_entry_invocation",
+        ),
+        (
+            wrap_combined_agent_hook_on_run_done,
+            "_loongsuite_invoke_invocation",
+        ),
+        (
+            wrap_combined_agent_hook_on_step_done,
+            "_loongsuite_react_invocation",
+        ),
+    ],
+)
+@pytest.mark.parametrize("paired", [False, True])
+def test_completion_preserves_hook_outcome(wrapper, attribute, paired):
+    hooks = SimpleNamespace()
+    handler = MagicMock()
+    if paired:
+        setattr(hooks, attribute, SimpleNamespace())
+    expected = object()
+    assert wrapper(handler, lambda: expected, hooks, (), {}) is expected
+    if paired:
+        setattr(hooks, attribute, SimpleNamespace())
+    error = LookupError("hook failed")
+    with pytest.raises(LookupError) as caught:
+        wrapper(handler, MagicMock(side_effect=error), hooks, (), {})
+    assert caught.value is error
+    assert not hasattr(hooks, attribute)

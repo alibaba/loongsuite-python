@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Detach the MCP session context instead of leaving it attached after the client transport exits
+  ([#280](https://github.com/alibaba/loongsuite-python/pull/280))
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.

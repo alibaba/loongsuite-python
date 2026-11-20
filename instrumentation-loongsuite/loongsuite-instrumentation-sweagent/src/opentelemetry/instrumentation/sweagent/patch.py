@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from types import SimpleNamespace
+from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
@@ -242,6 +242,30 @@ def _apply_agent_info_to_invocation(
             pass
 
 
+def _finish_reason(info):
+    if isinstance(info, dict) and info.get("exit_status"):
+        return str(info["exit_status"])
+    return "stop"
+
+
+@contextmanager
+def _completion(handler_stop, handler_fail, invocation):
+    """Finalize telemetry without replacing a hook's return value or exception."""
+    try:
+        yield
+    except Exception as exc:
+        try:
+            handler_fail(invocation, Error(message=str(exc), type=type(exc)))
+        except Exception:
+            logger.debug("Failed to record hook error", exc_info=True)
+        raise
+    else:
+        try:
+            handler_stop(invocation)
+        except Exception:
+            logger.debug("Failed to end hook span", exc_info=True)
+
+
 def wrap_combined_run_hooks_on_instance_start(
     handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
 ):
@@ -269,30 +293,31 @@ def wrap_combined_run_hooks_on_instance_start(
 def wrap_combined_run_hooks_on_instance_completed(
     handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
 ):
-    try:
+    inv = getattr(instance, "_loongsuite_entry_invocation", None)
+    if inv is None:
         return wrapped(*args, **kwargs)
+    try:
+        with _completion(handler.stop_entry, handler.fail_entry, inv):
+            outcome = wrapped(*args, **kwargs)
+            try:
+                result = kwargs.get("result")
+                inv.output_messages = [
+                    OutputMessage(
+                        role="assistant",
+                        parts=[
+                            Text(content=_build_entry_output_summary(result))
+                        ],
+                        finish_reason=_finish_reason(
+                            getattr(result, "info", None)
+                        ),
+                    )
+                ]
+            except Exception:
+                logger.debug("Failed to read instance result", exc_info=True)
+            return outcome
     finally:
-        inv = getattr(instance, "_loongsuite_entry_invocation", None)
-        if inv is None:
-            return
-        result = kwargs.get("result")
-        summary = (
-            _build_entry_output_summary(result)
-            if result is not None
-            else "(no result)"
-        )
-        inv.output_messages = [
-            OutputMessage(
-                role="assistant",
-                parts=[Text(content=summary)],
-                finish_reason="stop",
-            )
-        ]
-        try:
-            handler.stop_entry(inv)
-        finally:
-            delattr(instance, "_loongsuite_entry_invocation")
-            _instance_tls.problem_statement = None
+        delattr(instance, "_loongsuite_entry_invocation")
+        _instance_tls.problem_statement = None
 
 
 def wrap_combined_agent_hook_on_run_start(
@@ -323,30 +348,32 @@ def wrap_combined_agent_hook_on_run_start(
 def wrap_combined_agent_hook_on_run_done(
     handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
 ):
-    try:
+    inv = getattr(instance, "_loongsuite_invoke_invocation", None)
+    if inv is None:
         return wrapped(*args, **kwargs)
+    try:
+        with _completion(
+            handler.stop_invoke_agent, handler.fail_invoke_agent, inv
+        ):
+            outcome = wrapped(*args, **kwargs)
+            try:
+                info = kwargs.get("info")
+                summary = _build_agent_run_summary(
+                    info, kwargs.get("trajectory")
+                )
+                inv.output_messages = [
+                    OutputMessage(
+                        role="assistant",
+                        parts=[Text(content=summary)],
+                        finish_reason=_finish_reason(info),
+                    )
+                ]
+                _apply_agent_info_to_invocation(inv, info)
+            except Exception:
+                logger.debug("Failed to read run result", exc_info=True)
+            return outcome
     finally:
-        inv = getattr(instance, "_loongsuite_invoke_invocation", None)
-        if inv is None:
-            return
-        # Same summary text as entry ``on_instance_completed`` (``AgentRunResult``-like).
-        result_like = SimpleNamespace(
-            info=kwargs.get("info"),
-            trajectory=kwargs.get("trajectory"),
-        )
-        summary = _build_entry_output_summary(result_like)
-        inv.output_messages = [
-            OutputMessage(
-                role="assistant",
-                parts=[Text(content=summary)],
-                finish_reason="stop",
-            )
-        ]
-        _apply_agent_info_to_invocation(inv, result_like.info)
-        try:
-            handler.stop_invoke_agent(inv)
-        finally:
-            delattr(instance, "_loongsuite_invoke_invocation")
+        delattr(instance, "_loongsuite_invoke_invocation")
 
 
 def wrap_combined_agent_hook_on_step_start(
@@ -368,20 +395,22 @@ def wrap_combined_agent_hook_on_step_start(
 def wrap_combined_agent_hook_on_step_done(
     handler: ExtendedTelemetryHandler, wrapped, instance, args, kwargs
 ):
-    try:
+    inv = getattr(instance, "_loongsuite_react_invocation", None)
+    if inv is None:
         return wrapped(*args, **kwargs)
+    try:
+        with _completion(
+            handler.stop_react_step, handler.fail_react_step, inv
+        ):
+            outcome = wrapped(*args, **kwargs)
+            try:
+                status = getattr(kwargs.get("step"), "exit_status", None)
+                inv.finish_reason = str(status) if status is not None else None
+            except Exception:
+                logger.debug("Failed to read step result", exc_info=True)
+            return outcome
     finally:
-        inv = getattr(instance, "_loongsuite_react_invocation", None)
-        if inv is None:
-            return
-        step = kwargs.get("step")
-        if step is not None:
-            fr = getattr(step, "exit_status", None)
-            inv.finish_reason = str(fr) if fr is not None else None
-        try:
-            handler.stop_react_step(inv)
-        finally:
-            delattr(instance, "_loongsuite_react_invocation")
+        delattr(instance, "_loongsuite_react_invocation")
 
 
 def wrap_default_agent_handle_action(
