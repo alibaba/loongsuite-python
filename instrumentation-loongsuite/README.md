@@ -1,7 +1,9 @@
 
 | Instrumentation | Supported Packages | Metrics support | Semconv status |
 | --------------- | ------------------ | --------------- | -------------- |
+| [loongsuite-instrumentation-a2a](./loongsuite-instrumentation-a2a) | a2a-sdk >= 0.2.0 | No | development
 | [loongsuite-instrumentation-agentscope](./loongsuite-instrumentation-agentscope) | agentscope >= 1.0.0, < 3.0.0 | No | development
+| [loongsuite-instrumentation-agentuniverse](./loongsuite-instrumentation-agentuniverse) | agentUniverse == 0.1.0a2 | Yes | development
 | [loongsuite-instrumentation-agno](./loongsuite-instrumentation-agno) | agno >= 2.0.0, < 3 | No | development
 | [loongsuite-instrumentation-algotune](./loongsuite-instrumentation-algotune) | algotune | No | development
 | [loongsuite-instrumentation-autogen](./loongsuite-instrumentation-autogen) | autogen-agentchat >= 0.7.0, < 0.8.0 | No | development
