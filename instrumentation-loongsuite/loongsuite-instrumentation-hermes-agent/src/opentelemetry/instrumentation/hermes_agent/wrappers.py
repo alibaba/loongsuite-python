@@ -130,13 +130,16 @@ class _ProviderStreamProxy:
 
     def __init__(self, stream: Any, attempt: _ProviderResponseAttempt) -> None:
         self._stream = stream
+        self._iterator = None
         self._attempt = attempt
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        chunk = next(self._stream)
+        if self._iterator is None:
+            self._iterator = iter(self._stream)
+        chunk = next(self._iterator)
         self._attempt.record(chunk)
         return chunk
 
@@ -145,7 +148,7 @@ class _ProviderStreamProxy:
         if enter is not None:
             entered = enter()
             if entered is not self._stream:
-                self._stream = entered
+                self._iterator = iter(entered)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):

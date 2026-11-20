@@ -484,12 +484,10 @@ def test_streaming_provider_response_id_overrides_hermes_framework_id(
         runtime,
         agent,
         [
-            iter(
-                [
-                    _stream_chunk("chatcmpl-provider-123"),
-                    _stream_chunk("chatcmpl-provider-123"),
-                ]
-            )
+            [
+                _stream_chunk("chatcmpl-provider-123"),
+                _stream_chunk("chatcmpl-provider-123"),
+            ]
         ],
     )
 
