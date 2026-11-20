@@ -1,95 +1,57 @@
-# LoongSuite Python 探针代码审查规范
+# LoongSuite Python Instrumentation Code Review Guidelines
 
-本代码仓库是基于 OpenTelemetry 针对 Python 应用进行可观测数据采集的探针。请根据以下原则 Review 代码，并给出修改建议。
+This repository uses OpenTelemetry to collect telemetry from Python applications. Apply the following guidelines when reviewing code and suggesting changes.
 
----
+## 1. Prefer framework extension points
 
-## 1. 优先使用框架扩展机制
+Use the framework's own extension mechanisms where possible, such as ASGI middleware. Avoid monkey-patching individual methods because a method available in one framework version may disappear in the next.
 
-埋点时请尽可能使用框架自带的扩展机制，比如 ASGI 的 middleware 机制。
+## 2. Avoid adding third-party dependencies
 
-**避免**：使用 monkey patch 去 patch 某个具体的方法，因为这个方法可能在某个版本存在，在下一个版本就不存在了。
+Reuse existing dependencies where possible. For example, use `aiohttp` if it already provides the functionality that would otherwise require adding `httpx`. As a general rule, vendor the necessary source code if a third-party library is needed. The `requests` library is an exception.
 
----
+## 3. Preserve application behavior
 
-## 2. 避免引入三方依赖
+Instrumentation must preserve the application's behavior. If the application would raise an exception, instrumentation must allow it to propagate.
 
-* 原则上不要引入三方的依赖库，需要用拷贝源码的方式 shadow 到项目中，但 requests 库例外。
-* 尽量复用已有的依赖，例如假如依赖 httpx 可以改为依赖 aiohttp，因为 aiohttp 是已有的依赖，而 httpx 需要新增
+## 4. Keep instrumentation lightweight
 
----
+Minimize CPU overhead. Do not use `deepcopy`. On the request path, do not log at `INFO` or higher. Use `logger.debug` for diagnostics so frequent log messages incur minimal CPU and I/O overhead when debug logging is disabled.
 
-## 3. 保留业务语义
+## 5. Check for resource leaks
 
-埋点逻辑需要保留用户的业务语义。
+### 5.1 Reference cycles and finalizers
 
-**例如**：在某个地方原本用户要抛出一个异常，探针就不可以吞掉这个异常，必须确保异常能够正常抛出。
+Reference counting alone cannot reclaim cycles. Python relies on its cyclic garbage collector to reclaim them. Python 2 and early Python 3 releases could leave cycles containing objects with `__del__` uncollected. Python 3.4 improved this behavior. Where cycles are possible, avoid defining `__del__` or break the references explicitly.
 
----
+### 5.2 Unbounded globals and module-level caches
 
-## 4. 性能要求
+Global containers and caches can retain objects for the lifetime of the process. Check for hand-written caches without an eviction policy and unbounded uses of `functools.lru_cache`. Specify a `maxsize` or clear the cache periodically.
 
-埋点的逻辑需要足够轻量，避免占用用户过多的 CPU。
+### 5.3 Closures retaining outer variables
 
-**禁止**：
-- `deepcopy` 操作
-- 流量链路禁止使用 info 及以上级别，建议使用 `logger.debug` 级别，仅在开启 DEBUG 模式时输出。原因是频繁打日志会占用用户过多的 CPU 和 I/O 资源。
+A closure can unintentionally keep a large object alive. Refactor the closure to avoid capturing the object or explicitly delete the reference when it is no longer needed.
 
----
+### 5.4 Memory management in third-party C extensions
 
-## 5. 资源泄漏检查
+Python's garbage collector cannot release native memory that a C extension fails to free. This can occur in extensions used by NumPy, PyTorch, or OpenCV. Process memory may keep growing even when `tracemalloc` and `pympler` show no corresponding growth.
 
-需要注意潜在的资源泄漏情况，包括但不限于以下几种：
+Check the extension's documentation and available updates. Use `objgraph`, `memory_profiler`, or a system tool such as Valgrind to investigate.
 
-### 5.1 循环引用 + 不可回收对象（含 `__del__`）
+### 5.5 Unclosed files, connections, and threads
 
-**问题**：引用计数无法处理循环引用，Python 会依靠循环垃圾回收器（gc）来清理。
-**风险点**：如果循环引用中的对象定义了 `__del__` 方法，Python 2 或早期版本可能无法自动回收（Python 3.4+ 已改进，但仍需注意）。
-**建议**：避免在可能产生循环引用的对象中定义 `__del__`；或显式断开引用。
-
-### 5.2 全局变量或模块级缓存无限增长
-
-**问题**：全局字典、列表、缓存等在程序生命周期内不会被释放。
-
-**典型场景**：
-- 手动实现的缓存未设置淘汰策略（如 LRU）
-- 使用 `functools.lru_cache` 装饰长期运行的函数，但未限制大小
-
-**建议**：使用 `functools.lru_cache(maxsize=...)` 或定期清理缓存。
-
-### 5.3 闭包引用外部变量导致对象无法释放
-
-**问题**：闭包可能无意中持有了大对象的引用。
-**建议**：在闭包中显式 `del` 不需要的变量，或重构避免捕获大对象。
-
-### 5.4 第三方 C 扩展模块的内存管理错误
-
-**问题**：C 扩展（如某些 numpy、pytorch、opencv 插件）若未正确释放内存，Python 的 gc 无法干预。
-
-**表现**：`tracemalloc` 或 `pympler` 无法追踪到泄漏，但系统内存持续增长。
-
-**建议**：
-- 检查 C 扩展文档或更新版本
-- 使用 `objgraph`、`memory_profiler` 或系统工具（如 valgrind）辅助诊断
-
-### 5.5 未关闭的资源（文件、连接、线程等）
-
-虽然严格来说不一定是"内存泄漏"，但未关闭的资源会持有内存或系统句柄。
-
-**示例**：
+Unreleased resources can retain memory or system handles. For example:
 
 ```python
-f = open('huge_file.txt')
-# 忘记 f.close()，文件句柄和缓冲区内存可能长期占用
+f = open("huge_file.txt")
+# If f.close() is omitted, the file handle can remain open.
 ```
 
-**建议**：始终使用 `with` 语句管理资源。
+Use a `with` statement to manage resources that support it.
 
-### 5.6 异常捕获中保留 traceback
+### 5.6 Retained exception tracebacks
 
-**问题**：`traceback` 对象会持有栈帧，栈帧又引用局部变量，导致整个作用域的对象无法释放。
-
-**示例**：
+A traceback holds stack frames, which in turn hold references to local variables. Retaining the traceback can keep an entire scope alive.
 
 ```python
 import sys
@@ -97,168 +59,102 @@ import sys
 exc_info = None
 try:
     raise ValueError("oops")
-except Exception as e:
-    exc_info = sys.exc_info()  # 包含 traceback
-# exc_info 持有栈帧 → 持有所有局部变量
+except Exception:
+    exc_info = sys.exc_info()  # Includes the traceback and its frames.
 ```
 
-**建议**：避免长期保存 `exc_info`，使用后设为 `None`；或使用 `traceback.format_exc()` 代替。
+Avoid storing `exc_info` long term. Clear it after use or store the string returned by `traceback.format_exc()`.
 
----
+## 6. Threads and scheduled tasks
 
-## 6. 线程和定时任务限制
+Do not create threads or scheduled tasks. If one is essential, assess its resource cost carefully.
 
-**禁止**：创建新的线程以及定时任务。
+## 7. Check metric attribute cardinality
 
-如果一定要创建，需要严格评估对应的资源开销。
+Check how many distinct values each metric attribute can take. High-cardinality attributes can produce an excessive number of time series. Pay particular attention to `endpoint`, `destId`, and `rpc`.
 
----
+## 8. Limit instrumentation to the target framework
 
-## 7. 高基数属性检查
+A plugin must instrument only classes belonging to its target framework. For example, CrewAI depends on LiteLLM. Instrumenting LiteLLM classes belongs outside the CrewAI plugin.
 
-检查指标中的各个属性是否有可能是高基数的，高基数的属性容易造成发散问题。
+## 9. Preserve exception tracebacks
 
-**特别注意以下属性**：
-- `endpoint`
-- `destId`
-- `rpc`
+Use a bare `raise` when re-raising an exception to preserve its traceback. Avoid `raise e`, which changes the traceback at the re-raise site.
 
----
+## 10. Thread safety
 
-## 8. 插件埋点范围
+### 10.1 Protect singleton creation with a lock
 
-请检查插件中是否只对这个插件本身的一些类进行埋点。
-**禁止**：对插件依赖的类进行埋点。
-**例如**：CrewAI 依赖了 litellm 框架，在 CrewAI 的埋点里面就不要对 litellm 相关的类进行埋点操作。
+Concurrent callers can create multiple instances if the check and initialization are unprotected. Guard singleton creation with a lock.
 
----
+### 10.2 Protect shared global state
 
-## 9. 异常相关
+Concurrent writes to global variables can cause races. Protect shared reads and writes with a lock, or encapsulate configuration in a singleton.
 
-建议统一使用 raise 来保留完整的异常堆栈，使用 raise e 会丢失原始堆栈信息。
+## 11. Imports
 
----
+### 11.1 Import order and placement
 
-## 10. 线程安全
+Follow PEP 8. Group standard-library imports first, third-party imports second, and local imports last. Separate groups with a blank line.
 
-### 10.1 单例模式必须使用线程锁保护
-**问题**：在并发场景下，不加锁的单例检查可能会创建多个实例。
+Keep imports at the top of the file, following Ruff rule `PLC0415`. If a local import is necessary, explain why in a comment and add the inline suppression `# noqa: PLC0415`.
 
-### 10.2 全局变量读写需要注意线程安全
+### 11.2 Avoid duplicate imports
 
-多线程环境下修改全局变量可能导致竞态条件，建议：
-- 使用线程锁保护读写操作
-- 或将配置封装到单例类中
+Check that each module is imported only once per file.
 
----
+### 11.3 Optional dependencies
 
-## 11. 导入语句规范
+Use lazy imports or a guarded `try`/`except` import for optional libraries. The instrumentation module should still load when the target framework is absent.
 
-### 11.1 导入顺序
+## 12. Exception handling and diagnostics
 
-按照 PEP 8 规范，导入语句应按以下顺序排列：
-1. 标准库导入
-2. 第三方库导入
-3. 本地导入
+### 12.1 Avoid overly broad exception handlers
 
-各组之间用空行分隔。
+Do not catch `BaseException`. It also catches `KeyboardInterrupt` and `SystemExit`. Use `Exception` when a general exception handler is appropriate.
 
-按照 PLC 0415 的规范，如非必要，导入语句原则上应该放在文件的开头。如果由于某些原因不得不放在代码中间，必须添加注释说明，并使用行内注释`# noqa: PLC0415`来避免校验失败。
+### 12.2 Use a logger for diagnostics
 
-### 11.2 避免重复导入
+Use the logger instead of `print`.
 
-同一个模块只应导入一次，检查文件中是否存在重复的 import 语句。
+## 13. Python version compatibility
 
-### 11.3 延迟导入
+Avoid syntax that requires a Python version newer than 3.8.
 
-对于可能不存在的库（如用户未安装的框架），建议使用延迟导入或 try-except 方式，避免在模块级别直接导入可能不存在的模块，这会导致整个模块加载失败。
+## 14. Code formatting
 
----
+End each Python file with a newline. Separate top-level functions and classes with two blank lines. Use spaces around assignment operators. Follow existing enum naming conventions and choose descriptive variable names.
 
-## 12. 异常处理规范
+## 15. Unit test coverage
 
-### 12.1 避免捕获过宽的异常
-**禁止**：使用 `except BaseException`，这会捕获 `KeyboardInterrupt` 和 `SystemExit`。
-**建议**：使用 `except Exception`。
+Cover new functionality with tests for core behavior, boundary conditions, and error paths. Tests should verify the observable effect of the change. For a new plugin, verify the complete trace and the emitted metrics. Exercise realistic workloads and keep mocking to a minimum.
 
-### 12.2 使用 logger 而非 print
+## 16. Dictionary and cache memory management
 
----
+### 16.1 Bound dictionary growth
 
-## 13. Python 版本兼容性
+Set a maximum size, expire entries periodically, or use `WeakValueDictionary` where appropriate so the garbage collector can reclaim unused values.
 
-* 避免使用 Python 3.8 以上才支持的语法
+## 17. Spelling
 
----
+Check for spelling errors.
 
-## 14. 代码格式规范
+## 18. Verify that methods exist
 
-* 文件末尾换行符：根据 PEP 8 规范，所有 Python 文件末尾应该有一个换行符。
-* 顶级函数和类定义之间应有**两个空行**。
-* 等号两侧应有空格
-* 枚举命名风格一致性，符合之前命名的习惯
-* 变量命名需要比较有意义，不要有一些很简单的字符
+After refactoring, check that every method call still resolves. Renamed or removed methods can otherwise cause an `AttributeError` at runtime.
 
----
+## 19. Match instrumentation setup and teardown
 
-## 15. 单测测试覆盖要求
+`uninstrument` must release resources acquired by `instrument` and undo setup operations in reverse order.
 
-* 新增的功能模块应该有对应的单元测试覆盖，特别是：
-  - 核心业务逻辑
-  - 边界情况处理
-  - 异常情况处理
-* 单元测试需要验证到响应的功能修改，例如新增一个插件的单元测试需要包含完成 trace 验证，metrics 验证，并且测试用例尽量真实，不能有太多的 mock 测试。
+## 20. Comments
 
----
+For key methods, consider including an input/output example. Remove leftover development notes, comments that add no information, and commented-out code.
 
-## 16. 字典和缓存的内存管理
+## 21. Pull requests
 
-### 16.1 防止字典无限增长
+Use a Conventional Commits title and link the PR to a work item.
 
-**建议**：
-1. 添加最大容量限制
-2. 添加定期清理机制（如基于时间的过期）
-3. 使用 `WeakValueDictionary` 允许 GC 自动回收
+## 22. Chinese and English terminology
 
----
-
-## 17. 拼写检查
-
-* 检查是否存在拼写错误
-
----
-
-## 18. 方法存在性验证
-
-* 在重构代码后，请确保调用的方法确实存在。常见问题是重构后方法名变更或被移除，导致运行时 `AttributeError`。
-
----
-
-## 19. 插件埋点对称性
-
-* 在插件的 uninstrument 的实现中，要保持 instrument 实现的对称性，例如在 instrument 中申请的资源，在 uninstrument 中释放
-* 在 instrument 中实现的逻辑，在 uninstrument 方法中进行倒序的清理。
-
----
-
-## 20. 注释相关
-
-* 关键的方法，建议给出一些 input/output 的示例，提升代码可读性
-* 避免引入无意义的注释，例如一些开发过程中的注释，忘记删除
-* 有些代码被注释掉，这种情况建议直接删除
-
----
-
-## 21. PR 规范
-
-* PR 的标题需要符合 conventional commits 规范
-* PR 中需要关联工作项
-
----
-
-## 22. 中英文命名约定
-
-所有注释以及说明文档中都应遵循本约定。
-
-* "探针"（名词）对应英文命名应使用 instrumentation，而非 probe
-* "埋点"（动词）对应英文命名应使用 instrument
+Apply these conventions in all comments and documentation. Translate the noun “探针” as **instrumentation** (avoid “probe”) and the verb “埋点” as **instrument**.

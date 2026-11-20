@@ -16,7 +16,6 @@
 # pylint: disable=redefined-outer-name
 
 import json
-import os
 
 import pytest
 import yaml
@@ -35,6 +34,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
+from opentelemetry.util.genai._configuration import is_experimental_mode
 from opentelemetry.util.genai.environment_variables import (
     OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
 )
@@ -87,10 +87,15 @@ def meter_provider(metric_reader):
 
 
 @pytest.fixture(autouse=True)
-def environment():
-    """Set up environment variables for testing."""
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        os.environ["ANTHROPIC_API_KEY"] = "test_anthropic_api_key"
+def environment(monkeypatch):
+    """Exercise the experimental GenAI content modes with a synthetic SDK key."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test_anthropic_api_key")
+    monkeypatch.setenv(
+        "OTEL_SEMCONV_STABILITY_OPT_IN", "gen_ai_latest_experimental"
+    )
+    is_experimental_mode.cache_clear()
+    yield
+    is_experimental_mode.cache_clear()
 
 
 @pytest.fixture
@@ -115,10 +120,12 @@ def vcr_config():
 
 
 @pytest.fixture(scope="function")
-def instrument_no_content(tracer_provider, logger_provider, meter_provider):
+def instrument_no_content(
+    monkeypatch, tracer_provider, logger_provider, meter_provider
+):
     """Instrument Anthropic without content capture."""
-    os.environ.update(
-        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "False"}
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "NO_CONTENT"
     )
 
     instrumentor = AnthropicInstrumentor()
@@ -129,15 +136,16 @@ def instrument_no_content(tracer_provider, logger_provider, meter_provider):
     )
 
     yield instrumentor
-    os.environ.pop(OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, None)
     instrumentor.uninstrument()
 
 
 @pytest.fixture(scope="function")
-def instrument_with_content(tracer_provider, logger_provider, meter_provider):
+def instrument_with_content(
+    monkeypatch, tracer_provider, logger_provider, meter_provider
+):
     """Instrument Anthropic with content capture enabled."""
-    os.environ.update(
-        {OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "True"}
+    monkeypatch.setenv(
+        OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, "SPAN_ONLY"
     )
     instrumentor = AnthropicInstrumentor()
     instrumentor.instrument(
@@ -147,7 +155,6 @@ def instrument_with_content(tracer_provider, logger_provider, meter_provider):
     )
 
     yield instrumentor
-    os.environ.pop(OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT, None)
     instrumentor.uninstrument()
 
 
@@ -222,7 +229,7 @@ class PrettyPrintJSONBody:
 
     @staticmethod
     def deserialize(cassette_string):
-        return yaml.load(cassette_string, Loader=yaml.Loader)
+        return yaml.safe_load(cassette_string)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -234,4 +241,9 @@ def fixture_vcr(vcr):
 
 def scrub_response_headers(response):
     """Scrub sensitive response headers."""
+    response["headers"] = {
+        name: value
+        for name, value in response.get("headers", {}).items()
+        if name.lower() in {"content-type", "x-should-retry"}
+    }
     return response

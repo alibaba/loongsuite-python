@@ -14,9 +14,14 @@
 
 import asyncio
 import builtins
+import contextvars
+import importlib
+import inspect
 import json
 import os
 from collections.abc import AsyncGenerator, Sequence
+from dataclasses import asdict
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -25,6 +30,8 @@ from strands import Agent, tool
 from strands.models import Model
 from strands.telemetry.tracer import get_tracer
 
+from opentelemetry import baggage
+from opentelemetry import context as otel_context
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
@@ -41,6 +48,10 @@ from opentelemetry.instrumentation.strands import (
 )
 from opentelemetry.instrumentation.strands import (
     _instrumentor as instrumentor_module,
+)
+from opentelemetry.instrumentation.strands._compat import (
+    BaggageContextCompat,
+    _TolerantContextApi,
 )
 from opentelemetry.instrumentation.strands._hooks import (
     _agent_invocation_usage,
@@ -86,6 +97,25 @@ class DeterministicModel(Model):
                 yield {
                     "contentBlockDelta": {"delta": {"text": content["text"]}}
                 }
+                yield {"contentBlockStop": {}}
+            elif "reasoningContent" in content:
+                reasoning = content["reasoningContent"]["reasoningText"]
+                yield {"contentBlockStart": {"start": {}}}
+                text = reasoning["text"]
+                for fragment in (text[:7], text[7:]):
+                    yield {
+                        "contentBlockDelta": {
+                            "delta": {"reasoningContent": {"text": fragment}}
+                        }
+                    }
+                if signature := reasoning.get("signature"):
+                    yield {
+                        "contentBlockDelta": {
+                            "delta": {
+                                "reasoningContent": {"signature": signature}
+                            }
+                        }
+                    }
                 yield {"contentBlockStop": {}}
             elif "toolUse" in content:
                 stop_reason = "tool_use"
@@ -235,28 +265,31 @@ def content_telemetry(monkeypatch):
     native.tracer = original_native_tracer
 
 
-def _agent() -> Agent:
-    return Agent(
-        model=DeterministicModel(
-            [
-                {
-                    "content": [
-                        {
-                            "toolUse": {
-                                "toolUseId": "tool-1",
-                                "name": "calculator",
-                                "input": {"expression": "2+2"},
-                            }
-                        }
-                    ]
-                },
-                {"content": [{"text": "The answer is 4."}]},
-            ]
-        ),
-        tools=[calculator],
-        name="test_agent",
-        retry_strategy=None,
-    )
+_TOOL_THEN_ANSWER: list[dict[str, Any]] = [
+    {
+        "content": [
+            {
+                "toolUse": {
+                    "toolUseId": "tool-1",
+                    "name": "calculator",
+                    "input": {"expression": "2+2"},
+                }
+            }
+        ]
+    },
+    {"content": [{"text": "The answer is 4."}]},
+]
+
+
+def _agent(**kwargs: Any) -> Agent:
+    options: dict[str, Any] = {
+        "model": DeterministicModel(_TOOL_THEN_ANSWER),
+        "tools": [calculator],
+        "name": "test_agent",
+        "retry_strategy": None,
+    }
+    options.update(kwargs)
+    return Agent(**options)
 
 
 @pytest.mark.asyncio
@@ -406,6 +439,187 @@ async def test_capture_content_includes_every_model_round(content_telemetry):
     assert json.loads(tool_span.attributes["gen_ai.tool.call.result"])[
         "content"
     ] == [{"text": "4"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("capture", ["SPAN_ONLY", "NO_CONTENT"])
+async def test_reasoning_model_rounds_and_final_agent_boundary(
+    content_telemetry, monkeypatch, streaming, capture
+):
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", capture
+    )
+    _, exporter, _ = content_telemetry
+
+    async def worker(label):
+        responses = []
+        for turn in (1, 2):
+            responses.extend(
+                [
+                    {
+                        "content": [
+                            {
+                                "reasoningContent": {
+                                    "reasoningText": {
+                                        "text": f"{label} plan {turn}",
+                                        "signature": "synthetic-signature",
+                                    }
+                                }
+                            },
+                            {
+                                "toolUse": {
+                                    "toolUseId": f"{label}-tool-{turn}",
+                                    "name": "calculator",
+                                    "input": {"expression": "2+2"},
+                                }
+                            },
+                        ]
+                    },
+                    {
+                        "content": [
+                            {
+                                "reasoningContent": {
+                                    "reasoningText": {
+                                        "text": f"{label} conclude {turn}",
+                                        "signature": "synthetic-signature",
+                                    }
+                                }
+                            },
+                            {"text": f"{label} answer {turn}: 4"},
+                        ]
+                    },
+                ]
+            )
+        model = DeterministicModel(responses)
+        agent = _agent(model=model, name=label, callback_handler=None)
+        for turn in (1, 2):
+            if streaming:
+                events = [
+                    event
+                    async for event in agent.stream_async(
+                        f"{label} turn {turn}"
+                    )
+                ]
+                terminal = [
+                    event["result"] for event in events if "result" in event
+                ]
+                assert len(terminal) == 1
+                result = terminal[0]
+                assert (
+                    "".join(
+                        event["data"]
+                        for event in events
+                        if isinstance(event.get("data"), str)
+                    )
+                    == f"{label} answer {turn}: 4"
+                )
+            else:
+                result = await agent.invoke_async(f"{label} turn {turn}")
+            assert str(result).strip() == f"{label} answer {turn}: 4"
+            # Filtering telemetry must never mutate the SDK's business result.
+            assert result.message["content"][0]["reasoningContent"][
+                "reasoningText"
+            ] == {
+                "text": f"{label} conclude {turn}",
+                "signature": "synthetic-signature",
+            }
+        assert model.index == 4
+
+    await asyncio.gather(worker("reasoning-a"), worker("reasoning-b"))
+    spans = exporter.get_finished_spans()
+    llms = [s for s in spans if s.attributes["gen_ai.span.kind"] == "LLM"]
+    agents = [s for s in spans if s.attributes["gen_ai.span.kind"] == "AGENT"]
+    tools = [s for s in spans if s.attributes["gen_ai.span.kind"] == "TOOL"]
+    assert (len(llms), len(agents), len(tools)) == (8, 4, 4)
+    if capture == "NO_CONTENT":
+        for span in spans:
+            assert "gen_ai.input.messages" not in span.attributes
+            assert "gen_ai.output.messages" not in span.attributes
+        return
+
+    history_reasoning = []
+    for span in llms:
+        output = json.loads(span.attributes["gen_ai.output.messages"])
+        assert output[0]["parts"][0]["type"] == "reasoning"
+        assert set(output[0]["parts"][0]) == {"type", "content"}
+        history_reasoning.extend(
+            part
+            for message in json.loads(span.attributes["gen_ai.input.messages"])
+            for part in message["parts"]
+            if part.get("type") == "reasoning"
+        )
+        assert (
+            "synthetic-signature"
+            not in span.attributes["gen_ai.output.messages"]
+        )
+    assert history_reasoning
+    for span in agents:
+        label = span.attributes["gen_ai.agent.name"]
+        output = json.loads(span.attributes["gen_ai.output.messages"])
+        assert len(output) == 1
+        assert len(output[0]["parts"]) == 1
+        assert output[0]["parts"][0]["type"] == "text"
+        assert output[0]["parts"][0]["content"].startswith(f"{label} answer ")
+
+
+@pytest.mark.parametrize(
+    "reasoning",
+    [
+        {"reasoningText": {"signature": "synthetic-signature"}},
+        {"reasoningText": {"text": ""}},
+        {"reasoningText": {"text": 42}},
+        {"redactedContent": b"synthetic-encrypted"},
+        {"reasoningText": "malformed"},
+        None,
+    ],
+)
+def test_unavailable_reasoning_does_not_export_opaque_content(reasoning):
+    messages = hooks_module._convert_output_message(
+        {
+            "role": "assistant",
+            "content": [
+                {"reasoningContent": reasoning},
+                {"text": "Final answer"},
+            ],
+        },
+        "stop",
+    )
+    assert asdict(messages[0])["parts"] == [
+        {"content": "Final answer", "type": "text"}
+    ]
+
+
+def test_agent_boundary_excludes_tool_transcript_and_keeps_final_parts():
+    final_image = {
+        "image": {
+            "format": "png",
+            "source": {"s3Location": {"uri": "s3://example/final.png"}},
+        }
+    }
+    message = {
+        "role": "assistant",
+        "content": [
+            {"reasoningContent": {"reasoningText": {"text": "Thought"}}},
+            {"toolUse": {"toolUseId": "tool-1", "name": "calculator"}},
+            {"toolResult": {"toolUseId": "tool-1", "content": []}},
+            final_image,
+            {"text": "Final answer"},
+        ],
+    }
+    output = hooks_module._convert_agent_output_message(message, "stop")
+    assert asdict(output[0])["parts"] == [
+        final_image,
+        {"content": "Final answer", "type": "text"},
+    ]
+    assert len(message["content"]) == 5
+    assert (
+        hooks_module._convert_agent_output_message(
+            {"role": "assistant", "content": message["content"][:3]},
+            "tool_calls",
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio
@@ -953,6 +1167,116 @@ def test_native_tracer_is_restored_on_uninstrument(telemetry):
     replacement = native.tracer
     instrumentor.uninstrument()
     assert native.tracer is not replacement
+
+
+def _stub_agent_module() -> Any:
+    def _init_with_baggage(self, *, baggage_attributes=None) -> None:
+        return None
+
+    return SimpleNamespace(
+        context_api=otel_context,
+        Agent=type("Agent", (), {"__init__": _init_with_baggage}),
+    )
+
+
+def _supports_baggage_attributes() -> bool:
+    return "baggage_attributes" in inspect.signature(Agent.__init__).parameters
+
+
+def test_baggage_context_compat_tolerates_cross_context_detach():
+    module = _stub_agent_module()
+    compat = BaggageContextCompat()
+    compat.install(module)
+    previous = otel_context.get_current()
+    try:
+        assert module.context_api is not otel_context
+        token = module.context_api.attach(
+            otel_context.set_value("strands.compat.probe", "value")
+        )
+        assert otel_context.get_value("strands.compat.probe") == "value"
+        contextvars.copy_context().run(module.context_api.detach, token)
+        assert otel_context.get_value("strands.compat.probe") == "value"
+    finally:
+        # the skipped detach leaves its value attached; restore the context
+        otel_context.attach(previous)
+        compat.restore()
+    assert module.context_api is otel_context
+
+
+def test_tolerant_context_api_only_tolerates_cross_context_detach():
+    class _RaisingDelegate:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(otel_context, name)
+
+        @staticmethod
+        def detach(token: Any) -> None:
+            raise ValueError("unrelated detach failure")
+
+    proxy = _TolerantContextApi(_RaisingDelegate())
+    assert proxy.get_value("strands.compat.delegate.probe") is None
+    with pytest.raises(ValueError, match="unrelated detach failure"):
+        proxy.detach(object())
+
+
+def test_baggage_context_compat_skips_frameworks_without_baggage():
+    def _init_without_baggage(self) -> None:
+        return None
+
+    with_context_api = SimpleNamespace(
+        context_api=otel_context,
+        Agent=type("Agent", (), {"__init__": _init_without_baggage}),
+    )
+    without_context_api = SimpleNamespace(
+        Agent=type("Agent", (), {"__init__": _init_without_baggage})
+    )
+
+    compat = BaggageContextCompat()
+    try:
+        compat.install(with_context_api)
+        assert with_context_api.context_api is otel_context
+        compat.install(without_context_api)
+    finally:
+        compat.restore()
+
+
+def test_instrumentor_patches_and_restores_framework_context_api(telemetry):
+    instrumentor, _, _ = telemetry
+    module = importlib.import_module("strands.agent.agent")
+    if getattr(module, "context_api", None) is None:
+        pytest.skip("installed strands-agents has no context_api binding")
+    assert module.context_api is not otel_context
+    instrumentor.uninstrument()
+    assert module.context_api is otel_context
+
+
+@pytest.mark.asyncio
+async def test_invocation_baggage_attach_is_preserved(
+    telemetry, caplog, monkeypatch
+):
+    if not _supports_baggage_attributes():
+        pytest.skip("installed strands-agents has no baggage_attributes")
+    module = importlib.import_module("strands.agent.agent")
+    attached: list[dict[str, str]] = []
+    proxy = module.context_api
+    original_attach = proxy.attach
+
+    def spy_attach(context: Any) -> Any:
+        attached.append(dict(baggage.get_all(context)))
+        return original_attach(context)
+
+    monkeypatch.setattr(proxy, "attach", spy_attach)
+    agent = _agent(baggage_attributes={"tenant": "acme"})
+
+    async for _ in agent.stream_async("Calculate 2+2"):
+        pass
+
+    assert attached == [{"tenant": "acme"}]
+    assert baggage.get_all() == {}
+    assert not any(
+        "different Context" in record.getMessage()
+        or "Failed to detach context" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_instrumentation_dependencies():

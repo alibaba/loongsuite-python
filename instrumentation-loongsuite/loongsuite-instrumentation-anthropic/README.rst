@@ -3,8 +3,8 @@ LoongSuite Anthropic Instrumentation
 
 |pypi|
 
-.. |pypi| image:: https://badge.fury.io/py/opentelemetry-instrumentation-anthropic.svg
-   :target: https://pypi.org/project/opentelemetry-instrumentation-anthropic/
+.. |pypi| image:: https://badge.fury.io/py/loongsuite-instrumentation-anthropic.svg
+   :target: https://pypi.org/project/loongsuite-instrumentation-anthropic/
 
 This library allows tracing LLM requests made by the
 `Anthropic Python SDK <https://pypi.org/project/anthropic/>`_ with the
@@ -15,8 +15,7 @@ Installation
 
 ::
 
-    pip install ./instrumentation-loongsuite/loongsuite-instrumentation-anthropic
-    pip install ./util/opentelemetry-util-genai
+    pip install ./util/opentelemetry-util-genai "./instrumentation-loongsuite/loongsuite-instrumentation-anthropic[instruments]"
 
 If you don't have an Anthropic application yet, try our `examples <examples>`_
 which only need a valid Anthropic API key.
@@ -55,11 +54,12 @@ Capture Message Content
 ***********************
 
 By default, prompts and completions are not captured. To enable message content capture,
-set the environment variable:
+set both environment variables:
 
 ::
 
-    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true
+    export OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental
+    export OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=SPAN_ONLY
 
 
 References
