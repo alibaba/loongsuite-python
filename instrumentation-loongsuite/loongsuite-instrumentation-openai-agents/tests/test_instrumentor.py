@@ -14,12 +14,14 @@
 
 """Tests for the OpenAIAgentsInstrumentor lifecycle."""
 
+import asyncio
 import os
 
 import pytest
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
+from agents import trace as agent_trace
 from agents.tracing.span_data import (
     AgentSpanData,
     FunctionSpanData,
@@ -27,6 +29,7 @@ from agents.tracing.span_data import (
 )
 from tests.test_processor import FakeSpan, FakeTrace
 
+from opentelemetry import trace
 from opentelemetry.instrumentation.openai_agents import (
     OpenAIAgentsInstrumentor,
 )
@@ -118,3 +121,48 @@ def test_capture_policy_on_exported_spans(
     assert ("gen_ai.input.messages" in generation.attributes) == capture
     assert ("gen_ai.tool.call.arguments" in tool.attributes) == capture
     assert ("gen_ai.tool.call.result" in tool.attributes) == capture
+
+
+def test_uninstrument_during_active_trace_preserves_callers_context(
+    tracer_provider, span_exporter
+):
+    instrumentor = OpenAIAgentsInstrumentor()
+    instrumentor.instrument(tracer_provider=tracer_provider)
+
+    provider = instrumentor._provider
+    others = [
+        p
+        for p in provider._multi_processor._processors
+        if p is not instrumentor._processor
+    ]
+    provider.set_processors([instrumentor._processor])
+
+    async def run():
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+
+        async def application():
+            with tracer_provider.get_tracer(__name__).start_as_current_span(
+                "caller"
+            ) as caller:
+                with agent_trace("in-flight"):
+                    started.set()
+                    await stopped.wait()
+                assert trace.get_current_span() is caller
+
+        task = asyncio.create_task(application())
+        await started.wait()
+        instrumentor.uninstrument()
+        stopped.set()
+        await task
+
+    try:
+        asyncio.run(run())
+    finally:
+        if instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.uninstrument()
+        provider.set_processors(others)
+    spans = span_exporter.get_finished_spans()
+    workflow, caller = spans
+    assert workflow.name == "invoke_workflow in-flight"
+    assert workflow.parent.span_id == caller.context.span_id

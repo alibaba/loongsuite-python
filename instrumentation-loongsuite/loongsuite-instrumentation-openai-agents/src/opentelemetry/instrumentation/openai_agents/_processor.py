@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from threading import Lock
 from typing import Any
 
 from agents.tracing.processor_interface import TracingProcessor
@@ -30,7 +31,6 @@ from agents.tracing.span_data import (
 from agents.tracing.spans import Span
 from agents.tracing.traces import Trace
 
-from opentelemetry import context as otel_context
 from opentelemetry.semconv._incubating.attributes import (
     gen_ai_attributes as GenAI,
 )
@@ -43,7 +43,6 @@ from opentelemetry.trace import (
     Tracer,
     set_span_in_context,
 )
-from opentelemetry.util.genai.handler import _safe_detach
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +91,17 @@ class OTelTracingProcessor(TracingProcessor):
         self._tracer = tracer
         self._enabled = True
         self._capture_content = capture_content
-        # SDK span_id -> (OTel span, context token)
-        self._span_map: dict[str, tuple[OTelSpan, object | None]] = {}
-        # SDK trace_id -> (OTel span, context token)
-        self._trace_map: dict[str, tuple[OTelSpan, object | None]] = {}
+        self._lock = Lock()
+        self._span_map: dict[str, OTelSpan] = {}
+        self._trace_map: dict[str, OTelSpan] = {}
+
+    def _remember_span(self, spans, key, span):
+        with self._lock:
+            if self._enabled:
+                spans[key] = span
+                return
+        # Creation raced with uninstrumentation.
+        span.end()
 
     # ------------------------------------------------------------------
     # Trace lifecycle
@@ -112,18 +118,14 @@ class OTelTracingProcessor(TracingProcessor):
         otel_span.set_attribute(GenAI.GEN_AI_OPERATION_NAME, "invoke_workflow")
         otel_span.set_attribute(GenAI.GEN_AI_SYSTEM, _PROVIDER_NAME)
         otel_span.set_attribute(GenAI.GEN_AI_PROVIDER_NAME, _PROVIDER_NAME)
-        ctx_token = otel_context.attach(set_span_in_context(otel_span))
-        self._trace_map[trace.trace_id] = (otel_span, ctx_token)
+        self._remember_span(self._trace_map, trace.trace_id, otel_span)
 
     @_dont_throw
     def on_trace_end(self, trace: Trace) -> None:
-        entry = self._trace_map.pop(trace.trace_id, None)
-        if entry is None:
-            return
-        otel_span, ctx_token = entry
-        otel_span.end()
-        if ctx_token is not None:
-            _safe_detach(ctx_token)
+        with self._lock:
+            span = self._trace_map.pop(trace.trace_id, None)
+        if span is not None:
+            span.end()
 
     # ------------------------------------------------------------------
     # Span lifecycle
@@ -134,41 +136,37 @@ class OTelTracingProcessor(TracingProcessor):
         if not self._enabled:
             return
         span_data = span.span_data
-        parent_ctx = None
-
-        # Resolve parent: SDK parent_id -> OTel parent span context
-        if span.parent_id and span.parent_id in self._span_map:
-            parent_otel_span, _ = self._span_map[span.parent_id]
-            parent_ctx = set_span_in_context(parent_otel_span)
-        elif span.trace_id in self._trace_map:
-            parent_otel_span, _ = self._trace_map[span.trace_id]
-            parent_ctx = set_span_in_context(parent_otel_span)
+        # SDK start and finish callbacks can run in different contexts. Use
+        # explicit SDK parent IDs without attaching tokens to caller tasks.
+        with self._lock:
+            parent = self._span_map.get(span.parent_id) or self._trace_map.get(
+                span.trace_id
+            )
+        parent_ctx = (
+            set_span_in_context(parent) if parent is not None else None
+        )
 
         otel_span = self._create_span_for(span_data, parent_ctx)
         if otel_span is None:
             return
 
-        ctx_token = otel_context.attach(set_span_in_context(otel_span))
-        self._span_map[span.span_id] = (otel_span, ctx_token)
+        self._remember_span(self._span_map, span.span_id, otel_span)
 
     @_dont_throw
     def on_span_end(self, span: Span[Any]) -> None:
-        entry = self._span_map.pop(span.span_id, None)
-        if entry is None:
+        with self._lock:
+            otel_span = self._span_map.pop(span.span_id, None)
+        if otel_span is None:
             return
-        otel_span, ctx_token = entry
-
-        self._apply_end_attributes(otel_span, span)
-
-        if span.error:
-            error_msg = span.error.get("message", "")
-            error_type = span.error.get("type", "Exception")
-            otel_span.set_status(StatusCode.ERROR, error_msg)
-            otel_span.set_attribute("error.type", error_type)
-
-        otel_span.end()
-        if ctx_token is not None:
-            _safe_detach(ctx_token)
+        try:
+            self._apply_end_attributes(otel_span, span)
+            if span.error:
+                error_msg = span.error.get("message", "")
+                error_type = span.error.get("type", "Exception")
+                otel_span.set_status(StatusCode.ERROR, error_msg)
+                otel_span.set_attribute("error.type", error_type)
+        finally:
+            otel_span.end()
 
     # ------------------------------------------------------------------
     # Span creation per type
@@ -480,17 +478,13 @@ class OTelTracingProcessor(TracingProcessor):
 
     @_dont_throw
     def shutdown(self, **kwargs: Any) -> None:
-        self._enabled = False
-        for otel_span, ctx_token in self._span_map.values():
-            otel_span.end()
-            if ctx_token is not None:
-                _safe_detach(ctx_token)
-        for otel_span, ctx_token in self._trace_map.values():
-            otel_span.end()
-            if ctx_token is not None:
-                _safe_detach(ctx_token)
-        self._span_map.clear()
-        self._trace_map.clear()
+        with self._lock:
+            self._enabled = False
+            spans = [*self._span_map.values(), *self._trace_map.values()]
+            self._span_map.clear()
+            self._trace_map.clear()
+        for span in spans:
+            span.end()
 
     @_dont_throw
     def force_flush(self) -> None:
