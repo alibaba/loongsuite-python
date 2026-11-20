@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix the API docs build: Sphinx read the "Streaming:" prefix of the
   `InvokeAgentInvocation.monotonic_first_token_s` docstring as a type and
   failed on the missing `Streaming` class.
+- `ExtendedTelemetryHandler` now always detaches the context and ends the span
+  in its `stop_*` and `fail_*` methods, as `stop_llm` and `fail_llm` do, even
+  when applying attributes, events or metrics raises; the error still reaches
+  the caller. For example, a tool argument that JSON cannot encode, such as a
+  `datetime.date`, left the TOOL span unfinished and current, so later spans
+  became its children.
 
 ## Version 0.9.0 (2026-09-07)
 
