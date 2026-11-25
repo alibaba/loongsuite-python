@@ -28,21 +28,44 @@ The implementation follows the latest GenAI [semantic conventions](https://githu
 
 Source tree: [`instrumentation-loongsuite/`](instrumentation-loongsuite).
 
+Entries marked **Source** are available on `main` and have not yet been published to PyPI.
+
 | Framework/Components | Docs | Release |
 |--------|------|---------|
+| [A2A](https://github.com/a2aproject/a2a-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-a2a/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-a2a) |
 | [AgentScope](https://github.com/agentscope-ai/agentscope) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agentscope/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-agentscope/) |
-| [Agno](https://github.com/agno-agi/agno) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agno/README.md) | in dev |
-| [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-claude-agent-sdk/) |
-| [QwenPaw](https://github.com/agentscope-ai/QwenPaw) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-qwenpaw/) |
+| [Agno](https://github.com/agno-agi/agno) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agno/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-agno) |
+| AlgoTune | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-algotune/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-algotune/) |
+| AutoGen | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-autogen/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-autogen/) |
+| [BFCL v4](https://github.com/ShishirPatil/gorilla/tree/main/berkeley-function-call-leaderboard) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-bfclv4/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-bfclv4/) |
+| [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-claude-agent-sdk/) |
+| Claw Eval | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-claw-eval/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-claw-eval/) |
 | [CrewAI](https://github.com/crewAIInc/crewAI) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-crewai/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-crewai/) |
-| [DashScope](https://github.com/dashscope/dashscope-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-dashscope/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-dashscope/) |
-| [Dify](https://github.com/langgenius/dify) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-dify/README.md) | in dev |
+| [DashScope](https://github.com/dashscope/dashscope-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-dashscope/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-dashscope/) |
+| [DeepAgents](https://github.com/langchain-ai/deepagents) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-deepagents/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-deepagents/) |
+| [DeerFlow](https://github.com/bytedance/deer-flow) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-deerflow/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-deerflow) |
+| [Dify](https://github.com/langgenius/dify) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-dify/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-dify) |
 | [Google ADK](https://github.com/google/adk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-google-adk/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-google-adk/) |
+| Google GenAI | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-google-genai/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-google-genai/) |
+| [Hermes Agent](https://github.com/NousResearch/hermes-agent) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-hermes-agent/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-hermes-agent/) |
 | [LangChain](https://github.com/langchain-ai/langchain) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-langchain/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-langchain/) |
 | [LangGraph](https://github.com/langchain-ai/langgraph) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-langgraph/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-langgraph/) |
-| [LiteLLM](https://github.com/BerriAI/litellm) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-litellm/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-litellm/) |
-| [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-mcp/README.md) | in dev |
+| [LiteLLM](https://github.com/BerriAI/litellm) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-litellm/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-litellm/) |
+| [LlamaIndex](https://github.com/run-llama/llama_index) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-llama-index/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-llama-index) |
+| [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-mcp/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-mcp) |
 | [Mem0](https://github.com/mem0ai/mem0) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-mem0/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-mem0/) |
+| Microsoft Agent Framework | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-microsoft-agent-framework/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-microsoft-agent-framework/) |
+| MiniSweAgent | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-minisweagent/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-minisweagent/) |
+| OpenHands | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-openhands/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-openhands/) |
+| [Qwen-Agent](https://github.com/QwenLM/Qwen-Agent) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-qwen-agent/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-qwen-agent/) |
+| [QwenPaw](https://github.com/agentscope-ai/QwenPaw) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-qwenpaw/) |
+| [slop-code-bench](https://github.com/SprocketLab/slop-code-bench) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-slop-code/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-slop-code/) |
+| [Strands Agents](https://github.com/strands-agents/sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-strands/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-strands/) |
+| Terminus2 | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-terminus2/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-terminus2/) |
+| VitaBench | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-vita/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-vita/) |
+| WebArena | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-webarena/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-webarena/) |
+| [WideSearch](https://github.com/ByteDance-Seed/WideSearch) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-widesearch/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-widesearch/) |
+| [WildToolBench](https://github.com/yupeijei1997/WildToolBench) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-wildtool/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-wildtool/) |
 
 **Distro and helpers:**
 
