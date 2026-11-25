@@ -327,7 +327,7 @@ For applications where you can edit code and want explicit control over OpenTele
   ```bash
   pip install loongsuite-instrumentation-agentscope
   ```
-  
+
   > **Note:** If you need packages under [`instrumentation-genai/`](instrumentation-genai), use **Option A or B** together with **`loongsuite-distro`** / **`loongsuite-bootstrap`**. Relying only on manual `pip` can cause **dependency resolution conflicts** when [**loongsuite-otel-util-genai**](https://pypi.org/project/loongsuite-otel-util-genai/) and the community **opentelemetry-util-genai** are both pulled in or pinned differently.
 
 **Step 2 — Initialize the OpenTelemetry SDK** before anything emits telemetry. You are wiring the same exporters as in [Configure telemetry export](#configure-telemetry-export).
@@ -406,7 +406,7 @@ For applications where you can edit code and want explicit control over OpenTele
 
 Run **without** changing codes or bootstrap commands: a **`.pth` hook** loads LoongSuite’s distro early (see [loongsuite-site-bootstrap/README.md](loongsuite-site-bootstrap/README.md)).
 
-**Step 1 - Install LoongSuite Site Bootstrap** 
+**Step 1 - Install LoongSuite Site Bootstrap**
 
   ```bash
   pip install loongsuite-site-bootstrap
@@ -535,6 +535,26 @@ Open the Jaeger UI and confirm traces arrive.
 
 ![Trace view in Jaeger](docs/_assets/img/quickstart-results.png)
 
+## Contributing
+
+See the [contributing guide](CONTRIBUTING-loongsuite-zh.md) (简体中文).
+
+### Maintainers
+
+- [Huxing Zhang](https://github.com/ralf0131), Alibaba
+- [Liu Ziming](https://github.com/123liuziming), Alibaba
+- [RichardoMu](https://github.com/RichardoMrMu), ByteDance
+- [sipercai](https://github.com/sipercai), Alibaba
+
+### Emeritus
+
+- [Minghui Zhang](https://github.com/Cirilla-zmh), Alibaba
+- [Lurious](https://github.com/lyred193)
+
+### Thanks to all of our contributors!
+
+Thank you to everyone who contributes to LoongSuite Python and the upstream [OpenTelemetry Python Contrib](https://github.com/open-telemetry/opentelemetry-python-contrib) project!
+
 ## Community
 
 We are looking forward to your feedback and suggestions. You can join
@@ -547,12 +567,6 @@ our [DingTalk group](https://qr.dingtalk.com/action/joingroup?code=v1,k1,mexukXI
 | LoongCollector Go SIG | LoongSuite Java SIG |
 |----|----|
 | <img src="docs/_assets/img/loongsuite-go-sig-dingtalk.png" height="150"> | <img src="docs/_assets/img/loongsuite-java-sig-dingtalk.jpg" height="150"> |
-
-### Maintainers
-
-- [sipercai](https://github.com/sipercai), Alibaba
-- [123liuziming](https://github.com/123liuziming), Alibaba
-- [RichardoMrMu](https://github.com/RichardoMrMu), ByteDance
 
 ## Resources
 * AgentScope: https://github.com/modelscope/agentscope
