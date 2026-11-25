@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve an internal ENTRY-active context marker across nested spans so
+  framework adapters can honor an existing host application entry without
+  creating duplicate ENTRY spans.
+
 - Correct rerank field names and standardize manual instrumentation examples on
   explicit Invocation objects. Document custom attribute boundaries, content and
   event coverage, Provider setup, context lifetimes, and version troubleshooting.
