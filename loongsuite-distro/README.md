@@ -16,7 +16,7 @@ pip install loongsuite-distro[otlp]
 
 ## Features
 
-1. **LoongSuite Distro**：提供 `OTEL_PYTHON_DISTRO=loongsuite` 对应的 OpenTelemetry 配置入口。  
+1. **LoongSuite Distro**：提供 `OTEL_PYTHON_DISTRO=loongsuite` 对应的 OpenTelemetry 配置入口。
 2. **LoongSuite Bootstrap**：提供 `loongsuite-bootstrap` / `loongsuite-instrument` 命令行能力。
 
 ## Recommended usage
