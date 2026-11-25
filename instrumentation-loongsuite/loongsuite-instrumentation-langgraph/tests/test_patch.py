@@ -25,6 +25,14 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
 
 from opentelemetry.instrumentation.langgraph import LangGraphInstrumentor
+from opentelemetry.instrumentation.langgraph.internal.patch import (
+    AGENT_FRAMEWORK_METADATA_KEY,
+    AGENT_STEP_NODE_METADATA_KEY,
+    REACT_AGENT_METADATA_KEY,
+    _get_graph_agent_semantics,
+    _inject_agent_semantics,
+    _inject_react_metadata,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -155,6 +163,54 @@ class TestPregelStreamPatch:
         plain_graph = builder.compile()
 
         assert not getattr(plain_graph, "_loongsuite_react_agent", False)
+
+    def test_metadata_injection_is_copy_on_write(self):
+        callback = object()
+        original = {
+            "callbacks": [callback],
+            "metadata": {"customer": "kept"},
+        }
+
+        rewritten = _inject_react_metadata(original)
+
+        assert rewritten is not original
+        assert rewritten["metadata"] is not original["metadata"]
+        assert original == {
+            "callbacks": [callback],
+            "metadata": {"customer": "kept"},
+        }
+        assert rewritten["callbacks"] == [callback]
+        assert rewritten["metadata"]["customer"] == "kept"
+        assert rewritten["metadata"][REACT_AGENT_METADATA_KEY] is True
+
+    def test_opt_in_semantics_do_not_require_legacy_marker(self):
+        graph = type("Graph", (), {})()
+        setattr(graph, AGENT_FRAMEWORK_METADATA_KEY, "deerflow")
+        setattr(graph, AGENT_STEP_NODE_METADATA_KEY, "model")
+
+        assert _get_graph_agent_semantics(graph) == ("deerflow", "model")
+
+    def test_agent_semantics_injection_is_copy_on_write(self):
+        callback = object()
+        original = {
+            "callbacks": [callback],
+            "metadata": {"customer": "kept"},
+        }
+
+        rewritten = _inject_agent_semantics(
+            original,
+            ("deerflow", "model"),
+        )
+
+        assert rewritten is not original
+        assert rewritten["metadata"] is not original["metadata"]
+        assert original["metadata"] == {"customer": "kept"}
+        assert rewritten["callbacks"] == [callback]
+        assert rewritten["metadata"]["customer"] == "kept"
+        assert (
+            rewritten["metadata"][AGENT_FRAMEWORK_METADATA_KEY] == "deerflow"
+        )
+        assert rewritten["metadata"][AGENT_STEP_NODE_METADATA_KEY] == "model"
 
     def test_uninstrument_restores_stream(self):
         """After uninstrument, Pregel.stream is no longer a wrapt wrapper."""

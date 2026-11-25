@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Propagate opt-in framework and decision-node metadata for LangGraph-based
+  agent harnesses through `Pregel.stream` and `Pregel.astream` without
+  changing the existing prebuilt ReAct marker behavior.
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.
