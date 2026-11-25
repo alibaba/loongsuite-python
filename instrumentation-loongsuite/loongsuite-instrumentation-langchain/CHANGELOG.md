@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - LangChain embedding span support
   ([#157](https://github.com/alibaba/loongsuite-python/pull/157))
+- Recognize opt-in framework and decision-node metadata from LangGraph-based
+  agent harnesses, allowing adapters such as DeerFlow to define their `STEP`
+  boundary without changing existing LangGraph or DeepAgents detection.
 
 ## Version 0.9.0 (2026-09-07)
 
