@@ -34,6 +34,7 @@ LoongSuite Python Agent 同时也是上游 [OTel Python Agent](https://github.co
 |--------|------|---------|
 | [A2A](https://github.com/a2aproject/a2a-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-a2a/README.md) | [源码](instrumentation-loongsuite/loongsuite-instrumentation-a2a) |
 | [AgentScope](https://github.com/agentscope-ai/agentscope) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agentscope/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-agentscope/) |
+| [agentUniverse](https://github.com/agentuniverse-ai/agentUniverse) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agentuniverse/README.md) | [源码](instrumentation-loongsuite/loongsuite-instrumentation-agentuniverse) |
 | [Agno](https://github.com/agno-agi/agno) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agno/README.md) | [源码](instrumentation-loongsuite/loongsuite-instrumentation-agno) |
 | AlgoTune | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-algotune/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-algotune/) |
 | AutoGen | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-autogen/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-autogen/) |
