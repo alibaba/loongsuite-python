@@ -22,6 +22,9 @@ import logging
 import timeit
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from wrapt import ObjectProxy
+
+from opentelemetry.instrumentation.utils import is_instrumentation_enabled
 from opentelemetry.util.genai.handler import TelemetryHandler
 from opentelemetry.util.genai.types import (
     ContentCapturingMode,
@@ -29,6 +32,7 @@ from opentelemetry.util.genai.types import (
     LLMInvocation,
     MessagePart,
     OutputMessage,
+    Reasoning,
     Text,
     ToolCall,
 )
@@ -37,6 +41,7 @@ from .utils import (
     create_anthropic_invocation,
     is_streaming,
     populate_response,
+    total_input_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +54,7 @@ if TYPE_CHECKING:
 def _fail_llm(handler, invocation, error):
     try:
         handler.fail_llm(
-            invocation, Error(type=type(error), message=str(error))
+            invocation, Error(type=type(error), message=type(error).__name__)
         )
     except Exception:
         logger.debug("Could not record Anthropic error", exc_info=True)
@@ -68,6 +73,8 @@ def messages_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> "Message":
+        if not is_instrumentation_enabled():
+            return wrapped(*args, **kwargs)
         try:
             invocation = handler.start_llm(
                 create_anthropic_invocation(kwargs, instance, capture_content)
@@ -83,16 +90,21 @@ def messages_create(
             raise
 
         if is_streaming(kwargs):
-            handler.detach_llm_context(invocation)
-            return AnthropicStreamWrapper(
-                result, handler, invocation, capture_content
-            )
+            try:
+                handler.detach_llm_context(invocation)
+                return AnthropicStreamWrapper(
+                    result, handler, invocation, capture_content
+                )
+            except Exception:
+                _abandon_llm(handler, invocation)
+                logger.debug("Could not wrap Anthropic stream", exc_info=True)
+                return result
 
         try:
             populate_response(invocation, result, capture_content)
             handler.stop_llm(invocation)
         except Exception:
-            handler.abandon_llm(invocation)
+            _abandon_llm(handler, invocation)
             logger.debug(
                 "Could not finalize Anthropic telemetry", exc_info=True
             )
@@ -114,6 +126,8 @@ def async_messages_create(
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> "Message":
+        if not is_instrumentation_enabled():
+            return await wrapped(*args, **kwargs)
         try:
             invocation = handler.start_llm(
                 create_anthropic_invocation(kwargs, instance, capture_content)
@@ -129,16 +143,21 @@ def async_messages_create(
             raise
 
         if is_streaming(kwargs):
-            handler.detach_llm_context(invocation)
-            return AsyncAnthropicStreamWrapper(
-                result, handler, invocation, capture_content
-            )
+            try:
+                handler.detach_llm_context(invocation)
+                return AsyncAnthropicStreamWrapper(
+                    result, handler, invocation, capture_content
+                )
+            except Exception:
+                _abandon_llm(handler, invocation)
+                logger.debug("Could not wrap Anthropic stream", exc_info=True)
+                return result
 
         try:
             populate_response(invocation, result, capture_content)
             handler.stop_llm(invocation)
         except Exception:
-            handler.abandon_llm(invocation)
+            _abandon_llm(handler, invocation)
             logger.debug(
                 "Could not finalize Anthropic telemetry", exc_info=True
             )
@@ -148,88 +167,64 @@ def async_messages_create(
 
 
 class _ContentBlockAccumulator:
-    """Accumulates content blocks from streaming events."""
+    """Keep each supported block in wire order, including partial blocks."""
 
     def __init__(self):
-        self.text_parts: list[str] = []
-        self.tool_calls: list[dict[str, Any]] = []
-        self._current_block_type: str | None = None
-        self._current_block_data: dict[str, Any] = {}
+        self._blocks = []
+        self._current = None
 
-    def on_content_block_start(self, content_block: Any) -> None:
-        """Handle a content_block_start event."""
-        block_type = getattr(content_block, "type", None)
-        self._current_block_type = block_type
-        self._current_block_data = {}
+    def on_content_block_start(self, content_block):
+        block = {
+            "type": _value(content_block, "type", None),
+            "text": [_value(content_block, "text", "")],
+            "thinking": [_value(content_block, "thinking", "")],
+            "name": _value(content_block, "name", ""),
+            "id": _value(content_block, "id", None),
+            "input": _value(content_block, "input", None),
+            "json": [],
+        }
+        self._current = block
+        self._blocks.append(block)
 
-        if block_type == "tool_use":
-            self._current_block_data = {
-                "name": getattr(content_block, "name", ""),
-                "id": getattr(content_block, "id", None),
-                "input_json": "",
-            }
-
-    def on_content_block_delta(self, delta: Any) -> None:
-        """Handle a content_block_delta event."""
-        delta_type = getattr(delta, "type", None)
-
+    def on_content_block_delta(self, delta):
+        if self._current is None:
+            return
+        delta_type = _value(delta, "type", None)
         if delta_type == "text_delta":
-            text = getattr(delta, "text", "")
-            self.text_parts.append(text)
+            self._current["text"].append(_value(delta, "text", ""))
+        elif delta_type == "thinking_delta":
+            self._current["thinking"].append(_value(delta, "thinking", ""))
         elif delta_type == "input_json_delta":
-            partial_json = getattr(delta, "partial_json", "")
-            if self._current_block_data:
-                self._current_block_data["input_json"] += partial_json
+            self._current["json"].append(_value(delta, "partial_json", ""))
 
-    def on_content_block_stop(self) -> None:
-        """Handle a content_block_stop event."""
-        if self._current_block_type == "tool_use" and self._current_block_data:
-            input_json_str = self._current_block_data.get("input_json", "")
-            try:
-                arguments = (
-                    json.loads(input_json_str) if input_json_str else None
-                )
-            except (json.JSONDecodeError, ValueError):
-                arguments = input_json_str
+    def on_content_block_stop(self):
+        self._current = None
 
-            self.tool_calls.append(
-                {
-                    "name": self._current_block_data.get("name", ""),
-                    "id": self._current_block_data.get("id"),
-                    "arguments": arguments,
-                }
-            )
-
-        self._current_block_type = None
-        self._current_block_data = {}
-
-    def build_output_messages(
-        self, stop_reason: str | None
-    ) -> list[OutputMessage]:
-        """Build OutputMessage list from accumulated data."""
+    def build_output_messages(self, stop_reason):
         parts: list[MessagePart] = []
-
-        text = "".join(self.text_parts)
-        if text:
-            parts.append(Text(content=text))
-
-        for tc in self.tool_calls:
-            parts.append(
-                ToolCall(
-                    name=tc["name"],
-                    id=tc.get("id"),
-                    arguments=tc.get("arguments"),
+        for block in self._blocks:
+            if block["type"] == "text":
+                parts.append(Text(content="".join(block["text"])))
+            elif block["type"] == "thinking":
+                parts.append(Reasoning(content="".join(block["thinking"])))
+            elif block["type"] == "tool_use":
+                arguments = block["input"]
+                if block["json"]:
+                    raw_json = "".join(block["json"])
+                    try:
+                        arguments = json.loads(raw_json)
+                    except (json.JSONDecodeError, ValueError):
+                        arguments = raw_json
+                parts.append(
+                    ToolCall(
+                        name=block["name"], id=block["id"], arguments=arguments
+                    )
                 )
-            )
-
         if not parts:
             return []
-
         return [
             OutputMessage(
-                role="assistant",
-                parts=parts,
-                finish_reason=stop_reason,
+                role="assistant", parts=parts, finish_reason=stop_reason
             )
         ]
 
@@ -310,13 +305,19 @@ class AnthropicStreamWrapper:
                 self._response_id = getattr(message, "id", None)
                 usage = getattr(message, "usage", None)
                 if usage:
-                    self._input_tokens = getattr(usage, "input_tokens", None)
-                    if hasattr(usage, "cache_creation_input_tokens"):
-                        self._cache_creation_input_tokens = getattr(
+                    self._input_tokens = _value(usage, "input_tokens", None)
+                    if (
+                        _value(usage, "cache_creation_input_tokens", None)
+                        is not None
+                    ):
+                        self._cache_creation_input_tokens = _value(
                             usage, "cache_creation_input_tokens", None
                         )
-                    if hasattr(usage, "cache_read_input_tokens"):
-                        self._cache_read_input_tokens = getattr(
+                    if (
+                        _value(usage, "cache_read_input_tokens", None)
+                        is not None
+                    ):
+                        self._cache_read_input_tokens = _value(
                             usage, "cache_read_input_tokens", None
                         )
 
@@ -337,10 +338,10 @@ class AnthropicStreamWrapper:
         elif event_type == "message_delta":
             delta = getattr(event, "delta", None)
             if delta:
-                self._stop_reason = getattr(delta, "stop_reason", None)
+                self._stop_reason = _value(delta, "stop_reason", None)
             usage = getattr(event, "usage", None)
             if usage:
-                self._output_tokens = getattr(usage, "output_tokens", None)
+                self._output_tokens = _value(usage, "output_tokens", None)
 
         elif event_type == "message_stop":
             pass  # Cleanup happens in __next__ StopIteration or __exit__
@@ -353,7 +354,7 @@ class AnthropicStreamWrapper:
         try:
             self._finish(error)
         except Exception:
-            self.handler.abandon_llm(self.invocation)
+            _abandon_llm(self.handler, self.invocation)
             logger.debug(
                 "Could not finalize Anthropic stream telemetry", exc_info=True
             )
@@ -361,7 +362,11 @@ class AnthropicStreamWrapper:
     def _finish(self, error: Optional[BaseException]) -> None:
         self.invocation.response_model_name = self._response_model
         self.invocation.response_id = self._response_id
-        self.invocation.input_tokens = self._input_tokens
+        self.invocation.input_tokens = total_input_tokens(
+            self._input_tokens,
+            self._cache_creation_input_tokens,
+            self._cache_read_input_tokens,
+        )
         self.invocation.output_tokens = self._output_tokens
 
         if self._cache_creation_input_tokens is not None:
@@ -387,7 +392,7 @@ class AnthropicStreamWrapper:
         if error is not None:
             self.handler.fail_llm(
                 self.invocation,
-                Error(type=type(error), message=str(error)),
+                Error(type=type(error), message=type(error).__name__),
             )
         else:
             self.handler.stop_llm(self.invocation)
@@ -472,13 +477,19 @@ class AsyncAnthropicStreamWrapper:
                 self._response_id = getattr(message, "id", None)
                 usage = getattr(message, "usage", None)
                 if usage:
-                    self._input_tokens = getattr(usage, "input_tokens", None)
-                    if hasattr(usage, "cache_creation_input_tokens"):
-                        self._cache_creation_input_tokens = getattr(
+                    self._input_tokens = _value(usage, "input_tokens", None)
+                    if (
+                        _value(usage, "cache_creation_input_tokens", None)
+                        is not None
+                    ):
+                        self._cache_creation_input_tokens = _value(
                             usage, "cache_creation_input_tokens", None
                         )
-                    if hasattr(usage, "cache_read_input_tokens"):
-                        self._cache_read_input_tokens = getattr(
+                    if (
+                        _value(usage, "cache_read_input_tokens", None)
+                        is not None
+                    ):
+                        self._cache_read_input_tokens = _value(
                             usage, "cache_read_input_tokens", None
                         )
 
@@ -499,10 +510,10 @@ class AsyncAnthropicStreamWrapper:
         elif event_type == "message_delta":
             delta = getattr(event, "delta", None)
             if delta:
-                self._stop_reason = getattr(delta, "stop_reason", None)
+                self._stop_reason = _value(delta, "stop_reason", None)
             usage = getattr(event, "usage", None)
             if usage:
-                self._output_tokens = getattr(usage, "output_tokens", None)
+                self._output_tokens = _value(usage, "output_tokens", None)
 
     def _cleanup(self, error: Optional[BaseException] = None) -> None:
         """Finalize the invocation with accumulated data."""
@@ -512,7 +523,7 @@ class AsyncAnthropicStreamWrapper:
         try:
             self._finish(error)
         except Exception:
-            self.handler.abandon_llm(self.invocation)
+            _abandon_llm(self.handler, self.invocation)
             logger.debug(
                 "Could not finalize Anthropic stream telemetry", exc_info=True
             )
@@ -520,7 +531,11 @@ class AsyncAnthropicStreamWrapper:
     def _finish(self, error: Optional[BaseException]) -> None:
         self.invocation.response_model_name = self._response_model
         self.invocation.response_id = self._response_id
-        self.invocation.input_tokens = self._input_tokens
+        self.invocation.input_tokens = total_input_tokens(
+            self._input_tokens,
+            self._cache_creation_input_tokens,
+            self._cache_read_input_tokens,
+        )
         self.invocation.output_tokens = self._output_tokens
 
         if self._cache_creation_input_tokens is not None:
@@ -546,7 +561,7 @@ class AsyncAnthropicStreamWrapper:
         if error is not None:
             self.handler.fail_llm(
                 self.invocation,
-                Error(type=type(error), message=str(error)),
+                Error(type=type(error), message=type(error).__name__),
             )
         else:
             self.handler.stop_llm(self.invocation)
@@ -554,3 +569,187 @@ class AsyncAnthropicStreamWrapper:
     def __getattr__(self, name):
         """Proxy attribute access to the underlying stream."""
         return getattr(self.stream, name)
+
+
+def _abandon_llm(handler, invocation):
+    try:
+        handler.abandon_llm(invocation)
+    except Exception:
+        logger.debug("Could not clean up Anthropic telemetry", exc_info=True)
+
+
+def messages_stream(handler, content_capturing_mode, asynchronous=False):
+    """Trace the SDK helper while retaining its snapshot and text-stream APIs."""
+    capture_content = content_capturing_mode != ContentCapturingMode.NO_CONTENT
+
+    def traced_method(wrapped, instance, args, kwargs):
+        if not is_instrumentation_enabled():
+            return wrapped(*args, **kwargs)
+        try:
+            invocation = create_anthropic_invocation(
+                kwargs, instance, capture_content
+            )
+        except Exception:
+            logger.debug(
+                "Could not prepare Anthropic telemetry", exc_info=True
+            )
+            return wrapped(*args, **kwargs)
+        # The SDK helper is lazy: start the span only when entering its manager.
+        manager = wrapped(*args, **kwargs)
+        try:
+            wrapper = _AsyncStreamManager if asynchronous else _StreamManager
+            return wrapper(manager, handler, invocation, capture_content)
+        except Exception:
+            logger.debug(
+                "Could not wrap Anthropic stream manager", exc_info=True
+            )
+            return manager
+
+    return traced_method
+
+
+class _StreamManager:
+    def __init__(self, manager, handler, invocation, capture_content):
+        self.manager = manager
+        self.handler = handler
+        self.invocation = invocation
+        self.capture_content = capture_content
+        self.telemetry = None
+
+    def _start(self):
+        if not is_instrumentation_enabled():
+            return False
+        try:
+            self.handler.start_llm(self.invocation)
+            return True
+        except Exception:
+            _abandon_llm(self.handler, self.invocation)
+            logger.debug(
+                "Could not start Anthropic helper telemetry", exc_info=True
+            )
+            return False
+
+    def _wrap(self, stream, asynchronous=False):
+        try:
+            self.handler.detach_llm_context(self.invocation)
+            # Both the oldest and latest SDK helpers consume _iterator through
+            # iteration, text_stream, and get_final_message. Keep the SDK helper
+            # itself so its parsing and custom event handlers remain intact.
+            wrapper = (
+                AsyncAnthropicStreamWrapper
+                if asynchronous
+                else AnthropicStreamWrapper
+            )
+            self.telemetry = wrapper(
+                stream._iterator,
+                self.handler,
+                self.invocation,
+                self.capture_content,
+            )
+            proxy = (
+                _AsyncHelperStream(stream, self.telemetry)
+                if asynchronous
+                else _HelperStream(stream, self.telemetry)
+            )
+            stream._iterator = self.telemetry
+            return proxy
+        except Exception:
+            _abandon_llm(self.handler, self.invocation)
+            logger.debug(
+                "Could not wrap Anthropic helper iterator", exc_info=True
+            )
+            return stream
+
+    def __enter__(self):
+        started = self._start()
+        try:
+            stream = self.manager.__enter__()
+        except (Exception, asyncio.CancelledError) as error:
+            if started:
+                _fail_llm(self.handler, self.invocation, error)
+            raise
+        return self._wrap(stream) if started else stream
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return self.manager.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            if self.telemetry is not None:
+                self.telemetry._cleanup(exc_val)
+
+    def __getattr__(self, name):
+        return getattr(self.manager, name)
+
+
+class _AsyncStreamManager(_StreamManager):
+    async def __aenter__(self):
+        started = self._start()
+        try:
+            stream = await self.manager.__aenter__()
+        except (Exception, asyncio.CancelledError) as error:
+            if started:
+                _fail_llm(self.handler, self.invocation, error)
+            raise
+        return self._wrap(stream, asynchronous=True) if started else stream
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return await self.manager.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            if self.telemetry is not None:
+                self.telemetry._cleanup(exc_val)
+
+
+class _HelperStream(ObjectProxy):
+    def __init__(self, stream, telemetry):
+        super().__init__(stream)
+        self._self_telemetry = telemetry
+
+    def __enter__(self):
+        self.__wrapped__.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return self.__wrapped__.__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._self_telemetry._cleanup(exc_val)
+
+    def close(self):
+        try:
+            return self.__wrapped__.close()
+        finally:
+            self._self_telemetry._cleanup()
+
+
+class _AsyncHelperStream(_HelperStream):
+    async def __aenter__(self):
+        await self.__wrapped__.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        try:
+            return await self.__wrapped__.__aexit__(exc_type, exc_val, exc_tb)
+        finally:
+            self._self_telemetry._cleanup(exc_val)
+
+    def __aiter__(self):
+        return self.__wrapped__.__aiter__()
+
+    async def __anext__(self):
+        return await self.__wrapped__.__anext__()
+
+    async def close(self):
+        try:
+            return await self.__wrapped__.close()
+        finally:
+            self._self_telemetry._cleanup()
+
+
+def _value(obj, name, default=None):
+    """Older SDKs retain newly introduced event fields as dictionaries."""
+    return (
+        obj.get(name, default)
+        if isinstance(obj, dict)
+        else getattr(obj, name, default)
+    )

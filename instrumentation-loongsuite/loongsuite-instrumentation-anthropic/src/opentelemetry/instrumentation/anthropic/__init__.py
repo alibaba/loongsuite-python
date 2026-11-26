@@ -62,6 +62,7 @@ from opentelemetry.instrumentation.anthropic.package import _instruments
 from opentelemetry.instrumentation.anthropic.patch import (
     async_messages_create,
     messages_create,
+    messages_stream,
 )
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
@@ -134,6 +135,16 @@ class AnthropicInstrumentor(BaseInstrumentor):
             async_messages_create(handler, content_mode),
         )
 
+        for class_name, asynchronous in (
+            ("Messages", False),
+            ("AsyncMessages", True),
+        ):
+            wrap_function_wrapper(
+                "anthropic.resources.messages",
+                class_name + ".stream",
+                messages_stream(handler, content_mode, asynchronous),
+            )
+
     def _uninstrument(self, **kwargs: Any) -> None:
         """Disable Anthropic instrumentation.
 
@@ -149,3 +160,5 @@ class AnthropicInstrumentor(BaseInstrumentor):
             anthropic.resources.messages.AsyncMessages,  # pyright: ignore[reportAttributeAccessIssue,reportUnknownMemberType,reportUnknownArgumentType]
             "create",
         )
+        unwrap(anthropic.resources.messages.Messages, "stream")
+        unwrap(anthropic.resources.messages.AsyncMessages, "stream")

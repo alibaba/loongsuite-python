@@ -99,7 +99,7 @@ def create_anthropic_invocation(
     invocation.top_k = kwargs.get("top_k", extra_body.get("top_k"))
 
     stop_sequences = kwargs.get("stop_sequences")
-    if stop_sequences is not None:
+    if isinstance(stop_sequences, (list, tuple)):
         invocation.stop_sequences = list(stop_sequences)
 
     # Server address
@@ -117,12 +117,12 @@ def create_anthropic_invocation(
 
         # System instruction
         system = kwargs.get("system")
-        if system:
+        if isinstance(system, (str, list, tuple)):
             invocation.system_instruction = _convert_system_to_parts(system)
 
         # Tool definitions
         tools = kwargs.get("tools")
-        if tools:
+        if isinstance(tools, (list, tuple)):
             invocation.tool_definitions = _convert_tools_to_definitions(tools)
 
     return invocation
@@ -149,8 +149,11 @@ def populate_response(
     # Token usage
     usage = getattr(result, "usage", None)
     if usage:
-        if hasattr(usage, "input_tokens"):
-            invocation.input_tokens = usage.input_tokens
+        invocation.input_tokens = total_input_tokens(
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "cache_creation_input_tokens", None),
+            getattr(usage, "cache_read_input_tokens", None),
+        )
         if hasattr(usage, "output_tokens"):
             invocation.output_tokens = usage.output_tokens
         # Cache token usage (Anthropic-specific)
@@ -178,6 +181,9 @@ def _convert_messages_to_input(
     messages: list[dict[str, Any]],
 ) -> list[InputMessage]:
     """Convert Anthropic message format to InputMessage list."""
+    # Reading a one-shot iterable would consume the SDK request.
+    if not isinstance(messages, (list, tuple)):
+        return []
     input_messages: list[InputMessage] = []
     for msg in messages:
         role = msg.get("role", "user")
@@ -186,7 +192,7 @@ def _convert_messages_to_input(
 
         if isinstance(content, str):
             parts.append(Text(content=content))
-        elif isinstance(content, list):
+        elif isinstance(content, (list, tuple)):
             for block in content:
                 if isinstance(block, dict):
                     block_type = block.get("type", "")
@@ -237,7 +243,7 @@ def _convert_system_to_parts(
     parts: list[MessagePart] = []
     if isinstance(system, str):
         parts.append(Text(content=system))
-    elif isinstance(system, list):
+    elif isinstance(system, (list, tuple)):
         for block in system:
             if isinstance(block, dict):
                 if block.get("type") == "text":
@@ -318,3 +324,11 @@ def _convert_content_blocks_to_output(
             )
         ]
     return []
+
+
+def total_input_tokens(uncached, cache_creation, cache_read):
+    """Anthropic reports uncached input separately from both cache counts."""
+    counts = (uncached, cache_creation, cache_read)
+    if all(count is None for count in counts):
+        return None
+    return sum(count or 0 for count in counts)

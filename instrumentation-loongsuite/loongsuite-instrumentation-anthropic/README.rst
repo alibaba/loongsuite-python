@@ -47,6 +47,18 @@ Check out the `manual example <examples/manual>`_ for more details.
     )
 
 
+Streaming
+---------
+
+Both ``messages.create(stream=True)`` and ``messages.stream()`` are traced,
+including their async equivalents. Use the SDK context manager or explicitly
+close the stream when stopping early. The helper's ``text_stream`` and
+``get_final_message()`` APIs retain their usual behavior.
+
+Input content capture skips one-shot iterables so it does not consume the
+application's request. Provider errors retain their original exception for the
+caller; telemetry records the error type without the raw exception text.
+
 Configuration
 -------------
 

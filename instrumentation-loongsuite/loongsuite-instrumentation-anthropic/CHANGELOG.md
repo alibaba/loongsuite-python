@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Preserve one-shot request iterables and suppress instrumentation when requested.
+- Record provider error types without exporting raw exception messages.
+- Include cache reads and writes in input token totals and usage metrics.
+- Trace sync and async `messages.stream()` helpers, preserve streamed content order,
+  and return the SDK stream if telemetry wrapping fails.
+- Align the development version and register the package for distro bootstrap.
+
 ### Added
 
 - Initial implementation of Anthropic instrumentation
