@@ -61,6 +61,7 @@ Entries marked **Source** are available on `main` and have not yet been publishe
 | [QwenPaw](https://github.com/agentscope-ai/QwenPaw) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-qwenpaw/) |
 | [slop-code-bench](https://github.com/SprocketLab/slop-code-bench) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-slop-code/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-slop-code/) |
 | [Strands Agents](https://github.com/strands-agents/sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-strands/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-strands/) |
+| [SWE-agent](https://github.com/SWE-agent/SWE-agent) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-sweagent/README.rst) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-sweagent) |
 | Terminus2 | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-terminus2/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-terminus2/) |
 | VitaBench | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-vita/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-vita/) |
 | WebArena | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-webarena/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-webarena/) |
