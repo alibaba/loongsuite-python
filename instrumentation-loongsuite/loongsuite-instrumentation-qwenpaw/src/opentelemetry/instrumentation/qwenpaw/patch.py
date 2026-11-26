@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable
 
 from opentelemetry import context as otel_context
+from opentelemetry import propagate, trace
 from opentelemetry.context import Context
 from opentelemetry.util.genai import hook_advice
 from opentelemetry.util.genai.extended_handler import ExtendedTelemetryHandler
@@ -30,6 +31,7 @@ from opentelemetry.util.genai.extended_types import EntryInvocation
 from opentelemetry.util.genai.handler import _safe_detach
 from opentelemetry.util.genai.types import Error, OutputMessage
 
+from ._constants import is_copaw_child_agent_process
 from ._entry_utils import (
     build_entry_invocation,
     build_runtime_entry_invocation,
@@ -38,6 +40,7 @@ from ._entry_utils import (
     parse_query_handler_call,
     parse_runtime_call,
 )
+from ._env_carrier import EnvironmentGetter
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +292,52 @@ async def _entry_stream(
             _finish_entry(state)
 
 
+def _child_parent_context() -> Context | None:
+    if not is_copaw_child_agent_process():
+        return None
+    try:
+        parent = propagate.extract(
+            {}, context=Context(), getter=EnvironmentGetter()
+        )
+        if trace.get_current_span(parent).get_span_context().is_valid:
+            return parent
+    except Exception:
+        logger.debug("Failed to extract child trace context", exc_info=True)
+    return None
+
+
+async def _child_stream(
+    wrapped: Any,
+    args: Any,
+    kwargs: Any,
+    parent_context: Context,
+) -> AsyncIterator[Any]:
+    """Run a child agent under its propagated parent without another Entry."""
+
+    token = otel_context.attach(parent_context)
+    try:
+        iterator = wrapped(*args, **kwargs).__aiter__()
+    finally:
+        _safe_detach(token)
+    try:
+        while True:
+            token = otel_context.attach(parent_context)
+            try:
+                item = await iterator.__anext__()
+            except StopAsyncIteration:
+                break
+            finally:
+                _safe_detach(token)
+            yield item
+    except (GeneratorExit, asyncio.CancelledError):
+        token = otel_context.attach(parent_context)
+        try:
+            await _close_iterator(iterator)
+        finally:
+            _safe_detach(token)
+        raise
+
+
 def make_query_handler_wrapper(
     handler: ExtendedTelemetryHandler,
     module_name: str,
@@ -301,6 +350,9 @@ def make_query_handler_wrapper(
         args: Any,
         kwargs: Any,
     ) -> Any:
+        parent = _child_parent_context()
+        if parent is not None:
+            return _child_stream(wrapped, args, kwargs, parent)
         invocation = _build_entry(
             _build_query_handler_entry,
             instance,
@@ -335,6 +387,9 @@ def make_runtime_wrapper(
         args: Any,
         kwargs: Any,
     ) -> Any:
+        parent = _child_parent_context()
+        if parent is not None:
+            return _child_stream(wrapped, args, kwargs, parent)
         invocation = _build_entry(
             _build_runtime_entry,
             instance,
