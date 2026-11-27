@@ -91,6 +91,14 @@ def _get_llm_span_name(invocation: LLMInvocation) -> str:
     return f"{invocation.operation_name} {invocation.request_model}".strip()
 
 
+def _output_message_dict(message: OutputMessage) -> dict[str, Any]:
+    fields = asdict(message)
+    if message.finish_reason is None:
+        # A consumer may close a stream before the provider reports a reason.
+        del fields["finish_reason"]
+    return fields
+
+
 def _get_llm_messages_attributes_for_span(
     input_messages: list[InputMessage],
     output_messages: list[OutputMessage],
@@ -115,7 +123,9 @@ def _get_llm_messages_attributes_for_span(
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            gen_ai_json_dumps([asdict(m) for m in output_messages])
+            gen_ai_json_dumps(
+                [_output_message_dict(m) for m in output_messages]
+            )
             if output_messages
             else None,
         ),
@@ -152,7 +162,9 @@ def _get_llm_messages_attributes_for_event(
         ),
         (
             GenAI.GEN_AI_OUTPUT_MESSAGES,
-            [asdict(m) for m in output_messages] if output_messages else None,
+            [_output_message_dict(m) for m in output_messages]
+            if output_messages
+            else None,
         ),
         (
             GenAI.GEN_AI_SYSTEM_INSTRUCTIONS,

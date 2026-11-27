@@ -37,6 +37,7 @@ Entries marked **Source** are available on `main` and have not yet been publishe
 | [agentUniverse](https://github.com/agentuniverse-ai/agentUniverse) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agentuniverse/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-agentuniverse) |
 | [Agno](https://github.com/agno-agi/agno) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-agno/README.md) | [Source](instrumentation-loongsuite/loongsuite-instrumentation-agno) |
 | AlgoTune | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-algotune/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-algotune/) |
+| [Anthropic Python SDK](https://github.com/anthropics/anthropic-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-anthropic/README.rst) | in dev |
 | AutoGen | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-autogen/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-autogen/) |
 | [BFCL v4](https://github.com/ShishirPatil/gorilla/tree/main/berkeley-function-call-leaderboard) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-bfclv4/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-bfclv4/) |
 | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-claude-agent-sdk/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-claude-agent-sdk/) |
