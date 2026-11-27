@@ -58,6 +58,7 @@ Entries marked **Source** are available on `main` and have not yet been publishe
 | [Mem0](https://github.com/mem0ai/mem0) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-mem0/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-mem0/) |
 | Microsoft Agent Framework | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-microsoft-agent-framework/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-microsoft-agent-framework/) |
 | MiniSweAgent | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-minisweagent/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-minisweagent/) |
+| [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-openai-agents/README.rst) | in dev |
 | OpenHands | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-openhands/README.rst) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-openhands/) |
 | [Qwen-Agent](https://github.com/QwenLM/Qwen-Agent) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-qwen-agent/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-qwen-agent/) |
 | [QwenPaw](https://github.com/agentscope-ai/QwenPaw) | [GUIDE](instrumentation-loongsuite/loongsuite-instrumentation-qwenpaw/README.md) | [PyPI](https://pypi.org/project/loongsuite-instrumentation-qwenpaw/) |
