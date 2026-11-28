@@ -310,8 +310,18 @@ def _rewrite_config(
 def _inject_react_metadata(config: Any) -> Any:
     from langchain_core.runnables.config import ensure_config  # noqa: PLC0415
 
-    config = ensure_config(config)
-    config = {**config}
+    # ``ensure_config`` fills an omitted ``recursion_limit`` with LangChain's
+    # default of 25. LangGraph merges that call config over the graph config
+    # and would replace a limit the graph already set (e.g. DeepAgents'
+    # ``with_config({"recursion_limit": ...})``). Keep an explicit caller
+    # value; drop only the auto-filled default.
+    caller_set_limit = isinstance(config, dict) and (
+        config.get("recursion_limit") is not None
+    )
+    config = {**ensure_config(config)}
+    if not caller_set_limit:
+        config.pop("recursion_limit", None)
+
     metadata = dict(config.get("metadata") or {})
     metadata.setdefault(DEEPAGENTS_METADATA_KEY, True)
     config["metadata"] = metadata

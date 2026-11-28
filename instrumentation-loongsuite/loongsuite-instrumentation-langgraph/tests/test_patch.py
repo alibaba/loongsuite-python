@@ -224,6 +224,42 @@ class TestPregelStreamPatch:
         instrumentor.uninstrument()
         assert not isinstance(Pregel.stream, ObjectProxy)
 
+    def test_metadata_injection_omits_default_recursion_limit(self):
+        """A missing caller ``recursion_limit`` must not be filled with
+        LangChain's default 25, so a graph-bound limit survives the merge."""
+        from langchain_core.runnables.config import (  # noqa: PLC0415
+            merge_configs,
+        )
+
+        graph_config = {"recursion_limit": 9999}
+
+        rewritten = _inject_react_metadata(None)
+        assert "recursion_limit" not in rewritten
+        assert rewritten["metadata"][REACT_AGENT_METADATA_KEY] is True
+
+        merged = merge_configs(graph_config, rewritten)
+        assert merged["recursion_limit"] == 9999
+
+        # An explicit caller limit is preserved untouched.
+        rewritten = _inject_react_metadata({"recursion_limit": 25})
+        assert rewritten["recursion_limit"] == 25
+        assert rewritten["metadata"][REACT_AGENT_METADATA_KEY] is True
+
+    def test_agent_semantics_injection_omits_default_recursion_limit(
+        self,
+    ):
+        """The opt-in semantics path must behave the same: no auto-filled
+        ``recursion_limit`` in the rewritten config."""
+        rewritten = _inject_agent_semantics(
+            None,
+            ("deerflow", "model"),
+        )
+        assert "recursion_limit" not in rewritten
+        assert (
+            rewritten["metadata"][AGENT_FRAMEWORK_METADATA_KEY] == "deerflow"
+        )
+        assert rewritten["metadata"][AGENT_STEP_NODE_METADATA_KEY] == "model"
+
 
 class TestCreateReactAgentIntegration:
     """Verify the patched graph still works correctly."""

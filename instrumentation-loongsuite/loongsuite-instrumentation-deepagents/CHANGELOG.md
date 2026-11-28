@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Preserve graph recursion_limit when caller does not pass recursion_limit,
+  avoid being overridden by LangChain default value 25 injected by
+  `ensure_config`.
+
 ## Version 0.9.0 (2026-09-07)
 
 There are no changelog entries for this release.
