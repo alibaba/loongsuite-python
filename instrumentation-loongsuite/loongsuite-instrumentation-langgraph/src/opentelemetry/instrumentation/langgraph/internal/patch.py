@@ -73,15 +73,25 @@ def _create_react_agent_wrapper(
 def _copy_config_and_metadata(
     config: Any,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return copy-on-write config and metadata dictionaries."""
+    """Return copy-on-write config and metadata dictionaries.
+
+    ``ensure_config`` fills a missing ``recursion_limit`` with LangChain's
+    default of 25. LangGraph merges that call config over the graph config
+    and would replace a limit the graph already set. Drop only that default;
+    an explicitly passed value is preserved.
+    """
     # Inline import: langchain_core is a transitive dependency of langgraph;
     # importing here avoids module-level coupling.
     from langchain_core.runnables.config import (  # noqa: PLC0415
         ensure_config,
     )
 
-    config = ensure_config(config)
-    config = {**config}
+    caller_set_limit = isinstance(config, dict) and (
+        config.get("recursion_limit") is not None
+    )
+    config = {**ensure_config(config)}
+    if not caller_set_limit:
+        config.pop("recursion_limit", None)
     return config, dict(config.get("metadata") or {})
 
 

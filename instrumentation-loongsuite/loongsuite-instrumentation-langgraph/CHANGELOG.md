@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Do not persist LangChain default recursion_limit=25 into call config during
+  metadata injection; fallback to graph-configured recursion limit if not
+  specified by caller.
+
 ### Added
 
 - Propagate opt-in framework and decision-node metadata for LangGraph-based

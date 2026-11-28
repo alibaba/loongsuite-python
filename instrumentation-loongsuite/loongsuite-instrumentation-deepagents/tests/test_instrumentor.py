@@ -143,6 +143,58 @@ def test_uninstrument_restores_wrapped_graph_methods():
         _cleanup_instrumentors()
 
 
+def test_invoke_keeps_graph_recursion_limit_when_caller_omits_it():
+    """Config rewritten by metadata injection must not carry LangChain's
+    default ``recursion_limit=25``, so the graph-bound limit wins on merge."""
+    from langchain_core.runnables.config import (  # noqa: PLC0415
+        merge_configs,
+    )
+
+    _cleanup_instrumentors()
+    graph = _DummyGraph()
+    graph.bound_config = {"recursion_limit": 9999}
+
+    try:
+        _mark_graph(graph)
+        _wrap_graph_methods(graph)
+
+        # Caller omits recursion_limit: the injected default must not
+        # override the graph-bound limit, so 9999 stays effective.
+        effective = graph.invoke("hello")
+        assert effective["recursion_limit"] == 9999
+        assert effective["metadata"][DEEPAGENTS_METADATA_KEY] is True
+
+        merged = merge_configs(graph.bound_config, effective)
+        assert merged["recursion_limit"] == 9999
+
+        # Caller passes an explicit limit: it must be preserved.
+        explicit = graph.invoke("hello", {"recursion_limit": 40})
+        assert explicit["recursion_limit"] == 40
+
+        merged = merge_configs(graph.bound_config, explicit)
+        assert merged["recursion_limit"] == 40
+    finally:
+        uninstrument_create_deep_agent()
+        _cleanup_instrumentors()
+
+
+def test_inject_react_metadata_handles_recursion_limit():
+    """Injection preserves an explicit limit and drops the default one."""
+    from opentelemetry.instrumentation.deepagents.internal.patch import (  # noqa: PLC0415
+        _inject_react_metadata,
+    )
+
+    # No caller limit: the auto-filled default must be removed.
+    rewritten = _inject_react_metadata({"callbacks": []})
+    assert "recursion_limit" not in rewritten
+    assert rewritten["metadata"][DEEPAGENTS_METADATA_KEY] is True
+
+    # Explicit caller limit must be kept as-is.
+    rewritten = _inject_react_metadata({"recursion_limit": 40})
+    assert rewritten["recursion_limit"] == 40
+    assert rewritten["metadata"][DEEPAGENTS_METADATA_KEY] is True
+
+
 def test_uninstrument_preserves_preinstrumented_dependencies():
     _cleanup_instrumentors()
     langchain_instrumentor = LangChainInstrumentor()
